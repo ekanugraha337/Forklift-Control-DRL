@@ -1,0 +1,7 @@
+﻿# Build & cache
+.pio/
+__pycache__/
+*.pyc
+
+# Obsidian: tata letak jendela, berubah setiap kali vault dibuka
+Obsidian Vault/.obsidian/workspace.json
