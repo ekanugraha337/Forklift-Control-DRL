@@ -473,6 +473,18 @@ lebih sempit dari dua badan robot; bertukar tempat di sana memang lambat.
 
 Belum diuji di robot nyata. `MULTI_T_REAKSI_S` (0,2 s) juga belum diukur.
 
+> **Celah wasit ditemukan dan diperbaiki (2026-09-30).** Robot pemenang
+> prioritas bisa **menyerempet** robot yang sedang menunggu: bayangan dihitung
+> dari pose JALUR, padahal badannya berjalan ~3,5 cm di samping jalur
+> (galat pelacakan). Terukur: bayangan melihat 5,7 cm, badan sebenarnya
+> lewat 1,6-1,7 cm, dengan A* maupun perencana lain. Uji di atas (0 kontak dari
+> 15 jalan) kebetulan tidak memuat jalur yang lewat sedekat itu - muncul
+> setelah jalur varian dari derau pose awal. Sekarang `wasit.ikut_badan()`
+> memindahkan bayangan (geser + putar) ke badan sebenarnya sebelum dibandingkan;
+> dua kasus baru di `python wasit.py` (serempetan harus menunggu; menyimpang tapi
+> sejajar tetap jalan). Setelah perbaikan: skenario reproduksi 1,7 -> 5,4-6,2 cm,
+> dan 36 jalan dua robot berderau tanpa kontak (terdekat 7,4 cm).
+
 ## Yang masih perlu Anda kerjakan
 
 Sudah selesai, diperiksa 2026-09-27:

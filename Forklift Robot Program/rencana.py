@@ -6,12 +6,22 @@ v1, tidak diubah - algoritmanya bebas satuan). Tugas berkas ini hanya satu:
 menerjemahkan parameter cm di konfig.py menjadi sel grid, dan menerjemahkan
 jalur yang dihasilkan kembali ke cm.
 
+PERENCANA BISA DITUKAR (Perencana(..., jenis=...)):
+    "astar"       Hybrid A* (bawaan)
+    "dqfd"        jaringan DQfD robot itu (model_dqn/id0N.pt), Hybrid A* sebagai
+                  cadangan bila DQfD gagal
+    "dqfd-murni"  DQfD saja, tanpa cadangan - untuk menilai DQfD sendirian
+Keduanya mengembalikan jalur berformat sama, jadi pelacak & navigasi tidak
+tahu bedanya. Lihat drl/perencana_dqfd.py dan catatan Obsidian "Deep
+Reinforcement Learning".
+
 Titik acuan pose adalah POROS RODA DEPAN, bukan pusat AprilTag. Roda depan
 tidak berbelok, jadi robot selalu bergerak searah heading di titik itu - itulah
 yang membuat model sepeda berlaku untuk kendaraan berkemudi belakang.
 
 Uji mandiri (tanpa kamera, tanpa robot):
     python rencana.py --peta Rumah
+    python rencana.py --peta Rumah --id 2 --perencana dqfd
         klik-tarik kiri  : tetapkan TUJUAN (klik = posisi, tarik = arah hadap)
         klik-tarik kanan : tetapkan AWAL
         r: hitung ulang   c: hapus jalur   q: keluar
@@ -29,6 +39,8 @@ from forklift_planner import HybridAStarPlanner, ObstacleMap, VehicleModel
 
 konfig.pasang_path_kamera()
 import area_constraint as AC          # noqa: E402
+
+JENIS_PERENCANA = ("astar", "dqfd", "dqfd-murni")
 
 
 def buat_kendaraan(arena, margin_cm=None, max_steer_rad=None):
@@ -84,11 +96,15 @@ class Perencana:
 
     profil: konfig.profil() robot yang direncanakan (batas kemudinya). None =
     robot yang sedang dipilih.
+    jenis: salah satu JENIS_PERENCANA, lihat docstring modul.
     """
 
-    def __init__(self, arena, profil=None):
+    def __init__(self, arena, profil=None, jenis="astar"):
+        if jenis not in JENIS_PERENCANA:
+            raise SystemExit(f"[!] Perencana '{jenis}' tidak dikenal. Yang ada: {', '.join(JENIS_PERENCANA)}")
         self.arena = arena
         self.p = profil or konfig.profil()
+        self.jenis = jenis
         self._cache = {}
         self.kendaraan, self.planner = self._untuk(konfig.SAFETY_MARGIN_CM)
         # Margin & kendaraan yang BENAR-BENAR dipakai jalur terakhir. Bisa lebih
@@ -102,7 +118,14 @@ class Perencana:
         kunci = round(float(margin_cm), 3)
         if kunci not in self._cache:
             k = buat_kendaraan(self.arena, kunci, self.p.max_steer_rad)
-            self._cache[kunci] = (k, buat_perencana(self.arena, k))
+            planner = buat_perencana(self.arena, k)
+            if self.jenis != "astar":
+                # Diimpor di sini, bukan di atas: tanpa DQfD, rencana.py (dan
+                # navigasi.py) tidak perlu PyTorch sama sekali.
+                from drl.perencana_dqfd import DQfDPlanner
+                planner = DQfDPlanner(planner, self.arena, self.p, kunci,
+                                      cadangan=self.jenis == "dqfd")
+            self._cache[kunci] = (k, planner)
         return self._cache[kunci]
 
     def peta_dengan(self, rintangan_cm):
@@ -211,6 +234,7 @@ class Perencana:
                        "margin_cm": self.margin_dipakai,
                        "margin_turun": bool(jalur) and self.margin_dipakai < konfig.SAFETY_MARGIN_CM - 0.01,
                        "kendaraan": self.kendaraan_dipakai,
+                       "perencana": self.stats.get("perencana", "A*"),
                        "alasan": self.stats.get("reason", "")}
 
     def _sekali(self, awal_cm, tujuan_cm, omap=None):
@@ -280,14 +304,18 @@ def main():
     ap = argparse.ArgumentParser(description="Taman uji Hybrid A* di atas peta constraint")
     ap.add_argument("--peta", default=None)
     ap.add_argument("--sel", type=float, default=None)
+    ap.add_argument("--id", type=int, default=None, help="robot (batas kemudi & model DQfD-nya)")
+    ap.add_argument("--perencana", default="astar", choices=JENIS_PERENCANA)
     args = ap.parse_args()
+    if args.id is not None:
+        konfig.pilih_robot(args.id)
 
     for tingkat, teks in konfig.periksa():
         print(f"[{tingkat}] {teks}")
 
     arena = A.Arena(A.pilih(args.peta), cm_per_cell=args.sel)
-    per = Perencana(arena)
-    print("[i]", arena.ringkas())
+    per = Perencana(arena, jenis=args.perencana)
+    print("[i]", arena.ringkas(), f"| robot {konfig.ROBOT_ID:02d} | perencana {args.perencana}")
     print(f"[i] kendaraan: {len(per.kendaraan.circle_offsets)} lingkaran, jari-jari "
           f"{arena.panjang_ke_cm(per.kendaraan.circle_radius):.2f} cm "
           f"-> butuh jarak bebas segitu untuk lewat")
@@ -329,7 +357,7 @@ def main():
         jalur, info = per.rencanakan(awal, tujuan)
         if jalur:
             print(f"[OK] {info['titik']} titik, {info['panjang_cm']:.0f} cm, "
-                  f"{info['waktu_s'] * 1000:.0f} ms")
+                  f"{info['waktu_s'] * 1000:.0f} ms, oleh {info['perencana']}")
         else:
             print(f"[!] Tidak ada jalur ({info['waktu_s'] * 1000:.0f} ms). "
                   f"Coba arah hadap lain, atau tujuan yang lebih lapang.")
@@ -356,7 +384,8 @@ def main():
 
         teks = arena.ringkas()
         if jalur:
-            teks += f" | jalur {info['panjang_cm']:.0f} cm, {info['waktu_s'] * 1000:.0f} ms"
+            teks += (f" | jalur {info['panjang_cm']:.0f} cm, {info['waktu_s'] * 1000:.0f} ms"
+                     f" ({info['perencana']})")
         elif tujuan is not None:
             teks += " | TIDAK ADA JALUR"
         AC.label(img, teks, (10, 22), (255, 255, 255), 0.5)

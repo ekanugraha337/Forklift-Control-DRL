@@ -7,6 +7,8 @@ navigasi.py - program utama: klik tujuan dengan mouse, robot berjalan sendiri.
     python navigasi.py --peta Rumah --id 2   robot lain (lihat konfig.ROBOT)
     python navigasi.py --peta Rumah --id 1,2 DUA robot sekaligus (lihat wasit.py)
     python navigasi.py --simulasi --id 1,2   dua robot di simulasi
+    python navigasi.py --simulasi --id 1,2 --perencana dqfd
+                                             perencana DQfD (drl/), A* sebagai cadangan
 
 MOUSE
     klik-tarik kiri : tetapkan tujuan ROBOT AKTIF. Titik klik = posisi, arah
@@ -125,7 +127,7 @@ class Unit:
         self.arena = nav.arena
         self.p = profil
         self.id = profil.id
-        self.per = R.Perencana(self.arena, profil)
+        self.per = R.Perencana(self.arena, profil, jenis=self.args.perencana)
         self.margin_cm = self.args.margin
         self.sim = sim
         self.sumber = sumber
@@ -528,7 +530,8 @@ class Unit:
             self.alasan = f"minggir memberi jalan ke robot {info['lawan']:02d}"
         catatan = " (MINGGIR)" if self._minggir else " (MEMUTARI ROBOT LAIN)" if hindar else ""
         print(f"[OK] {self.id:02d}: jalur {info['panjang_cm']:.0f} cm, {info['titik']} titik, "
-              f"{info['waktu_s'] * 1000:.0f} ms, margin {info['margin_cm']:.0f} cm"
+              f"{info['waktu_s'] * 1000:.0f} ms oleh {info.get('perencana', 'A*')}, "
+              f"margin {info['margin_cm']:.0f} cm"
               f"{' (DITURUNKAN)' if info.get('margin_turun') else ''}{catatan}"
               f" -> mulai melacak dengan '{self.args.tracker}'")
 
@@ -1005,7 +1008,7 @@ class Navigasi:
             teks, w = u.baris_status(self.multi)
             AC.label(img, teks, (10, y), w, 0.5)
             y += 20
-        info = f"peta {self.arena.nama} | pelacak {self.args.tracker} | "
+        info = f"peta {self.arena.nama} | perencana {self.args.perencana} | pelacak {self.args.tracker} | "
         if self.multi:
             info += f"aktif {self.aktif.id:02d}: "
         AC.label(img, info + self.aktif.robot.ringkas(), (10, y), (220, 220, 220), 0.45)
@@ -1108,13 +1111,15 @@ def urai_id(teks):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Navigasi otomatis forklift (Hybrid A* + pure pursuit)")
+    ap = argparse.ArgumentParser(description="Navigasi otomatis forklift (Hybrid A* atau DQfD + pure pursuit)")
     ap.add_argument("--id", default=str(konfig.ROBOT_ID),
                     help="robot yang dikendalikan, lihat konfig.ROBOT. Beberapa robot: "
                          f"--id 1,2 (bawaan {konfig.ROBOT_ID})")
     ap.add_argument("--peta", default=None)
     ap.add_argument("--sel", type=float, default=None, help="cm per sel grid")
     ap.add_argument("--tracker", default=konfig.PELACAK_BAWAAN, choices=jejak.tersedia())
+    ap.add_argument("--perencana", default="astar", choices=R.JENIS_PERENCANA,
+                    help="astar (bawaan) | dqfd: DQfD dengan A* sebagai cadangan | dqfd-murni")
     ap.add_argument("--simulasi", action="store_true", help="tanpa kamera & tanpa robot")
     ap.add_argument("--derau", type=float, default=0.0, help="simulasi: derau posisi (cm)")
     ap.add_argument("--derau-deg", type=float, default=0.0, help="simulasi: derau sudut (derajat)")

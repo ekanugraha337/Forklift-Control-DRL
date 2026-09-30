@@ -5,3 +5,8 @@ __pycache__/
 
 # Obsidian: tata letak jendela, berubah setiap kali vault dibuka
 Obsidian Vault/.obsidian/workspace.json
+
+# Dataset demo DQfD: dibangkitkan ulang dengan python -m drl.skenario
+Forklift Robot Program/drl/data/
+# Model DQfD & checkpoint: dihasilkan ulang dengan python -m drl.latih
+Forklift Robot Program/model_dqn/

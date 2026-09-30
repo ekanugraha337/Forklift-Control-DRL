@@ -38,6 +38,16 @@ sekarang. Tanpa syarat ini dua robot yang berdiri berdampingan tidak akan bisa
 berpisah: bayangan robot yang sedang MENJAUH pun masih dekat ke badan
 tetangganya, dan ia akan menunggu selamanya.
 
+BAYANGAN MENGIKUTI BADAN. Pose jalur adalah tempat robot SEHARUSNYA berada,
+bukan tempat ia berada. Sebelum dibandingkan, bayangan dipindahkan dengan
+selisih pose badan sekarang terhadap titik jalur terdekat (geser + putar),
+jadi yang diuji adalah "robot meneruskan jalurnya dengan simpangan yang
+sedang ia punya". Ditemukan 2026-09-30 (catatan Obsidian "Deep Reinforcement
+Learning"): robot pemenang prioritas berjalan 3,5 cm di samping jalurnya dan
+menyerempet robot yang sedang menunggu sampai 1,7 cm - bayangan di atas
+jalurnya sendiri melihat 5,7 cm, badannya 1,6 cm. Terjadi dengan A* maupun
+DQfD.
+
 PRIORITAS
     0. robot yang sedang MINGGIR didahulukan: ia sedang membuka jalan untuk
        lawannya, dan menghentikannya di tengah manuver justru meninggalkan
@@ -120,6 +130,28 @@ def sapuan(titik_cm, panjang_cm):
             break
         lalu = (x, y)
     return poli
+
+
+def ikut_badan(bayangan, badan):
+    """Bayangan dipindahkan (geser + putar) supaya poligon pertamanya jatuh tepat
+    di badan sekarang.
+
+    bayangan[0] adalah jejak badan di titik jalur terdekat robot (sapuan()
+    dimulai dari sana), dan poligon jejak_badan() selalu bersudut dalam urutan
+    yang sama, jadi transformasi kaku di antara keduanya adalah simpangan robot
+    dari jalurnya - lateral maupun heading. Robot yang tepat di jalurnya:
+    transformasinya identitas, bayangan tidak berubah.
+    """
+    if not bayangan or badan is None:
+        return bayangan
+    P0 = np.asarray(bayangan[0], float)
+    B = np.asarray(badan, float)
+    c0, cb = P0.mean(axis=0), B.mean(axis=0)
+    e0, eb = P0[1] - P0[0], B[1] - B[0]
+    dth = math.atan2(eb[1], eb[0]) - math.atan2(e0[1], e0[0])
+    c, s = math.cos(dth), math.sin(dth)
+    R = np.array([[c, -s], [s, c]])
+    return [(np.asarray(P, float) - c0) @ R.T + cb for P in bayangan]
 
 
 def _berpotongan(P, Q):
@@ -251,8 +283,10 @@ class Wasit:
         # Kelonggaran 0,5 cm menyerap derau pose supaya robot yang menjauh
         # sejajar tidak terbaca mendekat oleh getaran pengukuran.
         batas = min(konfig.MULTI_JARAK_AMAN_CM, d_kini - min(0.5, d_kini / 2.0))
-        ab = a.berjalan and jarak_himpunan(a.bayangan, [b.badan], batas) < batas
-        ba = b.berjalan and jarak_himpunan(b.bayangan, [a.badan], batas) < batas
+        # Bayangan dipindah ke badan sebenarnya - lihat docstring modul.
+        bay_a, bay_b = ikut_badan(a.bayangan, a.badan), ikut_badan(b.bayangan, b.badan)
+        ab = a.berjalan and jarak_himpunan(bay_a, [b.badan], batas) < batas
+        ba = b.berjalan and jarak_himpunan(bay_b, [a.badan], batas) < batas
 
         def batas_tunggu(p, q, bawaan):
             # q sedang minggir untuk p: jalannya sedang dibukakan, jangan
@@ -274,7 +308,7 @@ class Wasit:
                 batas_tunggu(p, q, konfig.MULTI_TUNGGU_MAKS_S)))
             self.konflik.append((p.id, q.id, "di jalur"))
         elif a.berjalan and b.berjalan and \
-                jarak_himpunan(a.bayangan, b.bayangan, batas) < batas:
+                jarak_himpunan(bay_a, bay_b, batas) < batas:
             kalah = self._pilih_kalah(a, b, kunci)
             menang = b if kalah is a else a
             self._setel(hasil, kalah.id, Keputusan(
@@ -299,9 +333,12 @@ def _uji():
         return [(x + arah * i * 2.4 * math.cos(r), y + arah * i * 2.4 * math.sin(r), yaw)
                 for i in range(n)]
 
-    def peserta(rid, x, y, yaw, berjalan=True, arah=1, sisa=100.0):
+    def peserta(rid, x, y, yaw, berjalan=True, arah=1, sisa=100.0, geser=0.0):
+        """geser: badan menyimpang sekian cm ke KIRI jalurnya (galat pelacakan)."""
         bay = sapuan(lurus(x, y, yaw, 100, arah), L) if berjalan else []
-        return Peserta(rid, A.jejak_badan(x, y, yaw), True, berjalan, bay, arah, sisa)
+        r = math.radians(yaw)
+        badan = A.jejak_badan(x - geser * math.sin(r), y + geser * math.cos(r), yaw)
+        return Peserta(rid, badan, True, berjalan, bay, arah, sisa)
 
     # Jarak di kasus-kasus ini diturunkan dari L, supaya ujiannya tetap
     # bermakna kalau kecepatan atau akselerasi di konfig berubah.
@@ -342,6 +379,19 @@ def _uji():
         ("badan bersentuhan",
          [peserta(1, 0, 0, 0), peserta(2, 5, 3, 0, berjalan=False)],
          {1: KONTAK, 2: KONTAK}),
+        # Kasus 2026-09-30: 01 berjalan 3,5 cm di kiri jalurnya, 02 diam di depan
+        # kirinya. Menurut JALUR, 01 lewat 5,7 cm dari 02 (>= jarak aman, lolos);
+        # menurut BADAN-nya ia lewat 2,2 cm. Harus menunggu.
+        ("menyerempet: 01 menyimpang 3,5 cm ke arah 02 yang diam",
+         [peserta(1, 0, 0, 0, geser=3.5),
+          peserta(2, F + L / 2 + B, konfig.BODY_WIDTH_CM + 5.7, 0, berjalan=False)],
+         {1: TUNGGU}),
+        # Penjaga: simpangan yang sama tapi SEJAJAR 5 cm dari 02 - tidak mendekat,
+        # jadi tetap boleh jalan (seperti "berdampingan 5 cm, 01 maju sejajar").
+        ("menyimpang 3,5 cm, sejajar 5 cm dari 02",
+         [peserta(1, 0, 0, 0, geser=3.5),
+          peserta(2, 0, 3.5 + konfig.BODY_WIDTH_CM + 5, 0, berjalan=False)],
+         {}),
     ]
     print(f"[i] laju {v:.1f} cm/detik, a_rem {a_rem:.1f} cm/detik^2 -> bayangan {L:.1f} cm")
     gagal = 0
