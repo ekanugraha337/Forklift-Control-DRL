@@ -744,6 +744,23 @@ Kesimpulan tingkat rencana:
 
 Catatan teknis: evaluasi ID 02 pada jalan pertama berhenti diam-diam di rute 450/474 (kode 1, tanpa traceback), bertepatan dengan saat user menghentikan perintah lain. Dijalankan ulang tanpa galat. Angka ID 02 di atas dari jalan ulang itu. Hasil mode mundur putaran 2 diarsipkan di `model_dqn/putaran2_mundur/`.
 
+#### Ketiga peta: ukuran sama, rintangan berbeda
+
+Diukur dari peta constraint (grid 300 × 270 cm untuk ketiganya):
+
+| | Kalibrasi | Rumah2 | Rumah |
+|---|---|---|---|
+| Zona / luas terisi | 4 / 19,8% | 10 / 13,6% | 12 / 31,8% |
+| Dinding tepi | 14–20 cm | 7–10 cm | 14–20 cm |
+| Blok di dalam | – | 6: 4 × ±16 cm, 2 × 31 cm | 8: 4 × 30 cm, 4 × ±48 × 31 cm |
+| Jarak bebas terlebar | 105 cm | 50 cm | 34 cm |
+| Lantai tempat badan + margin 8 cm muat (salah satu dari 8 arah) | 54% | 38% | 21% |
+| Hybrid A\* menemukan jalur, pasangan acak (ID 01 / ID 02) | 100 / 100% | 98 / 91% | 69 / 34% |
+
+Ini menjelaskan pola hasil. Di **Rumah2** (blok kecil dan sedikit, koridor sampai 50 cm) DQfD terbaik-dulu **setara** Hybrid A\*: tiba 99,1 / 100%, p90 1,04 / 1,15. Di **Rumah** hanya 21% lantai yang muat dan koridor terlebar 34 cm, lebih sempit dari lingkaran putar mana pun, sehingga hampir setiap rute butuh manuver maju-mundur. Paling berat untuk ID 02 (radius rencana 70,8 cm). Di sanalah DQfD masih tertinggal.
+
+Urutan uji robot nyata yang wajar (tahap 10): **Kalibrasi → Rumah2 → Rumah**.
+
 **Berikutnya (usulan):**
 
 1. **ID 01 di Rumah**: latih ulang dengan porsi Rumah lebih besar atau lebih lama, atau pakai model putaran 1 (lebih baik di Rumah, tapi pemilihannya dari set uji harus dicatat).
