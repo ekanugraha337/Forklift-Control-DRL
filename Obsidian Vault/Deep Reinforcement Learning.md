@@ -744,6 +744,41 @@ Kesimpulan tingkat rencana:
 
 Catatan teknis: evaluasi ID 02 pada jalan pertama berhenti diam-diam di rute 450/474 (kode 1, tanpa traceback), bertepatan dengan saat user menghentikan perintah lain. Dijalankan ulang tanpa galat. Angka ID 02 di atas dari jalan ulang itu. Hasil mode mundur putaran 2 diarsipkan di `model_dqn/putaran2_mundur/`.
 
+#### Performa komputasi: Hybrid A\* vs DQfD (Rumah2)
+
+```
+python -u -m drl.banding_komputasi --peta Rumah2 --ulang 3     # ±5 menit; model_dqn/banding_komputasi_Rumah2.{json,png}
+```
+
+Dibuat khusus untuk membandingkan komputasi secara adil:
+
+- **Rute sama persis** untuk ketiga perencana: semua rute uji Rumah2, lengkap dengan margin dan badan robot lain sebagai rintangan bila ada.
+- **Lewat `Perencana.rencanakan()`**, jalur kode yang sama dengan `navigasi.py`, termasuk margin cadangan.
+- **Tiap rute 3×, dilaporkan median**, setelah pemanasan. Ongkos membangun perencana dan memuat model dilaporkan terpisah.
+
+| Rumah2 | ID 01: Hybrid A\* | ID 01: `dqfd` | ID 01: `dqfd-murni` | ID 02: Hybrid A\* | ID 02: `dqfd` | ID 02: `dqfd-murni` |
+|---|---|---|---|---|---|---|
+| Rute | 115 | 115 | 115 | 106 | 106 | 106 |
+| Tiba | 99,1% | 99,1% | 98,3% | 100% | 100% | 100% |
+| **Waktu median** | **5,6 ms** | 10,0 ms | 7,9 ms | **14,8 ms** | 22,9 ms | 22,5 ms |
+| Waktu rata-rata | 86 ms | 192 ms | 157 ms | 158 ms | 173 ms | 142 ms |
+| Waktu p90 | **63 ms** | 152 ms | 151 ms | 431 ms | 369 ms | **361 ms** |
+| Waktu maks | 4,0 s | 8,0 s | 4,0 s | 2,5 s | 3,4 s | 2,3 s |
+| Kerja median | 9 ekspansi | 3 langkah, 4 forward | 3 langkah | 22 ekspansi | 9 langkah, 10 forward | 9 langkah |
+| DQfD lebih cepat di | – | 16% rute | 15% rute | – | 21% rute | 21% rute |
+| Total waktu semua rute | 9,9 s | 22,1 s | 18,1 s | 16,8 s | 18,3 s | 15,1 s |
+
+Temuan:
+
+- **Di Rumah2, Hybrid A\* lebih cepat.** Median ±1,6–1,8× lebih cepat, dan DQfD hanya unggul di 15–21% rute. Hybrid A\* di peta lapang ini hanya butuh 9–22 ekspansi, karena heuristiknya sudah sangat tepat, jadi tidak banyak yang bisa dihemat.
+- **Jaringan saraf hanya ±5% dari waktu DQfD.** Sisanya pekerjaan geometri yang sejenis dengan Hybrid A\*: memeriksa tabrakan 14 calon, mencoba Reeds-Shepp, dan menghitung 32 sinar. Satu langkah DQfD lebih mahal daripada satu ekspansi Hybrid A\*, sehingga DQfD baru untung bila Hybrid A\* butuh jauh lebih banyak ekspansi. Itu terjadi di rute sulit: ID 02 p90 361–369 ms vs 431 ms. Di grafik, rute dengan Hybrid A\* > 300 ms sering berada di bawah garis.
+- `dqfd` lebih lambat dari `dqfd-murni` karena rute yang ditolak gerbang atau gagal ikut membayar Hybrid A\* cadangan. Waktu maks 8,0 s = DQfD 2 s + Hybrid A\* 2 s pada kedua margin.
+- Memuat model DQfD hanya 4–6 ms. "Rencana pertama" 474 / 2244 ms pada ID 01 adalah rute pertama yang kebetulan sulit, bukan ongkos memuat.
+- Untuk operasi robot, keduanya jauh di bawah batas: perencanaan berjalan di thread terpisah dari loop 20 Hz, dan median 5–23 ms praktis tak terasa. Perbedaannya hanya bermakna di kasus sulit (p90 / maks).
+
+> [!warning] Koreksi waktu di `drl.evaluasi`
+> Sampai 2026-09-30, `evaluasi.py` mengukur waktu DQfD **tanpa** `env.reset()`. Padahal reset menghitung heuristik Dijkstra (±3 ms, diukur median 3,0 ms di Rumah2), sedangkan Hybrid A\* menghitung Dijkstra-nya di dalam waktu yang diukur. Median waktu DQfD di tabel-tabel evaluasi di atas karena itu **±3 ms terlalu kecil**; p90 dan maks hampir tidak terpengaruh. Kode sudah diperbaiki. Untuk perbandingan komputasi, pakai `drl.banding_komputasi`.
+
 #### Ketiga peta: ukuran sama, rintangan berbeda
 
 Diukur dari peta constraint (grid 300 × 270 cm untuk ketiganya):
