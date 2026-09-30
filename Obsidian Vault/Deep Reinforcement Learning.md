@@ -138,7 +138,7 @@ Analogi belajar menyetir: J_E = instruktur yang bilang "belok di sini"; J_DQ = m
 **Saat operasional** (`DQfDPlanner.plan`, sebagaimana dibuat di tahap 9):
 1. Hitung heuristik Dijkstra sekali (`reset()` lingkungan).
 2. Rollout greedy dengan masking sampai SAMBUNG atau tiba.
-3. Kalau buntu, **mundur**: kembali ke keadaan sebelumnya dan coba aksi Q terbaik berikutnya. Sel yang pernah dicoba tetap tertutup, dengan anggaran 600 langkah. Ini menggantikan rencana awal *beam search*.
+3. **Pencarian terbaik-dulu** berpandu Q (f = g + c + 2·h, anggaran 1.200 langkah; lihat bagian "Pencarian terbaik-dulu"). Sebelumnya: *mundur* (DFS, kembali ke aksi Q terbaik berikutnya saat buntu), yang menggantikan rencana awal *beam search*. Mundur masih ada di kode sebagai pembanding.
 4. **Gerbang mutu** (mode `dqfd`): jalur ditolak bila biayanya > 1,3 × perkiraan jaringan sendiri −V(s₀).
 5. Gagal atau ditolak: jatuh ke Hybrid A\* (mode `dqfd`), atau kembalikan `None` (mode `dqfd-murni`). Tercatat di `last_stats["perencana"]`.
 
@@ -293,8 +293,8 @@ Kalau evaluasi tahap 8 menunjukkan jalurnya terlalu kasar, langkah berikutnya ya
 | 4   | Jaringan + DQfD + hook aktivasi                                                                                    | Overfit pada 1 episode                                                  | ✅ |
 | 5   | Pra-latih per robot                                                                                                | Setuju dengan A\* ≥ 85%, tiba ≥ 70% di set uji                          | ⚠️ tiba ✓, setuju 66–73% (kriteria perlu ditinjau) |
 | 6   | Dasbor neuron (dibangun bersama tahap 4–7)                                                                         | —                                                                       | ✅ |
-| 7   | Latihan sendiri + kurikulum                                                                                        | Tiba ≥ 95%, rasio biaya ≤ 1,1× A\*                                      | ⏳ putaran 2 berjalan |
-| 8   | **Evaluasi tingkat rencana** vs A\*                                                                                | % tiba, rasio biaya, jumlah ganti arah, jarak ke zona, **waktu hitung** | ✅ putaran 1; ulang untuk putaran 2 |
+| 7   | Latihan sendiri + kurikulum                                                                                        | Tiba ≥ 95%, rasio biaya ≤ 1,1× A\*                                      | ✅ tiba 97–98% (uji); rasio median 1,00, p90 1,14–1,16 dengan pencarian terbaik-dulu |
+| 8   | **Evaluasi tingkat rencana** vs A\*                                                                                | % tiba, rasio biaya, jumlah ganti arah, jarak ke zona, **waktu hitung** | ✅ putaran 1, 2, dan terbaik-dulu |
 | 9   | Integrasi ke `rencana.py` (`--perencana dqfd`) + **simulasi ID 01 dan 02** dengan pure pursuit, jeda, derau 1,2 cm | Lima skenario dua-robot di README lolos, tanpa masuk zona               | ✅ terintegrasi; ⚠️ mutu jalur (lihat Tahap 9) |
 | 10  | Robot nyata di `Kalibrasi`, laju rendah                                                                            | Tidak ada estop zona                                                    | ⬜ |
 
@@ -672,5 +672,83 @@ Setelah dua putaran, persetujuan dengan Hybrid A\* mentok di 66–73%. Kalau jar
 4. **Latihan lebih panjang untuk ID 02** (masih membaik di akhir putaran 2).
 
 Model yang dipakai sekarang: ID 01 dan ID 02 putaran 2 di `model_dqn/`, putaran 1 di `model_dqn/putaran1/`. Untuk ID 01, putaran 1 lebih baik di set uji. Tetapi memilih model dari set uji berarti mengintip jawaban, jadi keputusannya perlu dicatat terang.
+
+**Keputusan (2026-09-30): pilihan 2 dikerjakan lebih dulu.**
+
+---
+
+### Pencarian terbaik-dulu (pilihan 2)
+
+`perencana_dqfd.rencanakan_terbaik()` menggantikan mundur (DFS) sebagai metode operasional `DQfDPlanner`. Model tidak dilatih ulang: model putaran 2 yang sama, hanya cara merencanakannya yang berubah.
+
+- Tiap calon langkah diberi **f = g + c(a) + w · h**. g = biaya yang sudah ditempuh; c(a) = biaya primitif (tepat, dari lingkungan); h = max(0, −Q(s,a) × skala − c(a)), yaitu perkiraan jaringan biaya-sisa setelah langkah itu. Satu forward di s memberi h untuk ke-14 calon sekaligus.
+- Yang dibuka selalu calon dengan **f terkecil di seluruh pohon**, bukan hanya dari keadaan terakhir seperti mundur. Jaringan benar: jalannya sama dengan greedy. Jaringan salah: pindah ke cabang yang secara keseluruhan lebih murah.
+- **SAMBUNG memakai biaya Reeds-Shepp sebenarnya** (terminal), jadi jalur baru ditutup bila sambungan itu memang bersaing, seperti cara Hybrid A\* menerima ekspansi analitiknya.
+- Sel yang sudah dimasuki cabang mana pun tertutup (closed set). Jalur tiap simpul disimpan sebagai rantai induk, karena simpul berikutnya bisa berasal dari cabang mana saja.
+
+**Pemilihan bobot w dan anggaran pada set VALIDASI** (160 rute, 60 Rumah, model putaran 2), ID 01 / ID 02:
+
+| Metode | Tiba | Rumah tiba | Rasio p90 | Rumah p90 | ms p90 |
+|---|---|---|---|---|---|
+| mundur (600) | 97,5 / 95,6 | 96,7 / 95,0 | 2,24 / 2,27 | 3,26 / 3,80 | 104 / 176 |
+| terbaik w 1,0, a 600 | 94,4 / 95,6 | 91,7 / 93,3 | 1,03 / 1,11 | 1,06 / 1,13 | 773 / 552 |
+| terbaik w 1,5, a 600 | 95,0 / 96,9 | 91,7 / 96,7 | 1,19 / 1,15 | 1,26 / 1,20 | 576 / 413 |
+| terbaik w 1,5, a 1200 | 97,5 / 98,8 | 98,3 / 100 | 1,20 / 1,16 | 1,31 / 1,23 | 600 / 437 |
+| **terbaik w 2,0, a 1200** (dipakai) | **97,5 / 98,8** | **98,3 / 100** | **1,20 / 1,17** | **1,24 / 1,24** | 427 / 337 |
+
+Semua jalur diperiksa ulang secara independen: tidak satu pun tidak sah.
+
+**Gerbang mutu dengan metode baru** (set validasi): jalur buruk (rasio > 1,3) tinggal 24/439 (ID 01) dan 21/447 (ID 02). Gerbang 1,3 menahan 8 dan 2 di antaranya, dengan harga 15 dan 2 jalur baik dialihkan ke Hybrid A\*. Itu hanya menambah waktu, bukan menurunkan mutu, jadi gerbang tetap dipasang sebagai jaring pengaman.
+
+#### Hasil pada set UJI (penilaian jujur: w dan anggaran dipilih dari validasi)
+
+| Peta | ID 01 tiba: greedy / mundur / **terbaik** / Hybrid A\* | ID 01 rasio p90: mundur → **terbaik** | ID 02 tiba: greedy / mundur / **terbaik** / Hybrid A\* | ID 02 rasio p90: mundur → **terbaik** |
+|---|---|---|---|---|
+| **Semua** | 87,5 / 95,9 / **97,2** / 99,4 | 2,67 → **1,14** | 85,2 / 97,7 / **98,3** / 98,3 | 2,18 → **1,16** |
+| Kalibrasi | 100 / 100 / **100** / 100 | 1,06 → 1,00 | 100 / 100 / **100** / 100 | 1,06 → 1,00 |
+| Rumah2 | 98,3 / 99,1 / **99,1** / 99,1 | 1,68 → 1,04 | 97,2 / 99,1 / **100** / 100 | 1,80 → 1,15 |
+| **Rumah** | 63,4 / 89,4 / **93,0** / 99,3 | 4,56 → **1,23** | 64,3 / 97,5 / **97,5** / 99,4 | 3,37 → **1,32** |
+| sintetis | 97,3 / 97,9 / **98,6** / 99,3 | 1,95 → 1,09 | 92,8 / 96,1 / **97,4** / 95,4 | 1,46 → 1,02 |
+
+Rasio median tetap 1,000 di semua peta.
+
+| | ID 01 | ID 02 |
+|---|---|---|
+| Waktu median / p90: terbaik vs Hybrid A\* | 5 / 356 ms vs 5 / 245 ms | 6 / 403 ms vs 6 / 401 ms |
+| Waktu p90 di Rumah: terbaik vs Hybrid A\* | **1942** vs 738 ms | 662 vs 716 ms |
+| Gagal (terbaik) | anggaran habis 13 | anggaran habis 7, buntu 1 |
+| Negatif dipecahkan DQfD (semua sah) | 29/150 | **54/150** |
+
+Kesimpulan tingkat rencana:
+
+- **Mutu jalur teratasi.** p90 rasio biaya turun dari 2,2–2,7 ke **1,14–1,16**, dan di Rumah dari 3,4–4,6 ke **1,23–1,32**. Median tetap 1,00 (sama dengan Hybrid A\*).
+- **ID 02 menyamai Hybrid A\*** dalam % tiba (98,3 vs 98,3), dan di peta sintetis bahkan lebih baik (97,4 vs 95,4), dengan waktu yang setara.
+- **ID 01 masih di bawah Hybrid A\* di Rumah** (93,0 vs 99,3), dan kasus tersulitnya lambat (p90 1,9 s, dekat batas 2 s). Kegagalannya semua "anggaran habis": jaringan ID 01 di Rumah kurang akurat, sehingga pencarian menjelajah terlalu lebar. (Model ID 01 putaran 1 lebih baik di Rumah; lihat catatan pemilihan model di atas.)
+
+#### Uji jalan tertutup (metode terbaik-dulu, wasit baru)
+
+| | Hybrid A\* | `dqfd` (terbaik + gerbang + cadangan) | `dqfd-murni` (terbaik, tanpa cadangan) |
+|---|---|---|---|
+| Satu robot tiba | 29/30 | 26/30 | 28/30 |
+| Badan masuk zona | 0 | 0 | 0 |
+| Jarak zona terdekat | 0,83 cm | 0,65 cm | 1,68 cm |
+| Galat akhir rata / maks | 4,2 / 5,5 cm | 4,3 / 6,4 cm | 4,5 / 8,3 cm |
+| Pasangan: robot tiba | 10/12 | 10/12 | 10/12 |
+| Jarak antar-robot terdekat | 7,4 cm | 9,7 cm | 10,4 cm |
+| Jalur oleh DQfD / cadangan | – | 30 / 0 (satu robot) | 30 / – |
+
+- Semua kegagalan satu robot adalah **estop zona dari pose terukur di Rumah**; badan sebenarnya tidak pernah masuk zona. Rumah #2100 gagal juga pada Hybrid A\*, dan #4133 / #4815 pada `dqfd` maupun `dqfd-murni`.
+- `dqfd` (26) lebih rendah dari `dqfd-murni` (28) padahal jalurnya sama (gerbang tidak pernah menolak). Itu menunjukkan ragam antar-jalan (±2 rute per jalan tunggal). Selisih 26–29 **bukan perbedaan nyata**.
+- **Tidak ada kontak antar-robot** di satu pun jalan.
+- Sisa masalah jalan tertutup (estop zona di Rumah, juga pada Hybrid A\*) tampaknya soal **pelacakan di koridor sempit dengan derau pose**, bukan soal perencana. Kalau mau dikejar, perlu dijalankan beberapa kali per skenario supaya ragamnya terukur.
+
+Catatan teknis: evaluasi ID 02 pada jalan pertama berhenti diam-diam di rute 450/474 (kode 1, tanpa traceback), bertepatan dengan saat user menghentikan perintah lain. Dijalankan ulang tanpa galat. Angka ID 02 di atas dari jalan ulang itu. Hasil mode mundur putaran 2 diarsipkan di `model_dqn/putaran2_mundur/`.
+
+**Berikutnya (usulan):**
+
+1. **ID 01 di Rumah**: latih ulang dengan porsi Rumah lebih besar atau lebih lama, atau pakai model putaran 1 (lebih baik di Rumah, tapi pemilihannya dari set uji harus dicatat).
+2. **Latihan lebih panjang untuk ID 02** (masih membaik di akhir putaran 2).
+3. **Uji jalan tertutup berulang** (`--ulang 3`) untuk mengukur ragam, dan menyelidiki estop zona di Rumah yang juga dialami Hybrid A\*.
+4. Tahap 10: robot nyata di `Kalibrasi`, laju rendah.
 
 Terkait: [[Model Robot ID 01]], [[Model Robot ID 02]], [[Multi Robot Navigation and Control]].
