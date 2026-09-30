@@ -36,6 +36,7 @@ import time
 import numpy as np
 import torch
 
+import konfig
 from drl import lingkungan as L
 from drl.jaringan import SKALA_REWARD
 from drl.lingkungan import MAKS_LANGKAH
@@ -226,11 +227,12 @@ def muat_model(robot_id, dir_model=None):
         if not os.path.exists(jalur):
             raise SystemExit(f"[!] Model DQfD robot {robot_id:02d} belum ada: {jalur}\n"
                              f"    Latih dulu: python -m drl.latih --id {robot_id}")
-        from drl.dqfd import muat_jaringan
+        from drl.dqfd import muat_jaringan, periksa_profil
         torch.set_num_threads(1)
         net, meta = muat_jaringan(jalur)
         if meta.get("robot") not in (None, robot_id):
             raise SystemExit(f"[!] {jalur} milik robot {meta['robot']:02d}, bukan {robot_id:02d}")
+        periksa_profil(meta, konfig.profil(robot_id), jalur)
         _MODEL[jalur] = net
     return _MODEL[jalur]
 

@@ -36,10 +36,11 @@ if __package__ in (None, ""):
     __package__ = "drl"
 
 import konfig                                   # noqa: E402
+from drl import lingkungan as L                # noqa: E402
 from drl import rollout as RO                   # noqa: E402
 from drl import skenario as S                   # noqa: E402
 from drl.adaptor_demo import rencanakan_terekam  # noqa: E402
-from drl.dqfd import muat_jaringan              # noqa: E402
+from drl.dqfd import muat_jaringan, periksa_profil  # noqa: E402
 from drl.perencana_dqfd import (ANGGARAN_TERBAIK, BOBOT_TERBAIK, rencanakan,  # noqa: E402
                                  rencanakan_terbaik)
 
@@ -73,6 +74,7 @@ def periksa_jalur(env, jalur, sk):
 def evaluasi_robot(rid, jalur_model, args):
     prof = konfig.profil(rid)
     net, meta = muat_jaringan(jalur_model)
+    periksa_profil(meta, prof, jalur_model)
     d = RO.muat_npz(os.path.join(args.data, f"demo_id{rid:02d}.npz"))
     neg = RO.muat_npz(os.path.join(args.data, f"negatif_id{rid:02d}.npz"))
     pabrik = RO.PabrikEnv(prof)
@@ -89,12 +91,21 @@ def evaluasi_robot(rid, jalur_model, args):
         r = {"peta": sk.peta, "jenis": _jenis(sk.peta), "biaya_astar": sk.biaya_astar,
              "langkah_astar": len(sk.aksi_demo)}
         for mode in MODE_DQFD:
-            env, _, _ = pabrik.buat(sk)
+            # reset() IKUT diukur: ia menghitung heuristik Dijkstra (~3 ms), yang
+            # pada Hybrid A* juga terhitung di dalam plan(). Sampai 2026-09-30
+            # reset ada di luar pengukuran, sehingga median waktu DQfD di
+            # laporan sebelumnya ~3 ms terlalu kecil. Pembanding komputasi
+            # yang lengkap (lewat Perencana, seperti navigasi.py): drl.banding_komputasi.
+            env = L.LingkunganRencana(pabrik.arena(sk.peta), pabrik.p, margin_cm=sk.margin)
+            om = pabrik.omap(sk)
+            t_reset = time.perf_counter()
+            env.reset(sk.awal, sk.tujuan, om)
+            t_reset = time.perf_counter() - t_reset
             if mode == "terbaik":
                 h = rencanakan_terbaik(net, env, anggaran=ANGGARAN_TERBAIK, bobot=BOBOT_TERBAIK)
             else:
                 h = rencanakan(net, env, mundur=mode == "mundur", anggaran=args.anggaran)
-            r[mode] = {"sukses": h["sukses"], "alasan": h["alasan"], "ms": 1000 * h["waktu_s"],
+            r[mode] = {"sukses": h["sukses"], "alasan": h["alasan"], "ms": 1000 * (h["waktu_s"] + t_reset),
                        "biaya": env.biaya if h["sukses"] else None,
                        "rasio": env.biaya / sk.biaya_astar if h["sukses"] else None,
                        "langkah": len(env.jalur()), "dicoba": h["dicoba"], "mundur": h["mundur"]}

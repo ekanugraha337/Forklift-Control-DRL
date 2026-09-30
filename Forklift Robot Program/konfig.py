@@ -82,8 +82,21 @@ ROBOT = {
     # ID 01 (lihat KEMUDI), jadi STEER_SERVO_PER_DEG tidak dibedakan.
     # Sisi kanan membatasi: 23,5. Dugaan kuat mekanis (servo di ~120 deg fisik
     # tertahan linkage/badan) - kalau diperbaiki, ulangi --mode busur lalu naikkan.
+    #
+    # SETELAH PERBAIKAN MEKANISME (uji busur ulang 2026-09-30 20:46,
+    # logs_identifikasi/20260930_204639_id02, kondisi sama: 4000 sps, 9 s):
+    # kemudi kini linear dan SIMETRIS - penguatan 0,993 (semula 0,924) - tapi
+    # jenuh LEBIH AWAL di kedua sisi:
+    #   kiri  (+): +25/+30/+35 -> 22,5 / 22,2 / 22,4 deg nyata (semula 29)
+    #   kanan (-): -25/-30     -> 23,7 / 22,5 deg nyata
+    # Sisi terlemah 22,2 -> 22,0. Uji lurus 20:57: titik lurus -0,36 +- 0,23 deg,
+    # tak berbeda dari nol, jadi steer_center tetap. Uji tangga 20:58/20:58:
+    # tunda total 0,42 / 0,28 s, rata-rata sama dengan model simulator.
+    # Model DQfD model_dqn/id02.pt HARUS dilatih ulang setiap nilai ini berubah
+    # (kelengkungan aksinya diturunkan dari sini); perencana_dqfd menolak model
+    # yang profilnya tidak cocok.
     2: dict(tag=2, steer_center=96.15, cm_per_step=0.002490, accel_sps2=12000.0,
-            max_steer_deg=23.5),
+            max_steer_deg=22.0),
 }
 
 # Robot yang dikendalikan. Pilih lewat "--id" di navigasi.py, atau lewat

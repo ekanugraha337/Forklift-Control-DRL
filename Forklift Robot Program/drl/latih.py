@@ -46,7 +46,7 @@ if __package__ in (None, ""):
 import konfig                                   # noqa: E402
 from drl import rollout as RO                   # noqa: E402
 from drl import skenario as S                   # noqa: E402
-from drl.dqfd import AgenDQfD, Buffer           # noqa: E402
+from drl.dqfd import AgenDQfD, Buffer, meta_profil  # noqa: E402
 from drl.jaringan import SKALA_REWARD, bermask  # noqa: E402
 from drl.perencana_dqfd import rencanakan       # noqa: E402
 from drl.visual_neuron import Dasbor            # noqa: E402
@@ -231,7 +231,7 @@ def latih_robot(rid, args, device):
     st = {"fase": "pra-latih (demo)", "target": total, "riwayat": riw["latih"],
           "eval_riwayat": riw["eval"], "batas_fase": riw["batas_fase"]}
     meta = {"robot": rid, "data_demo": jalur_demo, "probe": probe_idx, "target": total,
-            "args": vars(args)}
+            "args": vars(args), **meta_profil(konfig.profil(rid))}
     terbaik = {"skor": -float("inf"), "langkah": None}
     print(f"\n=== ID {rid:02d}: {len(latih_ep)} episode demo latih ({n_demo} transisi), "
           f"validasi {len(val_ep)} episode ({len(evaluator.sk)} rute dievaluasi) + {len(evaluator.neg)} negatif, "

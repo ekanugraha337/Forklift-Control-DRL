@@ -163,3 +163,28 @@ def muat_jaringan(jalur, device="cpu"):
     net.load_state_dict(ck["net"])
     net.eval()
     return net, ck
+
+
+def meta_profil(prof):
+    """Bagian profil robot yang menentukan arti aksi - disimpan di checkpoint."""
+    return {"max_steer_deg": float(prof.max_steer_deg), "r_plan_cm": float(prof.r_plan_cm)}
+
+
+def periksa_profil(meta, prof, jalur):
+    """Tolak model yang dilatih untuk kemudi lain.
+
+    Ketujuh tingkat kelengkungan aksi diturunkan dari R_PLAN robot. Kalau
+    max_steer_deg di konfig berubah (kemudi diperbaiki / diukur ulang), indeks
+    aksi yang sama berarti belokan lain, dan nilai Q model lama tidak lagi
+    berlaku - padahal jaringannya tetap jalan tanpa galat. Model sebelum
+    pengaman ini tidak menyimpan profil, jadi juga ditolak.
+    """
+    if "r_plan_cm" not in meta:
+        raise SystemExit(f"[!] {jalur} tidak mencatat profil kemudi (dilatih sebelum 2026-09-30).\n"
+                         f"    Latih ulang: python -m drl.latih --id {prof.id}")
+    if abs(meta["r_plan_cm"] - prof.r_plan_cm) > 1e-3:
+        raise SystemExit(f"[!] {jalur} dilatih untuk max_steer {meta['max_steer_deg']:.1f} deg "
+                         f"(R_PLAN {meta['r_plan_cm']:.1f} cm), konfig sekarang {prof.max_steer_deg:.1f} deg "
+                         f"(R_PLAN {prof.r_plan_cm:.1f} cm).\n"
+                         f"    Bangkitkan ulang demo dan latih ulang: python -m drl.skenario --id {prof.id} "
+                         f"lalu python -m drl.latih --id {prof.id}. Sementara itu pakai --perencana astar.")
