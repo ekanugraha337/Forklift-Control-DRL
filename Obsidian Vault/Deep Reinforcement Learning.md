@@ -42,10 +42,10 @@ Model dipilih dari `profil.id`: `model_dqn/id01.pt` atau `model_dqn/id02.pt`.
 
 | | ID 01 | ID 02 |
 |---|---|---|
-| `max_steer_deg` | 35,0° | 23,5° (sisi kiri sebenarnya 29°, kanan 23,6°) |
-| R minimum | 32,1 cm | **51,7 cm** |
-| Kemudi rencana (× `PLAN_STEER_RATIO` 0,75) | 26,3° | 17,6° |
-| R rencana | 45,6 cm | **70,8 cm** |
+| `max_steer_deg` | 35,0° | **22,0°** sejak perbaikan mekanisme 2026-09-30 (semula 23,5°) |
+| R minimum | 32,1 cm | **55,7 cm** (semula 51,7) |
+| Kemudi rencana (× `PLAN_STEER_RATIO` 0,75) | 26,3° | 16,5° (semula 17,6°) |
+| R rencana | 45,6 cm | **76,0 cm** (semula 70,8) |
 
 Di `Rumah`, titik terlapang hanya 34 cm. ID 02 akan lebih sering butuh manuver maju-mundur, dan sebagian tujuan tidak tercapai sama sekali. Jadi kebijakan ID 01 tidak bisa dipakai begitu saja untuk ID 02. Bobot ID 01 boleh dijadikan titik awal pelatihan ID 02 (*transfer learning*), tapi itu diuji sebagai eksperimen, bukan anggapan.
 
@@ -322,7 +322,7 @@ Checkpoint dan log disimpan di `model_dqn/id01/` dan `model_dqn/id02/`. File lam
 - [x] **Cadangan Hybrid A\***: ya. `--perencana dqfd` = DQfD + gerbang mutu + A\* cadangan; `dqfd-murni` = tanpa cadangan, untuk menilai DQfD sendirian.
 - [x] **Tempat dasbor**: jendela OpenCV (`drl/visual_neuron.py`), sama seperti `navigasi.py`. TensorBoard belum dibuat.
 - [x] **Urutan setelah uji jalan tertutup**: perbaikan wasit dulu (juga di repo `Forklift Control`), lalu putaran latih B.
-- [ ] **Kemudi ID 02 yang asimetris** (kiri 29°, kanan 23,6°): masih dianggap simetris 23,5°, sama dengan demonstrator.
+- [x] **Kemudi ID 02 yang asimetris** (kiri 29°, kanan 23,6°): terselesaikan oleh perbaikan mekanisme. Kemudi kini simetris, jenuh di 22,2–22,5°, dan dipakai 22,0° (lihat "Perbaikan mekanisme ID 02").
 - [ ] **Kriteria "setuju ≥ 85%"** (tahap 5): usul diganti rasio biaya, karena A\* sering punya beberapa aksi setara.
 
 ---
@@ -828,8 +828,68 @@ Urutan uji robot nyata yang wajar (tahap 10): **Kalibrasi → Rumah2 → Rumah**
 **Berikutnya (usulan):**
 
 1. **ID 01 di Rumah**: latih ulang dengan porsi Rumah lebih besar atau lebih lama, atau pakai model putaran 1 (lebih baik di Rumah, tapi pemilihannya dari set uji harus dicatat).
-2. **Latihan lebih panjang untuk ID 02** (masih membaik di akhir putaran 2).
+2. ~~Latihan lebih panjang untuk ID 02~~: dikerjakan bersama latih ulang untuk kemudi 22,0° (di bawah).
 3. **Uji jalan tertutup berulang** (`--ulang 3`) untuk mengukur ragam, dan menyelidiki estop zona di Rumah yang juga dialami Hybrid A\*.
 4. Tahap 10: robot nyata di `Kalibrasi`, laju rendah.
+
+### Perbaikan mekanisme ID 02: kemudi 22,0°, latih ulang (2026-09-30)
+
+**Identifikasi ulang** setelah linkage kemudi ID 02 diperbaiki (`identifikasi.py --id 2 --peta Kalibrasi`, mode busur, lurus, dan tangga; kondisi sama dengan uji pertama, 4000 sps, 9 s per sudut):
+
+| Diminta | Nyata sebelum | Nyata sesudah |
+|---|---|---|
+| +20 / −20 | 18,4 / −18,3 | 19,2 / −20,4 |
+| +25 / −25 | 24,6 / −21,7 | 22,5 / −23,7 |
+| +30 / −30 | 29,1 / −23,6 | 22,2 / −22,5 |
+| +35 / −35 | 28,8 / −23,8 | 22,4 / – |
+| Penguatan (≤ 20°) | 0,924 | **0,993** |
+
+- Kemudi kini **linear dan simetris**, tetapi jenuh **lebih awal** di kedua sisi (22,2–22,5°). Sisi terlemah 22,2°, jadi dipakai **`max_steer_deg = 22,0`**, di kedua repo (`Forklift Control` dan `- DRL`). R rencana naik 70,8 → **76,0 cm**.
+- Uji lurus: titik lurus −0,36 ± 0,23°, tidak berbeda nyata dari nol, sehingga `steer_center` 96,15 tetap. `cm_per_step` terbaca +1,4%, tetapi hanya dari 2 lintasan, jadi belum diubah.
+- Uji tangga: tunda total 0,42 dan 0,28 s. Rata-ratanya sama dengan model simulator, sehingga tidak diubah.
+
+**Pengaman profil model.** Tujuh tingkat kelengkungan aksi diturunkan dari R rencana. Model lama tetap "jalan" dengan kemudi baru tanpa galat, padahal indeks aksi yang sama kini berarti belokan lain. Karena itu setiap checkpoint kini mencatat `max_steer_deg` dan `r_plan_cm`. `perencana_dqfd` dan `drl.evaluasi` **menolak** model yang tidak cocok dengan konfig, dengan pesan untuk memakai `--perencana astar` sampai model dilatih ulang. Model ID 01 diberi catatan profil 35°. Model, dataset, dan hasil ID 02 lama diarsipkan di `model_dqn/id02_steer23.5/`.
+
+**Dataset dan latih ulang:**
+
+```
+python -u -m drl.skenario --id 2                              # 5,0 menit
+python -u -m drl.latih --id 2 --mandiri 250000 --tampil       # 46 menit
+```
+
+- Dengan kemudi 22°, Hybrid A\* lebih sering buntu di Rumah: jalur ditemukan di 28% pasangan acak (dulu 34%).
+- Latihan sendiri diperpanjang 150k → 250k langkah lingkungan. Model terbaik ada di **langkah 90.000** (validasi: tiba mundur 96,9%, p90 2,02, skor 86,7; model lama 95,6%, 2,27, 82,9). Kali ini puncaknya di tengah, bukan di akhir, jadi panjang latihan sudah cukup.
+
+**Set uji** (471 rute; rutenya berbeda dari set uji lama karena dataset dibangkitkan ulang untuk kemudi baru, sehingga yang sebanding adalah selisih terhadap Hybrid A\* pada set yang sama):
+
+| Peta | Tiba terbaik-dulu / A\* (baru) | Tiba terbaik-dulu / A\* (lama, 23,5°) | Rasio p90 terbaik-dulu baru / lama | ms median / p90 terbaik-dulu vs A\* (baru) |
+|---|---|---|---|---|
+| **Semua** | 97,0 / 98,7% | 98,3 / 98,3% | **1,13** / 1,16 | 8 / 373 vs 5 / 319 |
+| Kalibrasi | 100 / 100% | 100 / 100% | 1,00 / 1,00 | 4 / 13 vs 3 / 7 |
+| Rumah2 | 97,5 / 97,5% | 100 / 100% | 1,19 / 1,15 | 16 / 370 vs 9 / 227 |
+| Rumah | 95,6 / 100% | 97,5 / 99,4% | **1,16** / 1,32 | 46 / 535 vs 30 / 448 |
+| sintetis | 96,7 / 98,0% | 97,4 / 95,4% | 1,05 / 1,02 | 5 / 267 vs 4 / 136 |
+
+- **Mutu jalur membaik**, terutama di Rumah: p90 1,32 → 1,16.
+- **Tingkat tiba sedikit tertinggal dari A\*** (97,0 vs 98,7%). Semua 14 kegagalan berjenis "anggaran habis" (dulu 8), sebagian besar di Rumah. Dengan R rencana lebih besar, rute Rumah butuh lebih banyak manuver, sehingga anggaran 1200 lebih cepat habis.
+
+**Uji jalan tertutup** (`drl.uji_navigasi`, kedua robot, derau 1,2 cm; sekali jalan, ragam ±2 rute):
+
+| Perencana | Satu robot | Pasangan | Masuk zona | Jarak robot min |
+|---|---|---|---|---|
+| Hybrid A\* | 27/30 | 10/12 | 0 | 5,9 cm |
+| `dqfd` | **28/30** | 8/12 | 0 | 9,1 cm |
+
+Kegagalan satu robot dialami **kedua** perencana: ID 02 Rumah2 #2719 (berhenti "SIAP") dan ID 02 Rumah #4184 (estop BAHAYA, pose terukur). Kegagalan pasangan Rumah #691/#4645 dan #2092/#1159 juga dialami keduanya. Hanya satu kegagalan khas DQfD: pasangan Rumah2 #1370/#1137, ID 02 terus "MENUNGGU" di belakang ID 01 yang sudah tiba.
+
+**Komputasi ID 02** (`drl.banding_komputasi --id 2`, Hybrid A\* vs `dqfd-murni`):
+
+| Peta | Rute | Tiba A\* / DQfD | A\* median / p90 | DQfD median / p90 | DQfD lebih cepat di | Total A\* / DQfD |
+|---|---|---|---|---|---|---|
+| Kalibrasi | 59 | 100 / 100% | **3,0** / 14,9 ms | 4,6 / 23,6 ms | 3% | **0,6** / 0,7 s |
+| Rumah2 | 122 | 97,5 / 95,1% | **16,2** / 790 ms | 28,5 / **514** ms | 25% | **33,0** / 36,2 s |
+| Rumah | 137 | 99,3 / 95,6% | 140,4 / **786** ms | **117,7** / 914 ms | 36% | **38,8** / 54,7 s |
+
+Polanya sama dengan model lama. Hybrid A\* lebih cepat secara total, sedangkan DQfD unggul di median Rumah (118 vs 140 ms) dan p90 Rumah2. Selisih total di Rumah terutama berasal dari rute yang gagal, karena setiap kegagalan menghabiskan batas waktu pada kedua margin.
 
 Terkait: [[Model Robot ID 01]], [[Model Robot ID 02]], [[Multi Robot Navigation and Control]].
