@@ -1,0 +1,46 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Navigasi - simulasi",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "C:/Users/Eka Nugraha/AppData/Local/Python/pythoncore-3.14-64/python.exe",
+            "program": "${workspaceFolder}/Forklift Robot Program/navigasi.py",
+            "cwd": "${workspaceFolder}/Forklift Robot Program",
+            "args": ["--simulasi"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Navigasi - robot nyata",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "C:/Users/Eka Nugraha/AppData/Local/Python/pythoncore-3.14-64/python.exe",
+            "program": "${workspaceFolder}/Forklift Robot Program/navigasi.py",
+            "cwd": "${workspaceFolder}/Forklift Robot Program",
+            "args": ["--id", "${input:robotId}"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: file yang sedang dibuka",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "C:/Users/Eka Nugraha/AppData/Local/Python/pythoncore-3.14-64/python.exe",
+            "program": "${file}",
+            "cwd": "${fileDirname}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ],
+    "inputs": [
+        {
+            "id": "robotId",
+            "type": "pickString",
+            "description": "Robot yang dikendalikan",
+            "options": ["1", "2", "1,2"],
+            "default": "1"
+        }
+    ]
+}
