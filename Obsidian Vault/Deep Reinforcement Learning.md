@@ -779,6 +779,35 @@ Temuan:
 > [!warning] Koreksi waktu di `drl.evaluasi`
 > Sampai 2026-09-30, `evaluasi.py` mengukur waktu DQfD **tanpa** `env.reset()`. Padahal reset menghitung heuristik Dijkstra (±3 ms, diukur median 3,0 ms di Rumah2), sedangkan Hybrid A\* menghitung Dijkstra-nya di dalam waktu yang diukur. Median waktu DQfD di tabel-tabel evaluasi di atas karena itu **±3 ms terlalu kecil**; p90 dan maks hampir tidak terpengaruh. Kode sudah diperbaiki. Untuk perbandingan komputasi, pakai `drl.banding_komputasi`.
 
+#### Performa komputasi ketiga peta: Hybrid A\* vs `dqfd-murni`
+
+```
+python -u -m drl.banding_komputasi --peta Kalibrasi,Rumah2,Rumah --perencana astar,dqfd-murni --ulang 3
+# ±35 menit; model_dqn/banding_komputasi_<peta>_dqfd-murni.{json,png}, log: banding_komputasi_murni.log
+```
+
+Metodenya sama dengan di atas. `dqfd-murni` dipakai agar yang diukur benar-benar DQfD saja, tanpa gerbang dan tanpa cadangan Hybrid A\*.
+
+| Robot, peta | Rute | Tiba A\* / DQfD | A\* median / p90 / maks | DQfD median / p90 / maks | Kerja median A\* / DQfD | DQfD lebih cepat di | Total A\* / DQfD |
+|---|---|---|---|---|---|---|---|
+| ID 01 Kalibrasi | 60 | 100 / 100% | **3,0** / 3,6 ms / 20 ms | 4,0 / 5,2 ms / 47 ms | 2 ekspansi / 1 langkah | 3% | **0,2** / 0,3 s |
+| ID 02 Kalibrasi | 59 | 100 / 100% | **3,0** / 6,8 ms / 126 ms | 4,3 / 11,1 ms / 230 ms | – | 3% | **0,5** / 0,6 s |
+| ID 01 Rumah2 | 115 | 99,1 / 98,3% | **5,2** / 61,5 ms / 4,0 s | 7,5 / 143,9 ms / 4,0 s | 9 / 3 | 16% | **9,8** / 16,4 s |
+| ID 02 Rumah2 | 106 | 100 / 100% | **14,1** / 367,8 ms / 2,5 s | 21,2 / **358,3** ms / 2,3 s | 20 / 9 | 21% | 16,0 / **14,9** s |
+| ID 01 Rumah | 142 | 95,1 / 94,4% | **74,6** / 1409 ms / 3,9 s | 87,3 / 2026 ms / 4,0 s | 142 / 28 | 37% | **63,7** / 81,6 s |
+| ID 02 Rumah | 157 | 97,5 / **98,1%** | 151,9 / **1001** ms / 3,3 s | **110,6** / 1079 ms / 3,8 s | 250 / 34 | 40% | **57,7** / 62,2 s |
+
+Temuan:
+
+- **Secara keseluruhan Hybrid A\* masih lebih cepat.** Total waktunya lebih kecil di 5 dari 6 kombinasi. Satu-satunya pengecualian adalah ID 02 di Rumah2 (14,9 vs 16,0 s).
+- **Makin sulit petanya, makin kecil keunggulan Hybrid A\*.** DQfD lebih cepat di 3% rute Kalibrasi, 16–21% rute Rumah2, dan 37–40% rute Rumah. Di Kalibrasi, Hybrid A\* hampir selalu langsung tersambung Reeds-Shepp (2 ekspansi), jadi tidak ada yang bisa dihemat. DQfD kalah ±1 ms karena ongkos tetapnya (Dijkstra + 32 sinar + satu forward).
+- **ID 02 di Rumah: median DQfD lebih cepat** (110,6 vs 151,9 ms), dan tibanya sedikit lebih tinggi (98,1 vs 97,5%). DQfD cukup 34 langkah, sedangkan Hybrid A\* membutuhkan 250 ekspansi. Namun ekor distribusinya masih lebih panjang (p90 1079 vs 1001 ms, maks 3,8 vs 3,3 s). Karena itu totalnya tetap 8% lebih lambat.
+- **ID 01 di Rumah paling lemah.** Median, p90, dan total semuanya lebih lambat (total +28%), dan tiba 94,4 vs 95,1%. Ini sejalan dengan kelemahan kualitas jalur ID 01 di Rumah (anggaran habis) yang dicatat di atas. Rute yang gagal menghabiskan batas 2 s pada kedua margin.
+- **Jumlah langkah DQfD 5–7× lebih sedikit dari ekspansi A\***, tetapi satu langkah DQfD jauh lebih mahal. Setiap langkah memeriksa 14 calon, mencoba Reeds-Shepp, menghitung 32 sinar, dan menjalankan forward jaringan (jaringan hanya 4–5%). Keuntungan komputasi baru muncul kalau kualitas Q cukup baik untuk memangkas pencarian lebih jauh lagi, atau kalau ongkos per langkah diturunkan (misalnya sinar dan pemeriksaan tabrakan dibuat per-batch).
+- Untuk operasi robot, semua angka median (3–150 ms) jauh di bawah batas, karena perencanaan berjalan di thread terpisah dari loop 20 Hz. Yang terasa hanya kasus terburuk (1–4 s), dan di situ keduanya setara.
+
+Kesimpulan: DQfD saat ini **bukan** pengganti yang lebih cepat. Nilainya ada di kualitas jalur yang setara pada Rumah2 dan kinerja ID 02 di Rumah yang sudah menyamai Hybrid A\*. Mempercepat DQfD membutuhkan dua hal: model ID 01 yang lebih baik di Rumah (putaran 3), dan ongkos per langkah yang lebih murah.
+
 #### Ketiga peta: ukuran sama, rintangan berbeda
 
 Diukur dari peta constraint (grid 300 × 270 cm untuk ketiganya):
