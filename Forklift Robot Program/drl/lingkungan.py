@@ -34,6 +34,8 @@ MASK - aksi terlarang, Q-nya dibuat -inf sebelum argmax:
         ekspansi ke-analytic_every berapa pun jaraknya, dan demonya memang
         tersambung dari > analytic_dist. Biayanya terukur 0,3 ms rata-rata
         (maks 0,7 ms) di jarak mana pun, jadi pembatasan tidak perlu.
+        Pengecualian: perencana "dqfd-murni" memasang jarak_sambung = 100 cm
+        (perencana_dqfd.JARAK_SAMBUNG_MURNI_CM), RS hanya di akhir jalur.
 
 BIAYA per langkah = biaya ekspansi A* (reward = -biaya). Episode berakhir bila
 tersambung (SAMBUNG, atau primitif mendarat dalam toleransi tujuan), buntu
@@ -126,6 +128,10 @@ class LingkunganRencana:
         # percobaan; nilai terbatas membuat demo A* ada yang ter-mask.
         self.jarak_sambung = float("inf")
         self.biaya_buntu = s(BIAYA_BUNTU_CM)
+        # False: step() mengembalikan obs None. Perencana (perencana_dqfd)
+        # menghitung observasi sendiri hanya untuk simpul yang dibuka, jadi
+        # observasi di step() - 32 sinar - terbuang. Pelatihan butuh True.
+        self.obs_step = True
 
         # Sinar berpangkal di pusat badan, bukan di poros depan (titik acuan
         # pose): pusat badan 9,5 cm di belakangnya. Jarak yang dilaporkan
@@ -242,7 +248,7 @@ class LingkunganRencana:
 
         info["sukses"] = self.sukses
         info["biaya"] = self.biaya
-        return self.observasi(), reward, self.selesai, info
+        return self.observasi() if self.obs_step else None, reward, self.selesai, info
 
     def simpan_keadaan(self):
         """Keadaan untuk pencarian mundur (backtracking). Himpunan sel yang
@@ -252,12 +258,34 @@ class LingkunganRencana:
         return (self.x, self.y, self.yaw, self.d, self.k, self.in_col,
                 len(self._pose), self.biaya, self.langkah_ke)
 
-    def pulihkan_keadaan(self, s):
+    def pulihkan_keadaan(self, s, calon=None):
+        """calon: simpan_calon() yang diambil di keadaan s. Hasil primitif dan
+        Reeds-Shepp hanya bergantung pada keadaan itu, jadi tidak perlu
+        dihitung ulang - hanya mask sel yang dikunjungi sejak itu. Hasilnya
+        sama persis dengan tanpa calon."""
         (self.x, self.y, self.yaw, self.d, self.k, self.in_col,
          n, self.biaya, self.langkah_ke) = s
         del self._pose[n:]
         self.selesai = self.sukses = False
-        self._hitung_calon()          # mask baru: sel yang dikunjungi sejak itu ikut tertutup
+        if calon is None:
+            self._hitung_calon()      # mask baru: sel yang dikunjungi sejak itu ikut tertutup
+            return
+        hasil, mask, kunci = calon
+        self._calon, self._mask, self._kunci = list(hasil), mask.copy(), kunci
+        for a in range(N_PRIMITIF):
+            if self._mask[a] and kunci[a] in self.dikunjungi:
+                self._calon[a] = None
+                self._mask[a] = False
+
+    def simpan_calon(self):
+        """Calon aksi keadaan sekarang, untuk pulihkan_keadaan(s, calon) dan calon_sah()."""
+        return self._calon, self._mask.copy(), self._kunci
+
+    def calon_sah(self, calon, a):
+        """Apakah aksi a dari simpan_calon() suatu keadaan masih sah SEKARANG,
+        tanpa memulihkan keadaan itu - sama dengan mask()[a] sesudah pulihkan."""
+        hasil, mask, kunci = calon
+        return bool(mask[a]) and (a == SAMBUNG or kunci[a] not in self.dikunjungi)
 
     def jalur(self):
         """Jalur yang sudah ditempuh, format plan(): [(x, y, yaw, arah), ...] dalam sel."""
@@ -271,6 +299,7 @@ class LingkunganRencana:
         pl = self.planner
         self._calon = [None] * N_AKSI
         self._mask = np.zeros(N_AKSI, dtype=bool)
+        self._kunci = [None] * N_PRIMITIF       # sel pendaratan tiap primitif, untuk calon_sah()
         for a in range(N_PRIMITIF):
             nd, nk = arah_kappa(pl, a)
             if nd < 0 and not self.boleh_mundur:
@@ -279,10 +308,12 @@ class LingkunganRencana:
             if hasil is None:
                 continue
             px, py, pyaw = hasil[0][-1][:3]
-            if pl._key(px, py, pyaw) in self.dikunjungi:
+            kunci = pl._key(px, py, pyaw)
+            if kunci in self.dikunjungi:
                 continue
             self._calon[a] = hasil
             self._mask[a] = True
+            self._kunci[a] = kunci
 
         gx, gy = self.tujuan[0], self.tujuan[1]
         if not self.in_col and math.hypot(gx - self.x, gy - self.y) < self.jarak_sambung:

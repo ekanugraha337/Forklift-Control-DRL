@@ -10,7 +10,8 @@ PERENCANA BISA DITUKAR (Perencana(..., jenis=...)):
     "astar"       Hybrid A* (bawaan)
     "dqfd"        jaringan DQfD robot itu (model_dqn/id0N.pt), Hybrid A* sebagai
                   cadangan bila DQfD gagal
-    "dqfd-murni"  DQfD saja, tanpa cadangan - untuk menilai DQfD sendirian
+    "dqfd-murni"  DQfD saja, tanpa cadangan - untuk menilai DQfD sendirian.
+                  Reeds-Shepp (SAMBUNG) hanya dalam 100 cm dari tujuan
 Keduanya mengembalikan jalur berformat sama, jadi pelacak & navigasi tidak
 tahu bedanya. Lihat drl/perencana_dqfd.py dan catatan Obsidian "Deep
 Reinforcement Learning".
@@ -122,9 +123,11 @@ class Perencana:
             if self.jenis != "astar":
                 # Diimpor di sini, bukan di atas: tanpa DQfD, rencana.py (dan
                 # navigasi.py) tidak perlu PyTorch sama sekali.
-                from drl.perencana_dqfd import DQfDPlanner
+                from drl.perencana_dqfd import DQfDPlanner, JARAK_SAMBUNG_MURNI_CM
+                murni = self.jenis == "dqfd-murni"
                 planner = DQfDPlanner(planner, self.arena, self.p, kunci,
-                                      cadangan=self.jenis == "dqfd")
+                                      cadangan=not murni,
+                                      jarak_sambung_cm=JARAK_SAMBUNG_MURNI_CM if murni else None)
             self._cache[kunci] = (k, planner)
         return self._cache[kunci]
 

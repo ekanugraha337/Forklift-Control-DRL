@@ -141,6 +141,7 @@ Analogi belajar menyetir: J_E = instruktur yang bilang "belok di sini"; J_DQ = m
 3. **Pencarian terbaik-dulu** berpandu Q (f = g + c + 2·h, anggaran 1.200 langkah; lihat bagian "Pencarian terbaik-dulu"). Sebelumnya: *mundur* (DFS, kembali ke aksi Q terbaik berikutnya saat buntu), yang menggantikan rencana awal *beam search*. Mundur masih ada di kode sebagai pembanding.
 4. **Gerbang mutu** (mode `dqfd`): jalur ditolak bila biayanya > 1,3 × perkiraan jaringan sendiri −V(s₀).
 5. Gagal atau ditolak: jatuh ke Hybrid A\* (mode `dqfd`), atau kembalikan `None` (mode `dqfd-murni`). Tercatat di `last_stats["perencana"]`.
+6. Khusus `dqfd-murni` (sejak 2026-10-02): SAMBUNG (Reeds-Shepp) hanya boleh dalam **100 cm** dari tujuan. Lihat bagian "Branch RS-optimize" dan [[Reeds-Shepp]].
 
 ### 6. Visualisasi neuron (tingkat perencanaan)
 
@@ -512,7 +513,7 @@ python navigasi.py --simulasi --id 1,2 --perencana dqfd        # interaktif
 python -u -m drl.uji_navigasi --perencana astar,dqfd --n 5     # otomatis, ±8 menit
 ```
 
-- `rencana.Perencana(..., jenis="astar" | "dqfd" | "dqfd-murni")`. `dqfd` = DQfD dengan A\* sebagai cadangan bila DQfD gagal. PyTorch hanya diimpor bila DQfD dipilih.
+- `rencana.Perencana(..., jenis="astar" | "dqfd" | "dqfd-murni")`. `dqfd` = DQfD dengan A\* sebagai cadangan bila DQfD gagal. `dqfd-murni` = DQfD saja, dengan Reeds-Shepp hanya dalam 100 cm dari tujuan (sejak 2026-10-02). PyTorch hanya diimpor bila DQfD dipilih.
 - `drl/perencana_dqfd.DQfDPlanner`: antarmuka sama dengan `HybridAStarPlanner` (`plan`, `last_stats`, `time_limit`, `v`), jalur berformat sama. Pelacak, wasit, dan pencarian minggir tidak diubah. `last_stats["perencana"]` mencatat siapa yang menghasilkan jalur, dan navigasi mencetaknya ("jalur 172 cm ... 9 ms oleh dqfd").
 - `navigasi.py --perencana`, dan baris status menampilkan perencana yang dipakai.
 - `drl/uji_navigasi.py`: `navigasi.Navigasi` dijalankan tanpa jendela dalam waktu nyata, dengan pure pursuit, jeda kemudi/kamera, derau pose 1,2 cm, dan wasit. Semua diukur dari pose **sebenarnya** simulator.
@@ -892,4 +893,121 @@ Kegagalan satu robot dialami **kedua** perencana: ID 02 Rumah2 #2719 (berhenti "
 
 Polanya sama dengan model lama. Hybrid A\* lebih cepat secara total, sedangkan DQfD unggul di median Rumah (118 vs 140 ms) dan p90 Rumah2. Selisih total di Rumah terutama berasal dari rute yang gagal, karena setiap kegagalan menghabiskan batas waktu pada kedua margin.
 
-Terkait: [[Model Robot ID 01]], [[Model Robot ID 02]], [[Multi Robot Navigation and Control]].
+### Branch RS-optimize: batas Reeds-Shepp 100 cm dan optimasi `dqfd-murni` (2026-10-02)
+
+Branch `RS-optimize` disalin dari `main` di `060cff4`. Cara kerja Reeds-Shepp di ketiga perencana dijelaskan di [[Reeds-Shepp]]. Semua perubahan di bawah hanya untuk **`dqfd-murni`**. `astar` dan `dqfd` tidak berubah jalurnya.
+
+#### 1. Reeds-Shepp hanya di akhir jalur (≤ 100 cm)
+
+- `perencana_dqfd.JARAK_SAMBUNG_MURNI_CM = 100.0`. `rencana.Perencana` memasangnya lewat `DQfDPlanner(jarak_sambung_cm=...)`, hanya bila `jenis == "dqfd-murni"`.
+- Di luar 100 cm (jarak lurus titik acuan ke tujuan), aksi SAMBUNG ter-mask dan `_analytic()` tidak dipanggil. Robot harus mendekat dengan primitif.
+- Model **tidak dilatih ulang**. Q masih memperkirakan biaya-sisa seolah SAMBUNG boleh dari mana saja, jadi dari jauh perkiraannya agak optimistis.
+
+Hasil pada seluruh set uji (terbaik-dulu, batas waktu 2 s; rasio = biaya / g-cost A\* dataset):
+
+| | ID 01 tanpa batas | ID 01 ≤ 100 cm | ID 02 tanpa batas | ID 02 ≤ 100 cm |
+|---|---|---|---|---|
+| Tiba | 95,9% | **96,8%** | 95,3% | **95,5%** |
+| Rasio biaya median / p90 | 1,00 / 1,12 | 1,00 / **1,27** | 1,00 / 1,13 | 1,00 / **1,29** |
+| Jarak awal RS maksimum | 219 cm | **100 cm** | 221 cm | **100 cm** |
+
+Tingkat tiba tidak turun, tetapi 10% jalur termahal menjadi ±13–14% lebih mahal.
+
+#### 2. Rincian waktu per tahap
+
+```
+python -u -m drl.rincian_komputasi        # tiga peta, ID 01 & 02, astar vs dqfd-murni, ±8 menit
+# model_dqn/rincian_komputasi.{log,json}; sebelum optimasi: rincian_komputasi_sebelum.{log,json}
+```
+
+Skrip baru `drl/rincian_komputasi.py` memakai rute dan jalur kode yang sama dengan `banding_komputasi` (`Perencana.rencanakan()`, seperti `navigasi.py`). Fungsi tiap tahap dibungkus pengukur waktu **eksklusif** tanpa mengubah kode perencana. Overhead pengukur 0–2%.
+
+Temuan sebelum optimasi (Rumah ID 01, rata-rata per rencana):
+
+| Tahap | Hybrid A\* | `dqfd-murni` |
+|---|---|---|
+| Reeds-Shepp | **273,5 ms (60%)**, 723 panggilan | 106,3 ms (21%), 277 panggilan |
+| Ekspansi primitif + heap | 176,8 ms (39%) | 115,0 ms (23%) primitif |
+| 32 sinar observasi | – | **214,1 ms (43%)**, 496 panggilan |
+| Jaringan (forward) | – | 24,2 ms (5%), 235 panggilan |
+| Heuristik Dijkstra | 2,3 ms | 2,1 ms |
+
+Dua pemborosan di `dqfd-murni`:
+1. **Observasi dihitung dua kali per langkah**: di `step()` dan saat simpul dibuka. Hasil `step()` tidak pernah dipakai perencana. Sinar dipanggil 496× untuk 235 forward.
+2. **Calon aksi dihitung ulang setiap pindah cabang**: 332 pemulihan per rencana untuk 148 langkah. Sekitar 69% hitungan primitif dan RS adalah ulangan, sebagian untuk entri heap yang ternyata sudah tertutup.
+
+Forward jaringan **bukan** penghambat. Sinar, primitif, dan RS adalah geometri di Python sebelum dan sesudah jaringan (lihat [[Reeds-Shepp]]).
+
+#### 3. Optimasi (jalur identik)
+
+- `LingkunganRencana.obs_step` (bawaan `True` untuk pelatihan). `DQfDPlanner` memasang `False`, sehingga `step()` tidak menghitung observasi.
+- `simpan_calon()` / `pulihkan_keadaan(s, calon)` / `calon_sah()`: calon aksi disimpan per simpul. Saat pindah cabang, hanya mask sel yang dikunjungi yang diperbarui. Entri heap yang basi dibuang **sebelum** simpulnya dipulihkan.
+- Dicoba tetapi **dibatalkan**: sinar yang hanya menghitung sinar aktif. Hasilnya identik, tetapi tidak lebih cepat (0,48 vs 0,49 ms), karena ongkosnya ada di jumlah iterasi loop numpy, bukan jumlah sinar.
+
+**Pemeriksaan kesamaan.** Jalur 635 rute uji (tiga peta, dua robot, tanpa batas waktu) direkam dengan kode lama dan baru. Sebanyak 615 identik. Sisa 20 rute adalah tujuan tanpa arah hadap, dengan batas 0,4 s per arah di `_sekali()`: kode baru sempat menyelesaikan pencarian yang dulu terpotong. Diulang tanpa batas itu, dengan modul lama dari HEAD dan modul baru, hasilnya **20/20 identik**. Total waktu rekaman: 205 s → 95 s.
+
+#### 4. Hasil sesudah optimasi
+
+`dqfd-murni`, sebelum → sesudah (ms per rencana):
+
+| | Kal ID 01 | Kal ID 02 | Rumah2 ID 01 | Rumah2 ID 02 | Rumah ID 01 | Rumah ID 02 |
+|---|---|---|---|---|---|---|
+| Median | 6,7 → **4,2** | 7,0 → **5,4** | 21,1 → **13,5** | 55,0 → **32,3** | 81,3 → **46,7** | 113,1 → **53,3** |
+| Rata-rata | 28,4 → **17,3** | 22,7 → **14,1** | 148,0 → **80,3** | 259,7 → **142,6** | 492,8 → **264,9** | 379,4 → **203,4** |
+| p90 | 59,9 → **34,9** | 52,8 → **29,6** | 164,9 → **95,4** | 565,9 → **218,5** | 2012 → **991** | 821 → **415** |
+| Tiba | 100 → 100% | 100 → 100% | 99,1 → 99,1% | 96,7 → 97,5% | 96,5 → **98,6%** | 95,6 → **97,1%** |
+
+Tingkat tiba naik di Rumah karena lebih sedikit rute yang habis batas waktu 2 s.
+
+Rincian per tahap sesudah optimasi (ms rata-rata):
+
+| Tahap | Kal 01 | Kal 02 | R2 01 | R2 02 | Rumah 01 | Rumah 02 |
+|---|---|---|---|---|---|---|
+| Heuristik Dijkstra | 2,24 | 2,25 | 2,06 | 2,11 | 1,91 | 1,85 |
+| 32 sinar | 6,1 | 4,4 | 30,9 | 48,3 | 119,8 | 74,4 |
+| Reeds-Shepp | 0,53 | 1,30 | 16,6 | 41,3 | 46,5 | 62,1 |
+| 14 primitif | 3,6 | 2,6 | 13,3 | 22,4 | 42,8 | 28,4 |
+| Jaringan (forward) | 2,3 | 1,8 | 8,8 | 14,0 | 26,8 | 18,1 |
+| Sisa pencarian | 2,1 | 1,6 | 8,0 | 13,3 | 25,2 | 18,1 |
+| Lain-lain | 0,49 | 0,47 | 1,51 | 2,36 | 4,28 | 2,94 |
+| **Total** | 17,4 | 14,4 | 81,1 | 143,8 | 267,3 | 205,9 |
+
+**Dibanding Hybrid A\*** (seluruh 635 rute):
+
+| | Hybrid A\* | `dqfd-murni` |
+|---|---|---|
+| Total waktu | 150,9 s | **94,0 s** (1,6× lebih cepat) |
+| p90 | 731 ms | **271 ms** |
+| Maksimum | 4012 ms | **3238 ms** |
+| Median | **13,3 ms** | 24,0 ms |
+| Rute yang lebih cepat | **62%** | 38% |
+
+| Lama A\* merencanakan | Rute | DQfD lebih cepat di | Kecepatan DQfD vs A\* (median) |
+|---|---|---|---|
+| < 20 ms (mudah) | 348 | 9% | 0,6× |
+| 20–100 ms | 95 | 52% | 1,1× |
+| 100–500 ms | 114 | 89% | **2,8×** |
+| > 500 ms (sulit) | 78 | 76% | **2,7×** |
+
+- **Rute mudah** (Kalibrasi, sebagian Rumah2): A\* langsung tersambung RS dalam ±2 ekspansi (±3 ms). DQfD membayar ongkos tetap per langkah, tetapi selisihnya hanya beberapa ms.
+- **Rute sulit** (Rumah): DQfD 2–3× lebih cepat, dan waktu tunggu terlama turun jauh. Inilah yang menentukan berapa lama robot diam di status MERENCANAKAN.
+#### 5. Uji jalan tertutup sesudah perubahan
+
+```
+python -u -m drl.uji_navigasi --perencana astar,dqfd-murni --n 5    # 8,2 menit; log: model_dqn/uji_navigasi_murni.log
+```
+
+Sekali jalan, kedua robot, derau pose 1,2 cm (ragam antar-jalan ±2 rute):
+
+| Perencana | Satu robot | Pasangan | Masuk zona | Galat akhir rata / maks | Jarak zona min | Jarak robot min |
+|---|---|---|---|---|---|---|
+| Hybrid A\* | 28/30 | **11/12** | 0 | 4,1 / 6,1 cm | 0,57 cm | 5,9 cm |
+| `dqfd-murni` | **29/30** | 10/12 | 0 | 4,3 / 6,7 cm | 2,00 cm | 7,4 cm |
+
+- `dqfd-murni` (batas RS 100 cm + optimasi) **tidak pernah memasukkan badan ke zona**, dan semua jalur satu robot dibuat DQfD sendiri.
+- Semua kegagalannya sudah dikenal dari uji sebelumnya dan juga dialami Hybrid A\* di uji itu: ID 02 Rumah #4184 (estop BAHAYA dari pose terukur), pasangan Rumah #691/#4645 (ID 01 "SIAP", tak terjangkau selama ID 02 berdiri di pose awalnya), dan pasangan #2092/#1159 (ID 02 BAHAYA). Kali ini Hybrid A\* gagal di ID 01 Rumah #691 (BAHAYA) dan ID 02 Rumah #4802 ("SIAP").
+- Jarak zona minimum pada pasangan `dqfd-murni` 1,09 cm (A\* 5,46 cm). Badan tidak masuk zona, tetapi lewat lebih mepet.
+
+- **Tahap terberat sekarang adalah 32 sinar (30–45%).** Untuk mempercepatnya lagi perlu kompilasi (mis. numba), karena ongkosnya ada di iterasi loop. Pilihan lain: memperkecil `_SINAR_ITERASI` atau jangkauan, tetapi itu mengubah observasi dan butuh latih ulang.
+
+Terkait: [[Reeds-Shepp]], [[Model Robot ID 01]], [[Model Robot ID 02]], [[Multi Robot Navigation and Control]].

@@ -71,6 +71,12 @@ ANGGARAN_TERBAIK = 1200
 # mutu. Tetap dipasang sebagai jaring pengaman.
 GERBANG_K = 1.3
 
+# Mode "dqfd-murni" saja: SAMBUNG (Reeds-Shepp ke tujuan) hanya boleh bila
+# titik acuan robot sudah dalam jarak ini dari tujuan, jadi RS hanya menjadi
+# penutup di akhir jalur. Mode "dqfd" (dan cadangan A*-nya) tidak berubah:
+# SAMBUNG tetap tanpa batas jarak, lihat MASK di drl/lingkungan.py.
+JARAK_SAMBUNG_MURNI_CM = 100.0
+
 
 def _urutan(net, env):
     """Aksi sah, terurut Q menurun."""
@@ -146,6 +152,11 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
     # Jalur lengkap simpul dibangun ulang dari rantai induk saat dipulihkan,
     # karena simpul berikutnya bisa berasal dari cabang mana saja.
     snap, induk, potong = [env.simpan_keadaan()], [-1], [[]]
+    # Calon aksi (14 primitif + Reeds-Shepp) tiap simpul, dihitung SEKALI saat
+    # simpul itu dicapai. Tanpa ini setiap pindah cabang menghitung ulang
+    # semuanya (terukur 2026-10-02: 332 pemulihan per rencana vs 148 langkah,
+    # Rumah ID 01), padahal hasilnya hanya bergantung pada keadaan simpul.
+    calon = [env.simpan_calon()]
     heap, urut = [], itertools.count()
 
     def buka(i):
@@ -173,7 +184,7 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
             rantai.append(potong[j])
             j = induk[j]
         env._pose = [p for bagian in reversed(rantai) for p in bagian]
-        env.pulihkan_keadaan(snap[i])
+        env.pulihkan_keadaan(snap[i], calon[i])
 
     buka(0)
     di = 0                      # simpul tempat env berada sekarang (None = di simpul akhir)
@@ -187,12 +198,12 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
             alasan = "batas waktu habis"
             break
         _, _, i, a = heapq.heappop(heap)
+        if not env.calon_sah(calon[i], a):
+            continue                # sel tujuannya sudah dimasuki cabang lain - tanpa memulihkan i
         if di != i:
             pulihkan(i)
             di = i
             pindah += 1
-        if not env.mask()[a]:
-            continue                # sel tujuannya sudah dimasuki cabang lain
         n0 = len(env._pose)
         _, _, akhir, info = env.step(a)
         dicoba += 1
@@ -201,6 +212,7 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
                     "waktu_s": time.perf_counter() - t0}
         j = len(snap)
         snap.append(env.simpan_keadaan())
+        calon.append(env.simpan_calon())
         induk.append(i)
         potong.append(env._pose[n0:])
         if akhir or env.langkah_ke >= MAKS_LANGKAH:
@@ -250,10 +262,14 @@ class DQfDPlanner:
     salinan, tidak mengganggu aslinya), dan aslinya sebagai CADANGAN bila
     cadangan=True dan DQfD gagal. last_stats["perencana"] mencatat siapa yang
     akhirnya menghasilkan jalur.
+
+    jarak_sambung_cm: SAMBUNG hanya boleh dalam jarak ini dari tujuan. None =
+    tanpa batas (bawaan lingkungan, sama dengan data latih).
     """
 
     def __init__(self, astar, arena, profil, margin_cm, cadangan=True,
-                 anggaran=None, dir_model=None, gerbang_k=None, metode=METODE_BAWAAN):
+                 anggaran=None, dir_model=None, gerbang_k=None, metode=METODE_BAWAAN,
+                 jarak_sambung_cm=None):
         self.astar = astar
         self.metode = metode
         # Gerbang hanya bermakna bila ada cadangan; tanpa cadangan menolak
@@ -265,6 +281,9 @@ class DQfDPlanner:
         self.anggaran = anggaran or (ANGGARAN_TERBAIK if metode == "terbaik" else ANGGARAN_BAWAAN)
         self.net = muat_model(profil.id, dir_model)
         self.env = L.LingkunganRencana(arena, profil, margin_cm=margin_cm, planner=copy.copy(astar))
+        self.env.obs_step = False       # observasi hanya untuk simpul yang dibuka, lihat lingkungan
+        if jarak_sambung_cm is not None:
+            self.env.jarak_sambung = arena.panjang_ke_sel(jarak_sambung_cm)
         self.last_stats = {}
 
     def plan(self, omap, start, goal):
