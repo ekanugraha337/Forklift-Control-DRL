@@ -297,7 +297,7 @@ Kalau evaluasi tahap 8 menunjukkan jalurnya terlalu kasar, langkah berikutnya ya
 | 7   | Latihan sendiri + kurikulum                                                                                        | Tiba ≥ 95%, rasio biaya ≤ 1,1× A\*                                      | ✅ tiba 97–98% (uji); rasio median 1,00, p90 1,14–1,16 dengan pencarian terbaik-dulu |
 | 8   | **Evaluasi tingkat rencana** vs A\*                                                                                | % tiba, rasio biaya, jumlah ganti arah, jarak ke zona, **waktu hitung** | ✅ putaran 1, 2, dan terbaik-dulu |
 | 9   | Integrasi ke `rencana.py` (`--perencana dqfd`) + **simulasi ID 01 dan 02** dengan pure pursuit, jeda, derau 1,2 cm | Lima skenario dua-robot di README lolos, tanpa masuk zona               | ✅ terintegrasi; ⚠️ mutu jalur (lihat Tahap 9) |
-| 10  | Robot nyata di `Kalibrasi`, laju rendah                                                                            | Tidak ada estop zona                                                    | ⬜ |
+| 10  | Robot nyata di `Kalibrasi`, laju rendah                                                                            | Tidak ada estop zona                                                    | ⚠️ 2026-10-02 langsung di `Rumah`, dua robot: `dqfd-murni` tiba 7/20, estop 7 (A\* 6/18, estop 5); lihat "Branch RS-optimize" bagian 6 |
 
 **Berkas** (paket baru `Forklift Robot Program/drl/`):
 
@@ -991,6 +991,8 @@ Rincian per tahap sesudah optimasi (ms rata-rata):
 
 - **Rute mudah** (Kalibrasi, sebagian Rumah2): A\* langsung tersambung RS dalam ±2 ekspansi (±3 ms). DQfD membayar ongkos tetap per langkah, tetapi selisihnya hanya beberapa ms.
 - **Rute sulit** (Rumah): DQfD 2–3× lebih cepat, dan waktu tunggu terlama turun jauh. Inilah yang menentukan berapa lama robot diam di status MERENCANAKAN.
+- **Tahap terberat sekarang adalah 32 sinar (30–45%).** Untuk mempercepatnya lagi perlu kompilasi (mis. numba), karena ongkosnya ada di iterasi loop. Pilihan lain: memperkecil `_SINAR_ITERASI` atau jangkauan, tetapi itu mengubah observasi dan butuh latih ulang.
+
 #### 5. Uji jalan tertutup sesudah perubahan
 
 ```
@@ -1008,6 +1010,77 @@ Sekali jalan, kedua robot, derau pose 1,2 cm (ragam antar-jalan ±2 rute):
 - Semua kegagalannya sudah dikenal dari uji sebelumnya dan juga dialami Hybrid A\* di uji itu: ID 02 Rumah #4184 (estop BAHAYA dari pose terukur), pasangan Rumah #691/#4645 (ID 01 "SIAP", tak terjangkau selama ID 02 berdiri di pose awalnya), dan pasangan #2092/#1159 (ID 02 BAHAYA). Kali ini Hybrid A\* gagal di ID 01 Rumah #691 (BAHAYA) dan ID 02 Rumah #4802 ("SIAP").
 - Jarak zona minimum pada pasangan `dqfd-murni` 1,09 cm (A\* 5,46 cm). Badan tidak masuk zona, tetapi lewat lebih mepet.
 
-- **Tahap terberat sekarang adalah 32 sinar (30–45%).** Untuk mempercepatnya lagi perlu kompilasi (mis. numba), karena ongkosnya ada di iterasi loop. Pilihan lain: memperkecil `_SINAR_ITERASI` atau jangkauan, tetapi itu mengubah observasi dan butuh latih ulang.
+#### 6. Uji robot nyata: Hybrid A\* vs `dqfd-murni` (2026-10-02, tahap 10)
+
+```
+python navigasi.py --peta Rumah --id 1,2 --perencana astar      --log astar.csv
+python navigasi.py --peta Rumah --id 1,2 --perencana dqfd-murni --log dqfd-murni2.csv
+# log: Forklift Robot Program/{astar,dqfd-murni2}_id0{1,2}.csv (±11,5 Hz, kolom KEPALA_LOG navigasi.py)
+```
+
+Kedua robot berjalan **bersamaan** di peta Rumah (dipastikan dari jarak zona di log, selisih < 0,01 cm terhadap peta Rumah), tujuan diklik manual, satu jalan per perencana. Tujuan ID 01 hampir sama di kedua jalan (±(63, 185)); tujuan ID 02 berbeda-beda. Dianalisis dengan skrip sementara dari kolom `state`, `deviasi_cm`, dan `margin_cm`.
+
+| | A\* ID 01 | DQfD ID 01 | A\* ID 02 | DQfD ID 02 |
+|---|---|---|---|---|
+| Tujuan / tiba / estop / batal | 8 / **6** / **0** / 2 | 10 / 5 / 4 / 1 | 10 / 0 / 5 / 5 | 10 / **2** / **3** / 5 |
+| Rencana pertama tiap tujuan, median / maks | 666 / 2447 ms | **158 / 172 ms** | 1306 / 2806 ms | **235 / 1383 ms** |
+| Semua blok MERENCANA, median / p90 / maks | **101** / 1206 / 2447 ms | 159 / **282 / 1273** ms | **110** / 1584 / 2806 ms | 148 / **1301 / 2517** ms |
+| Melacak / menunggu / minggir | 497 / 87 / 0 s | 621 / 19 / 0 s | 485 / 197 / 59 s | 705 / 158 / 30 s |
+| Jarak tempuh, kecepatan rata | 25,7 m, 5,2 cm/s | 28,3 m, 4,6 cm/s | 28,4 m, 5,9 cm/s | 33,9 m, 4,8 cm/s |
+| Simpangan saat bergerak, rata / p95 / maks | **1,44 / 5,06 / 7,32** cm | 1,60 / 6,86 / 10,94 cm | **2,09 / 8,05** / 15,02 cm | 2,70 / 9,07 / **13,68** cm |
+| Jarak zona min saat melacak, waktu < 3 cm | **1,69 cm, 0,6%** | 0,00 cm, 3,5% | 0,04 cm, 1,3% | 0,01 cm, 1,7% |
+| Ganti arah maju/mundur saat melacak | 25× | 23× | **55×** | 69× |
+
+Gabungan kedua robot: A\* tiba 6 dari 18 tujuan dengan 5 estop; DQfD tiba 7 dari 20 dengan 7 estop.
+
+- **Perencanaan DQfD jauh lebih cepat di robot nyata.** Rencana pertama tiap tujuan 4–5× lebih cepat, p90 juga lebih rendah. Sesuai hasil offline di Rumah (bagian 4).
+- **Semua 12 estop karena badan terukur menyentuh zona**, bukan tag hilang, MQTT, atau kontak antar-robot.
+- **3 dari 4 estop DQfD ID 01 terjadi di titik yang sama, ±(130, 189)**, saat mundur pelan dengan kemudi jenuh 35°. Direncanakan ulang offline dari pose awal di log: **kedua perencana** melewati titik itu lalu mundur ±230 cm ke tujuan, dengan simpangan maksimum yang sama (7,3 vs 7,4 cm). Di jalan A\* kebetulan masih tersisa 2,9 cm ke zona. Bedanya, jalur DQfD rata-rata 5× ganti arah, jalur A\* 1×.
+- **ID 02 dengan DQfD lebih sering kemudi jenuh** (35% vs 20% waktu melacak; saat mundur 30% vs 9%) dan simpangan saat mundur lebih besar (2,49 vs 1,46 cm). Jalur DQfD untuk ID 02 lebih berkelok daripada yang sanggup diikuti kemudi 22°.
+- **ID 02 buruk di kedua jalan** (0 dan 2 tiba). Banyak tujuan dibatalkan setelah lama MENUNGGU ID 01; ini soal interaksi dua robot, bukan perencana.
+- **Keterbatasan:** tujuan manual, satu jalan per perencana, dan waktu rencana dibaca dari blok MERENCANA di log (resolusi ±87 ms; rencana ulang saat MELACAK tidak terlihat di log).
+
+**Presentasi** (bahasa Inggris, untuk pembaca baru): `Presentasi/Forklift path planning - Hybrid A-star and DQfD.pptx`, 37 slide, dibuat 2026-10-02. Isinya struktur Hybrid A\* + RS, DQfD + RS, pembuatan dataset, evaluasi, dan hasil uji di atas.
+
+---
+
+## Kesimpulan umum: DQfD vs Hybrid A\* (2026-10-03)
+
+DQfD berhasil menggantikan Hybrid A\* sebagai perencana dengan **mutu setara dan waktu lebih baik di rute sulit**, tetapi belum unggul di semua segi. Keduanya bisa dipertukarkan tanpa mengubah pelacak, wasit, atau pengaman.
+
+| | Hybrid A\* | DQfD (`dqfd-murni`, terbaik-dulu, RS ≤ 100 cm) |
+|---|---|---|
+| Tiba, set uji (635 rute) | 95,8–100% | 97,1–100% |
+| Rasio biaya, median / p90 | 1,00 / 1,00 | 1,00 / 1,2–1,3 |
+| Waktu rencana, median / p90 (semua rute) | **13,3** / 731 ms | 24,0 / **271** ms |
+| Rute mudah (A\* < 20 ms), 348 rute | **3 ms** | 4–7 ms (0,6×) |
+| Rute sulit (A\* > 100 ms), 192 rute | 100 ms – 4 s | **2,7–2,8× lebih cepat** |
+| Skenario "tidak ada jalur" menurut A\* (150/robot) | 0 | **29 (ID 01), 54 (ID 02)** jalur sah |
+| Uji jalan tertutup, satu robot / pasangan | 28/30, 11/12 | 29/30, 10/12 |
+| Badan masuk zona (simulasi) | 0 | 0 |
+| Robot nyata, tiba / estop (dua robot, satu jalan) | 6/18, 5 | 7/20, 7 |
+| Rencana pertama di robot nyata, median | 0,7–1,3 s | **0,16–0,24 s** |
+| Ganti arah di jalur | lebih sedikit | lebih sering |
+| Kebutuhan | tidak ada | model per robot, PyTorch, latih ulang bila mekanisme berubah |
+
+**Yang setara:** tingkat tiba, median mutu jalur, hasil uji jalan tertutup, dan hasil robot nyata (dalam ragam satu jalan). Kegagalan yang tersisa, estop zona di koridor sempit, terjadi di skenario yang sama untuk keduanya.
+
+**Yang lebih baik di DQfD:** waktu di rute sulit (2–3×), rencana pertama di robot nyata (4–5×), dan jalur sah di skenario yang A\* nyatakan buntu. SAMBUNG dinilai dengan biaya RS sebenarnya, sehingga ekor kurva panjang tidak diterima begitu saja.
+
+**Yang masih lebih baik di Hybrid A\*:** rute mudah (62% rute, selisih beberapa ms), jalur dengan ganti arah lebih sedikit (lebih mudah bagi pelacak di koridor sempit), dan tanpa ketergantungan model.
+
+**Kenapa DQfD bisa melampaui gurunya tanpa belajar saat evaluasi** (bobot beku, `torch.no_grad()`, hasil deterministik):
+1. Hybrid A\* tidak optimal: heuristik berbobot 1,3, batas waktu 2 s, dan sel ditutup pada kunjungan pertama. Loss TD menegakkan konsistensi Bellman lintas ribuan episode, sehingga jaringan bisa merangkai potongan jalur yang lebih murah dari satu jalur A\* mana pun; J_E hanya memaksa aksi A\* unggul 0,8, dan karena itu kesepakatan mentok di 66–73%.
+2. Urutan kedatangan ke sel grid berbeda, sehingga pose yang lolos celah sempit kadang masuk lebih dulu.
+3. Pencarian terbaik-dulu menilai SAMBUNG dengan biaya RS sebenarnya, bukan menerima kurva bebas pertama.
+4. Perkiraan Q "tahu" pose mana yang mahal karena perlu manuver, sehingga jumlah langkah 5–7× lebih sedikit daripada ekspansi A\*.
+
+**Pelajaran teknis:**
+- Reward yang persis sama dengan biaya A\* adalah keputusan terpenting: imitasi dan TD tidak bertentangan, dan perbandingannya adil.
+- Jaringan murah (±5% waktu); geometri di sekelilingnya (sinar, primitif, RS) yang mahal. Dua perbaikan pembukuan mempercepat 1,6–1,9× tanpa mengubah jalur.
+- Mutu jalur ditentukan oleh cara mencari, bukan hanya model: model yang sama memberi p90 2,2–4,6 dengan backtracking dan 1,2–1,3 dengan terbaik-dulu.
+- Fase B (latihan sendiri) adalah satu-satunya tempat jaringan bisa menemukan jalur lebih murah dari demo; di fase A targetnya selalu jalur A\*.
+
+**Rekomendasi:** untuk operasi sehari-hari pakai mode `dqfd` (DQfD + gerbang mutu 1,3 + cadangan A\*). Perbaikan berikutnya lebih tepat diarahkan ke pelacak dan toleransi derau pose di koridor sempit, bukan ke perencana. Daftar pekerjaan terbuka ada di bagian "Branch RS-optimize" dan [[Reeds-Shepp]] bagian 6.
 
 Terkait: [[Reeds-Shepp]], [[Model Robot ID 01]], [[Model Robot ID 02]], [[Multi Robot Navigation and Control]].
