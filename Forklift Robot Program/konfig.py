@@ -21,10 +21,13 @@ from types import SimpleNamespace
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Lokasi cctv_lurus.py + area_constraint.py + data kalibrasi. Data kalibrasi
-# sengaja TIDAK dipindah ke sini: berkas itu milik alur kerja kamera dan dipakai
-# program lain juga.
-CAMERA_DIR = r"C:\Users\Eka Nugraha\Documents\Master ITB\Semester 3\Camera"
+# Lokasi cctv_lurus.py + area_constraint.py + data kalibrasi + peta constraint:
+# folder Camera/ di repo ini, satu tingkat di atas folder program. Dengan begitu
+# peta, kalibrasi lensa, dan ukuran robot yang DIPAKAI robot adalah yang
+# ter-commit. Sampai 2026-10-03 nilainya menunjuk ke salinan di luar repo
+# (Documents\Master ITB\Semester 3\Camera), sehingga peta baru yang disimpan di
+# repo tidak terbaca navigasi.py.
+CAMERA_DIR = os.path.normpath(os.path.join(DIR, "..", "Camera"))
 
 
 def pasang_path_kamera():
