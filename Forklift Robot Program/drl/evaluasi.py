@@ -8,7 +8,8 @@ Tiap rute uji direncanakan empat cara, satu per satu (bukan serempak), supaya
 waktunya sebanding:
     DQfD greedy     rollout argmax-Q, berhenti di buntu pertama
     DQfD mundur     sama, tetapi saat buntu mundur ke aksi terbaik berikutnya
-    DQfD terbaik    pencarian terbaik-dulu f = g + c + 2 x h (metode operasional)
+    DQfD terbaik    pencarian terbaik-dulu f = g + c + 2 x h
+    DQfD gabungan   terbaik-dulu, mundur bila gagal (metode operasional sejak 2026-10-20)
     A* operasional  HybridAStarPlanner dengan batas waktu 2 s seperti di robot
                     (waktu A* di dataset diukur saat 15 proses berebut CPU)
 
@@ -41,12 +42,12 @@ from drl import rollout as RO                   # noqa: E402
 from drl import skenario as S                   # noqa: E402
 from drl.adaptor_demo import rencanakan_terekam  # noqa: E402
 from drl.dqfd import muat_jaringan, periksa_profil  # noqa: E402
-from drl.perencana_dqfd import (ANGGARAN_TERBAIK, BOBOT_TERBAIK, rencanakan,  # noqa: E402
-                                 rencanakan_terbaik)
+from drl.perencana_dqfd import (ANGGARAN_TERBAIK, BOBOT_TERBAIK, hitung_ganti_arah,  # noqa: E402
+                                 rencanakan, rencanakan_terbaik, rincian_fase)
 
 AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BATAS_WAKTU_ASTAR = 2.0
-MODE_DQFD = ("greedy", "mundur", "terbaik")
+MODE_DQFD = ("greedy", "mundur", "terbaik", "gabungan")
 
 
 def _jenis(p):
@@ -90,7 +91,7 @@ def evaluasi_robot(rid, jalur_model, args):
     for k, sk in enumerate(uji):
         r = {"peta": sk.peta, "jenis": _jenis(sk.peta), "biaya_astar": sk.biaya_astar,
              "langkah_astar": len(sk.aksi_demo)}
-        for mode in MODE_DQFD:
+        for mode in MODE_DQFD[:3]:
             # reset() IKUT diukur: ia menghitung heuristik Dijkstra (~3 ms), yang
             # pada Hybrid A* juga terhitung di dalam plan(). Sampai 2026-09-30
             # reset ada di luar pengukuran, sehingga median waktu DQfD di
@@ -108,13 +109,22 @@ def evaluasi_robot(rid, jalur_model, args):
             r[mode] = {"sukses": h["sukses"], "alasan": h["alasan"], "ms": 1000 * (h["waktu_s"] + t_reset),
                        "biaya": env.biaya if h["sukses"] else None,
                        "rasio": env.biaya / sk.biaya_astar if h["sukses"] else None,
-                       "langkah": len(env.jalur()), "dicoba": h["dicoba"], "mundur": h["mundur"]}
+                       "langkah": len(env.jalur()), "dicoba": h["dicoba"], "mundur": h["mundur"],
+                       **rincian_fase(env, h)}
+        # Gabungan (metode operasional DQfDPlanner): hasil terbaik-dulu bila
+        # tiba, selain itu hasil mundur - waktunya keduanya dijumlah. Diturunkan
+        # dari dua pencarian di atas, tidak dijalankan ulang; tanpa batas waktu.
+        t, m = r["terbaik"], r["mundur"]
+        r["gabungan"] = dict(t) if t["sukses"] else dict(m, ms=t["ms"] + m["ms"])
         env, _, _ = pabrik.buat(sk)
         env.planner.time_limit = BATAS_WAKTU_ASTAR
         t1 = time.perf_counter()
         jalur, rek = rencanakan_terekam(env.planner, env.omap, sk.awal, sk.tujuan)
         r["astar"] = {"sukses": bool(jalur), "ms": 1000 * (time.perf_counter() - t1),
                       "biaya": rek.biaya, "alasan": rek.stats.get("reason", "")}
+        if jalur:
+            r["astar"]["ganti_arah"], r["astar"]["ganti_arah_dekat"] = hitung_ganti_arah(
+                jalur, sk.tujuan, env.planner.analytic_dist)
         baris.append(r)
         if (k + 1) % 50 == 0:
             print(f"    {k + 1}/{len(uji)} rute ({time.time() - t0:.0f} s)")
@@ -159,7 +169,7 @@ def _stat(xs):
 
 def ringkas(baris, neg):
     out = {"per_jenis": {}}
-    for j in [None, *S.KOMPOSISI]:
+    for j in [None, *sorted({r["jenis"] for r in baris})]:
         b = [r for r in baris if j is None or r["jenis"] == j]
         if not b:
             continue
@@ -169,7 +179,12 @@ def ringkas(baris, neg):
                 "tiba_pct": 100.0 * sum(r[mode]["sukses"] for r in b) / len(b),
                 "ms": _stat([r[mode]["ms"] for r in b]),
             }
+            tiba = [r for r in b if r[mode]["sukses"]]
+            blok[mode]["ganti_arah"] = _stat([r[mode].get("ganti_arah") for r in tiba])
+            blok[mode]["ganti_arah_dekat"] = _stat([r[mode].get("ganti_arah_dekat") for r in tiba])
             if mode != "astar":
+                blok[mode]["gagal_jauh_pct"] = 100.0 * sum(r[mode]["fase"] == "gagal_jauh" for r in b) / len(b)
+                blok[mode]["gagal_dekat_pct"] = 100.0 * sum(r[mode]["fase"] == "gagal_dekat" for r in b) / len(b)
                 blok[mode]["rasio"] = _stat([r[mode]["rasio"] for r in b])
                 blok[mode]["alasan_gagal"] = {a: sum(1 for r in b if not r[mode]["sukses"] and r[mode]["alasan"] == a)
                                               for a in {r[mode]["alasan"] for r in b if not r[mode]["sukses"]}}
@@ -189,16 +204,27 @@ def ringkas(baris, neg):
 
 
 def cetak(r):
-    print("    peta       n    tiba greedy/mundur/TERBAIK/A*(2s)   rasio p90 mundur | TERBAIK (med)"
-          "   ms med/p90: TERBAIK | A*")
+    print("    peta       n    tiba greedy/mundur/terbaik/GABUNGAN/A*(2s)   rasio p90 mundur | terbaik | "
+          "GABUNGAN   ms med/p90: GABUNGAN | A*")
     for j, b in [("SEMUA", r["semua"]), *r["per_jenis"].items()]:
-        g, m, t, a = b["greedy"], b["mundur"], b["terbaik"], b["astar"]
+        g, m, t, c, a = b["greedy"], b["mundur"], b["terbaik"], b["gabungan"], b["astar"]
         print(f"    {j:<9} {b['n']:>4}   {g['tiba_pct']:5.1f} / {m['tiba_pct']:5.1f} / {t['tiba_pct']:5.1f}"
-              f" / {a['tiba_pct']:5.1f}      {m['rasio'].get('p90', float('nan')):5.2f} | "
-              f"{t['rasio'].get('p90', float('nan')):5.2f} ({t['rasio'].get('median', float('nan')):.3f})"
-              f"      {t['ms'].get('median', 0):5.0f} / {t['ms'].get('p90', 0):5.0f} | "
+              f" / {c['tiba_pct']:5.1f} / {a['tiba_pct']:5.1f}      "
+              f"{m['rasio'].get('p90', float('nan')):5.2f} | {t['rasio'].get('p90', float('nan')):5.2f} | "
+              f"{c['rasio'].get('p90', float('nan')):5.2f}      "
+              f"{c['ms'].get('median', 0):5.0f} / {c['ms'].get('p90', 0):5.0f} | "
               f"{a['ms'].get('median', 0):5.0f} / {a['ms'].get('p90', 0):5.0f}")
     print(f"    gagal (terbaik): {r['semua']['terbaik']['alasan_gagal']}")
+    print("    SATU vs DUA MODEL - gagal sebelum radius dekat (navigasi) / di dalamnya (presisi),")
+    print("    dan titik balik maju-mundur di dalam radius dekat pada rute yang tiba:")
+    for j, b in [("SEMUA", r["semua"]), *r["per_jenis"].items()]:
+        teks = []
+        for mode in MODE_DQFD:
+            m = b[mode]
+            teks.append(f"{mode} {m['gagal_jauh_pct']:4.1f}/{m['gagal_dekat_pct']:4.1f}% "
+                        f"balik {m['ganti_arah_dekat'].get('rata', float('nan')):.2f}")
+        print(f"    {j:<9} " + " | ".join(teks) +
+              f" | A* balik {b['astar']['ganti_arah_dekat'].get('rata', float('nan')):.2f}")
     n = r["negatif"]
     print(f"    negatif: {n['n']} skenario, buntu {n['buntu_pct']:.0f}%, jalur ditemukan {n['ditemukan']} "
           f"(sah menurut pemeriksaan independen: {n['ditemukan_sah']}), "

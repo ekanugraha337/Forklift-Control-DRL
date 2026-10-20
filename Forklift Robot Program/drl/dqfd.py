@@ -22,7 +22,7 @@ import torch
 import torch.nn.functional as F
 
 from drl.jaringan import JaringanDQfD, bermask
-from drl.lingkungan import N_AKSI, N_OBS
+from drl.lingkungan import N_AKSI, N_OBS, VERSI_AKSI
 
 KOLOM = {
     "obs": ((N_OBS,), torch.float32), "aksi": ((), torch.int64), "mask": ((N_AKSI,), torch.bool),
@@ -159,6 +159,15 @@ class AgenDQfD:
 def muat_jaringan(jalur, device="cpu"):
     """Jaringan dari checkpoint, siap dipakai (eval)."""
     ck = torch.load(jalur, map_location=device, weights_only=False)
+    # Diperiksa SEBELUM bobot dimuat: model ruang aksi lama (15 keluaran, dengan
+    # SAMBUNG) akan gagal di load_state_dict dengan pesan bentuk tensor yang
+    # tidak menjelaskan apa-apa.
+    versi = ck.get("versi_aksi", 1)
+    if versi != VERSI_AKSI:
+        raise SystemExit(f"[!] {jalur} memakai ruang aksi versi {versi}, program sekarang versi "
+                         f"{VERSI_AKSI} ({N_AKSI} aksi, full DQfD tanpa SAMBUNG).\n"
+                         f"    Bangkitkan ulang demo dan latih ulang: python -m drl.skenario lalu "
+                         f"python -m drl.latih")
     net = JaringanDQfD().to(device)
     net.load_state_dict(ck["net"])
     net.eval()
@@ -167,7 +176,8 @@ def muat_jaringan(jalur, device="cpu"):
 
 def meta_profil(prof):
     """Bagian profil robot yang menentukan arti aksi - disimpan di checkpoint."""
-    return {"max_steer_deg": float(prof.max_steer_deg), "r_plan_cm": float(prof.r_plan_cm)}
+    return {"max_steer_deg": float(prof.max_steer_deg), "r_plan_cm": float(prof.r_plan_cm),
+            "versi_aksi": VERSI_AKSI, "n_aksi": N_AKSI}
 
 
 def periksa_profil(meta, prof, jalur):

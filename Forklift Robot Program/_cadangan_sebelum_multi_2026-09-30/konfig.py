@@ -20,10 +20,10 @@ import sys
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Lokasi cctv_lurus.py + area_constraint.py + data kalibrasi. Data kalibrasi
-# sengaja TIDAK dipindah ke sini: berkas itu milik alur kerja kamera dan dipakai
-# program lain juga.
-CAMERA_DIR = r"C:\Users\Eka Nugraha\Documents\Master ITB\Semester 3\Camera"
+# Lokasi cctv_lurus.py + area_constraint.py + data kalibrasi: folder Camera/ di
+# repo, relatif terhadap berkas ini (cadangan ini satu tingkat lebih dalam dari
+# program, jadi naik dua). Semula alamat mati ke Documents\Master ITB\Semester 3\Camera.
+CAMERA_DIR = os.path.normpath(os.path.join(DIR, "..", "..", "Camera"))
 
 
 def pasang_path_kamera():

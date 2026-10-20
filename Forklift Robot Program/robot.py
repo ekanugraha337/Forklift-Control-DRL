@@ -26,6 +26,20 @@ import paho.mqtt.client as mqtt
 import konfig
 
 
+def kemudi_dikompensasi(steer_deg, profil=None):
+    """Sudut kemudi NYATA yang diinginkan -> sudut yang harus diperintahkan.
+
+    Memakai tabel kemudi_kiri / kemudi_kanan robot (konfig.ROBOT): daftar
+    (perintah, nyata) hasil uji busur tanpa kompensasi, dibalik dengan
+    interpolasi linear. Sisi tanpa tabel tidak diubah. Di luar ujung tabel
+    perintahnya tertahan di perintah terbesar yang pernah diuji.
+    Kemudi positif = belok kiri.
+    """
+    p = profil or konfig.profil()
+    tabel = p.kemudi_kanan if steer_deg < 0 else p.kemudi_kiri
+    return math.copysign(konfig.kemudi_perintah(tabel, abs(steer_deg)), steer_deg)
+
+
 def steer_ke_servo(steer_deg, profil=None):
     """Sudut kemudi logis (derajat) -> sudut servo yang dimengerti firmware.
 
@@ -33,10 +47,14 @@ def steer_ke_servo(steer_deg, profil=None):
     mengurusnya lewat setelan str_inv, di satu tempat, supaya semua jalur
     kendali ikut benar.
 
+    Batas max_steer_deg berlaku pada sudut NYATA, sebelum kompensasi - jadi
+    perintah ke servo boleh sedikit melebihinya di sisi yang tertinggal.
+
     profil: konfig.profil() robot tujuan; None = robot yang sedang dipilih.
     """
     p = profil or konfig.profil()
     steer_deg = max(-p.max_steer_deg, min(p.max_steer_deg, steer_deg))
+    steer_deg = kemudi_dikompensasi(steer_deg, p)
     servo = p.steer_center + steer_deg * konfig.STEER_SERVO_PER_DEG
     return max(konfig.STEER_SERVO_MIN, min(konfig.STEER_SERVO_MAX, servo))
 

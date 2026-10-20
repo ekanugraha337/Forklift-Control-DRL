@@ -1,9 +1,9 @@
 """
 banding_komputasi.py - performa KOMPUTASI perencana: Hybrid A* vs DQfD.
 
-    python -m drl.banding_komputasi                          # Rumah2, ID 01 & 02
-    python -m drl.banding_komputasi --peta Rumah --ulang 5
-    python -m drl.banding_komputasi --peta Kalibrasi,Rumah2,Rumah --perencana astar,dqfd-murni
+    python -m drl.banding_komputasi                          # semua peta, ID 01 & 02
+    python -m drl.banding_komputasi --peta Kalibrasi --ulang 5
+    python -m drl.banding_komputasi --perencana astar,dqfd-murni
 
 Adil karena:
   - rute SAMA PERSIS untuk semua perencana: rute uji dataset di peta itu,
@@ -196,7 +196,8 @@ def gambar(semua, keluar, pembanding):
 
 def main():
     ap = argparse.ArgumentParser(description="Performa komputasi Hybrid A* vs DQfD")
-    ap.add_argument("--peta", default="Rumah2", help="satu atau beberapa, dipisah koma")
+    ap.add_argument("--peta", default=None,
+                    help="satu atau beberapa, dipisah koma; bawaan semua di Camera/peta_constraint/")
     ap.add_argument("--id", default="1,2")
     ap.add_argument("--n", type=int, default=1000, help="rute maksimum per robot per peta")
     ap.add_argument("--ulang", type=int, default=3, help="pengulangan per rute (diambil median)")
@@ -206,7 +207,13 @@ def main():
     perencana = ["astar"] + [j for j in args.perencana.split(",") if j.strip() and j != "astar"]
     pembanding = perencana[1]
     ringkas = []
-    for peta in [p.strip() for p in args.peta.split(",") if p.strip()]:
+    if args.peta:
+        daftar = [p.strip() for p in args.peta.split(",") if p.strip()]
+    else:
+        konfig.pasang_path_kamera()
+        import area_constraint as AC
+        daftar = AC.daftar_peta()
+    for peta in daftar:
         semua = []
         for rid in [int(t) for t in args.id.split(",") if t.strip()]:
             r = ukur(rid, peta, args.n, args.ulang, perencana)

@@ -16,20 +16,25 @@ TERBAIK-DULU (rencanakan_terbaik): tiap calon langkah diberi
     f = g + c(a) + bobot x h,   h = max(0, -Q(s,a) x skala - c(a))
 g = biaya yang sudah ditempuh, c(a) = biaya primitif itu (tepat, dari
 lingkungan), h = perkiraan jaringan biaya-sisa SETELAH langkah itu. Satu
-forward di s memberi h untuk ke-14 calon sekaligus, jadi calon tidak perlu
+forward di s memberi h untuk semua calon sekaligus, jadi calon tidak perlu
 dibuka dulu. Yang dibuka selalu calon dengan f terkecil dari SELURUH pohon -
 bukan dari keadaan terakhir seperti mundur. Jaringan benar: jalannya sama
 dengan greedy. Jaringan salah: pindah ke cabang yang secara keseluruhan lebih
 murah, bukan sekadar mundur selangkah (putaran 1-2: mundur menyelamatkan
 rute, tapi jalurnya berkelok - p90 biaya 2-4,5x Hybrid A*).
-SAMBUNG memakai biaya Reeds-Shepp SEBENARNYA (terminal), jadi jalur baru
-ditutup bila sambungan itu memang bersaing - seperti Hybrid A* menerima
-ekspansi analitiknya. Sel yang sudah dimasuki cabang mana pun tertutup
-(closed set, sama seperti mundur dan Hybrid A*).
+Calon yang langsung TIBA di toleransi tujuan diberi h = 0 (biayanya tepat,
+terminal), jadi jalur ditutup bila langkah penutup itu memang bersaing. Sel
+yang sudah dimasuki cabang mana pun tertutup untuk primitif penuh dengan arah
+yang sama (closed set, lihat MASK di lingkungan.py).
+
+FULL DQfD (2026-10-20): tidak ada Reeds-Shepp maupun A* di sini - SAMBUNG
+dihapus, ekor RS demonstrator ditiru jaringan dengan primitif penuh + pendek.
+A* hanya muncul sebagai CADANGAN di mode "dqfd"; "dqfd-murni" tanpa cadangan.
 """
 import copy
 import heapq
 import itertools
+import math
 import os
 import time
 
@@ -52,9 +57,23 @@ ANGGARAN_BAWAAN = 600
 #   terbaik w1,5 a600     95,0 / 96,9   91,7 / 96,7    1,19 / 1,15   576 / 413
 #   terbaik w2,0 a1200    97,5 / 98,8   98,3 / 100     1,20 / 1,17   427 / 337   <- dipakai
 # (ID 01 / ID 02). Jalurnya diperiksa ulang secara independen: semua sah.
-METODE_BAWAAN = "terbaik"
+#
+# FULL DQfD (versi aksi 2, 2026-10-20) - set UJI, 466 / 477 rute, DQfD murni:
+#                         tiba          biaya p90 vs A*   ganti arah   ms p90
+#   mundur (600)          97,2 / 97,5   5,17 / 6,49       6,0 / 7,1    110 / 132
+#   terbaik w2,0 a1200    68,9 / 60,0   1,22 / 1,24       1,1 / 1,1   1683 / 1681
+# Terbaik-dulu menghasilkan jalur sebagus demonstrator, tapi 28-36% rute
+# kehabisan anggaran di dalam 60 cm dari tujuan; mundur hampir selalu tiba,
+# tapi maju-mundur 4-6x di dekat tujuan. Anggaran 3000 hanya menaikkan tiba
+# terbaik 74 -> 80% (120 rute ID 01) dengan p90 4,2 s. GABUNGAN = terbaik
+# dulu, mundur bila gagal: 99,2% tiba, p90 biaya 2,75x, 3,55 ganti arah,
+# p90 1,8 s (120 rute ID 01). Dua-duanya DQfD - tanpa Reeds-Shepp / A*.
+METODE_BAWAAN = "gabungan"
 BOBOT_TERBAIK = 2.0
 ANGGARAN_TERBAIK = 1200
+# Metode gabungan: bagian batas waktu untuk terbaik-dulu; sisanya untuk mundur
+# (median 41-45 ms, p90 110-132 ms di set uji).
+PORSI_WAKTU_TERBAIK = 0.75
 
 # GERBANG MUTU (mode "dqfd"): jalur DQfD ditolak - dan A* dipakai - bila
 # biayanya melebihi GERBANG_K x perkiraan jaringan sendiri, -V(s0) x skala.
@@ -70,6 +89,39 @@ ANGGARAN_TERBAIK = 1200
 # jalur baik dialihkan ke Hybrid A* - hanya menambah waktu, bukan menurunkan
 # mutu. Tetap dipasang sebagai jaring pengaman.
 GERBANG_K = 1.3
+
+
+def _jarak_tujuan(env):
+    return math.hypot(env.tujuan[0] - env.x, env.tujuan[1] - env.y)
+
+
+def rincian_fase(env, hasil):
+    """Pemisah kegagalan & mutu pendaratan - dasar keputusan satu vs dua model.
+
+    Batasnya radius DEKAT = analytic_dist perencana (60 cm): di dalamnya
+    demonstrator memakai Reeds-Shepp. Kembalian dict:
+      fase              'tiba' | 'gagal_jauh' (tidak pernah masuk radius dekat:
+                        masalah NAVIGASI) | 'gagal_dekat' (masuk tapi tidak
+                        mendarat: masalah PRESISI - tanda perlu model dekat)
+      ganti_arah        titik balik maju/mundur di jalur (hanya bila tiba)
+      ganti_arah_dekat  titik balik yang terjadi di dalam radius dekat
+    hasil: kembalian rencanakan()/rencanakan_terbaik() (memuat jarak_min).
+    """
+    if hasil["sukses"]:
+        g, gd = hitung_ganti_arah(env.jalur(), env.tujuan, env.planner.analytic_dist)
+        return {"fase": "tiba", "ganti_arah": g, "ganti_arah_dekat": gd}
+    fase = "gagal_dekat" if hasil.get("jarak_min", float("inf")) < env.planner.analytic_dist else "gagal_jauh"
+    return {"fase": fase, "ganti_arah": None, "ganti_arah_dekat": None}
+
+
+def hitung_ganti_arah(jalur, tujuan, radius):
+    """(titik balik di seluruh jalur, titik balik di dalam radius dari tujuan)."""
+    semua = dekat = 0
+    for a, b in zip(jalur[:-1], jalur[1:]):
+        if a[3] != b[3]:
+            semua += 1
+            dekat += math.hypot(tujuan[0] - a[0], tujuan[1] - a[1]) < radius
+    return semua, dekat
 
 
 def _urutan(net, env):
@@ -94,6 +146,7 @@ def rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=None
     di = snap0                  # keadaan tempat env berada sekarang (None = tidak di simpul mana pun)
     dicoba = n_mundur = 0
     alasan = "buntu"
+    jarak_min = _jarak_tujuan(env)
     while tumpukan:
         if dicoba >= anggaran:
             alasan = "anggaran habis"
@@ -116,9 +169,10 @@ def rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=None
             continue            # tertutup oleh sel yang dikunjungi cabang lain
         _, _, akhir, info = env.step(a)
         dicoba += 1
+        jarak_min = min(jarak_min, _jarak_tujuan(env))
         if info["sukses"]:
             return {"sukses": True, "alasan": info["alasan"], "dicoba": dicoba, "mundur": n_mundur,
-                    "waktu_s": time.perf_counter() - t0}
+                    "waktu_s": time.perf_counter() - t0, "jarak_min": 0.0}
         if akhir:
             di = None
             if not mundur:
@@ -132,7 +186,7 @@ def rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=None
         tumpukan.append([s, _urutan(net, env)])
         di = s
     return {"sukses": False, "alasan": alasan, "dicoba": dicoba, "mundur": n_mundur,
-            "waktu_s": time.perf_counter() - t0}
+            "waktu_s": time.perf_counter() - t0, "jarak_min": jarak_min}
 
 
 def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bobot=1.0):
@@ -156,10 +210,11 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
         with torch.no_grad():
             q = net(torch.as_tensor(env.observasi()[None]))[0].numpy()
         g = env.biaya
+        pl = env.planner
         for a in sah:
             a = int(a)
-            c = env._calon[a][1]
-            if a == L.SAMBUNG:
+            poses, c, _ = env._calon[a]
+            if pl._at_goal(poses[-1][0], poses[-1][1], poses[-1][2], env.tujuan):
                 f = g + c                                  # terminal: biaya tepat
             else:
                 h = max(0.0, -float(q[a]) * SKALA_REWARD - c)
@@ -179,6 +234,7 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
     di = 0                      # simpul tempat env berada sekarang (None = di simpul akhir)
     dicoba = pindah = 0
     alasan = "buntu"
+    jarak_min = _jarak_tujuan(env)
     while heap:
         if dicoba >= anggaran:
             alasan = "anggaran habis"
@@ -196,9 +252,10 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
         n0 = len(env._pose)
         _, _, akhir, info = env.step(a)
         dicoba += 1
+        jarak_min = min(jarak_min, _jarak_tujuan(env))
         if info["sukses"]:
             return {"sukses": True, "alasan": info["alasan"], "dicoba": dicoba, "mundur": pindah,
-                    "waktu_s": time.perf_counter() - t0}
+                    "waktu_s": time.perf_counter() - t0, "jarak_min": 0.0}
         j = len(snap)
         snap.append(env.simpan_keadaan())
         induk.append(i)
@@ -209,7 +266,7 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
         buka(j)
         di = j
     return {"sukses": False, "alasan": alasan, "dicoba": dicoba, "mundur": pindah,
-            "waktu_s": time.perf_counter() - t0}
+            "waktu_s": time.perf_counter() - t0, "jarak_min": jarak_min}
 
 
 # ------------------------------------------------------------ operasional
@@ -262,6 +319,9 @@ class DQfDPlanner:
         self.v = astar.v
         self.time_limit = astar.time_limit
         self.cadangan = cadangan
+        if metode not in ("terbaik", "mundur", "gabungan"):
+            raise ValueError(f"metode DQfD '{metode}' tidak dikenal")
+        # anggaran berlaku untuk metode tunggal; gabungan memakai bawaan masing-masing.
         self.anggaran = anggaran or (ANGGARAN_TERBAIK if metode == "terbaik" else ANGGARAN_BAWAAN)
         self.net = muat_model(profil.id, dir_model)
         self.env = L.LingkunganRencana(arena, profil, margin_cm=margin_cm, planner=copy.copy(astar))
@@ -283,15 +343,19 @@ class DQfDPlanner:
             if self.metode == "terbaik":
                 dq = rencanakan_terbaik(self.net, self.env, anggaran=self.anggaran,
                                         batas_waktu=self.time_limit, bobot=BOBOT_TERBAIK)
-            else:
+                dq["metode"] = "terbaik"
+            elif self.metode == "mundur":
                 dq = rencanakan(self.net, self.env, mundur=True, anggaran=self.anggaran,
                                 batas_waktu=self.time_limit)
+                dq["metode"] = "mundur"
+            else:
+                dq = self._gabungan(omap, start, goal, t0)
         if dq["sukses"]:
             rasio = self.env.biaya / perkiraan
             if self.gerbang_k is None or rasio <= self.gerbang_k:
                 self.last_stats = {"expansions": dq["dicoba"], "time": time.perf_counter() - t0,
-                                   "reason": "", "perencana": "dqfd", "mundur": dq["mundur"],
-                                   "rasio_perkiraan": rasio}
+                                   "reason": "", "perencana": f"dqfd ({dq['metode']})",
+                                   "mundur": dq["mundur"], "rasio_perkiraan": rasio}
                 return self.env.jalur()
             dq["alasan"] = f"ditolak gerbang mutu (biaya {rasio:.2f} x perkiraan)"
         if not self.cadangan:
@@ -300,6 +364,29 @@ class DQfDPlanner:
             return None
         self.astar.time_limit = self.time_limit
         jalur = self.astar.plan(omap, start, goal)
+        return self._catat_cadangan(jalur, dq, t0)
+
+    def _gabungan(self, omap, start, goal, t0):
+        """Terbaik-dulu, lalu mundur bila gagal. Lingkungan di-reset di antaranya:
+        sel tertutup milik pencarian pertama tidak boleh menutup pencarian kedua."""
+        dq = rencanakan_terbaik(self.net, self.env, anggaran=ANGGARAN_TERBAIK,
+                                batas_waktu=PORSI_WAKTU_TERBAIK * self.time_limit,
+                                bobot=BOBOT_TERBAIK)
+        dq["metode"] = "terbaik"
+        if dq["sukses"]:
+            return dq
+        sisa = self.time_limit - (time.perf_counter() - t0)
+        if sisa <= 0:
+            return dq
+        self.env.reset(start, goal, omap)
+        dm = rencanakan(self.net, self.env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=sisa)
+        dm["metode"] = "terbaik -> mundur"
+        dm["dicoba"] += dq["dicoba"]
+        if not dm["sukses"]:
+            dm["alasan"] = f"terbaik: {dq['alasan']}; mundur: {dm['alasan']}"
+        return dm
+
+    def _catat_cadangan(self, jalur, dq, t0):
         self.last_stats = dict(self.astar.last_stats or {})
         self.last_stats.update(time=time.perf_counter() - t0, perencana="A* (cadangan)",
                                dqfd_gagal=dq["alasan"])

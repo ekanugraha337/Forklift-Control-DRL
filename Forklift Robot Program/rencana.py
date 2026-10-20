@@ -60,10 +60,37 @@ def buat_kendaraan(arena, margin_cm=None, max_steer_rad=None):
     )
 
 
+class HybridAStarBertanda(HybridAStarPlanner):
+    """HybridAStarPlanner yang mencatat bagian jalur mana yang Reeds-Shepp.
+
+    Jalur Hybrid A* terdiri dari dua bagian: primitif gerak hasil pencarian,
+    lalu - bila pencarian berakhir lewat ekspansi analitik - satu tembakan
+    Reeds-Shepp ke tujuan. plan() hanya mengembalikan gabungannya, dan
+    forklift_planner.py tidak diubah, jadi batasnya dicatat di sini:
+    last_stats["rs_titik"] = jumlah titik di UJUNG jalur yang berasal dari
+    Reeds-Shepp (0 = tujuan dicapai primitif saja).
+
+    _analytic dipanggil berkali-kali selama pencarian, tapi pencarian langsung
+    berhenti begitu satu panggilan berhasil - jadi nilai dari panggilan
+    terakhirlah yang benar.
+    """
+
+    def _analytic(self, omap, node, goal):
+        rs = super()._analytic(omap, node, goal)
+        self._rs_titik = len(rs[0]) if rs is not None else 0
+        return rs
+
+    def plan(self, omap, start, goal):
+        self._rs_titik = 0
+        jalur = super().plan(omap, start, goal)
+        self.last_stats["rs_titik"] = self._rs_titik if jalur else 0
+        return jalur
+
+
 def buat_perencana(arena, kendaraan):
     p = konfig.PARAM_RENCANA
     s = arena.panjang_ke_sel
-    return HybridAStarPlanner(
+    return HybridAStarBertanda(
         kendaraan,
         plan_steer_ratio=konfig.PLAN_STEER_RATIO,
         allow_reverse=konfig.ALLOW_REVERSE,
@@ -84,7 +111,10 @@ def buat_perencana(arena, kendaraan):
         approach_len=s(p["approach_len"]),
         goal_pos_tol=s(p["goal_pos_tol"]),
         goal_yaw_tol=math.radians(p["goal_yaw_tol_deg"]),
-        analytic_every=p["analytic_every"],
+        # None = Reeds-Shepp hanya di dalam analytic_dist. Perencana memeriksa
+        # "ekspansi % analytic_every == 0", jadi dimatikan dengan angka yang
+        # tidak pernah tercapai (ekspansi berhenti di max_expansions).
+        analytic_every=p["analytic_every"] or p["max_expansions"] + 1,
         analytic_dist=s(p["analytic_dist"]),
         time_limit=p["time_limit"],
         max_expansions=p["max_expansions"],
@@ -235,6 +265,7 @@ class Perencana:
                        "margin_turun": bool(jalur) and self.margin_dipakai < konfig.SAFETY_MARGIN_CM - 0.01,
                        "kendaraan": self.kendaraan_dipakai,
                        "perencana": self.stats.get("perencana", "A*"),
+                       "rs_titik": self.stats.get("rs_titik", 0) if jalur else 0,
                        "alasan": self.stats.get("reason", "")}
 
     def _sekali(self, awal_cm, tujuan_cm, omap=None):
@@ -285,18 +316,42 @@ class Perencana:
         return self.arena.panjang_ke_cm(total)
 
 
-def gambar_jalur(img, arena, jalur_sel, warna_maju=(0, 255, 0), warna_mundur=(0, 165, 255)):
-    """Jalur digambar per arah gerak: maju dan mundur diberi warna berbeda."""
+# Warna jalur (BGR). Bagian Hybrid A* = primitif hasil pencarian; bagian
+# Reeds-Shepp = tembakan analitik penutup ke tujuan (info["rs_titik"]).
+WARNA_HA_MAJU, WARNA_HA_MUNDUR = (0, 255, 0), (0, 165, 255)      # hijau, oranye
+WARNA_RS_MAJU, WARNA_RS_MUNDUR = (255, 255, 0), (255, 0, 255)    # biru muda, ungu
+LEGENDA_JALUR = ("jalur Hybrid A*: hijau maju, oranye mundur | "
+                 "Reeds-Shepp: biru muda maju, ungu mundur")
+
+
+def gambar_jalur(img, arena, jalur_sel, rs_titik=0,
+                 warna_maju=WARNA_HA_MAJU, warna_mundur=WARNA_HA_MUNDUR):
+    """Jalur digambar per arah gerak dan per asal.
+
+    Maju dan mundur diberi warna berbeda. rs_titik = jumlah titik di ujung
+    jalur yang berasal dari Reeds-Shepp (Perencana.rencanakan -> info): bagian
+    itu digambar dengan WARNA_RS_*, dan titik sambungnya ditandai "RS".
+    """
     if not jalur_sel or len(jalur_sel) < 2:
         return
     titik_cm = [arena.ke_cm(p[0], p[1]) for p in jalur_sel]
     px = arena.ctx.px(titik_cm)
+    # Segmen i (titik i -> i+1) termasuk Reeds-Shepp bila titik i+1 bagian dari
+    # ekor RS; segmen pertama RS berawal di titik terakhir primitif.
+    awal_rs = len(jalur_sel) - rs_titik if 0 < rs_titik < len(jalur_sel) else None
     for i in range(len(px) - 1):
         a, b = jalur_sel[i], jalur_sel[i + 1]
         dx, dy = b[0] - a[0], b[1] - a[1]
         maju = (dx * math.cos(a[2]) + dy * math.sin(a[2])) >= 0
-        cv2.line(img, tuple(px[i]), tuple(px[i + 1]),
-                 warna_maju if maju else warna_mundur, 2, cv2.LINE_AA)
+        if awal_rs is not None and i + 1 >= awal_rs:
+            warna = WARNA_RS_MAJU if maju else WARNA_RS_MUNDUR
+        else:
+            warna = warna_maju if maju else warna_mundur
+        cv2.line(img, tuple(px[i]), tuple(px[i + 1]), warna, 2, cv2.LINE_AA)
+    if awal_rs is not None:
+        u, v = (int(c) for c in px[awal_rs - 1])
+        cv2.circle(img, (u, v), 5, (255, 255, 255), 2, cv2.LINE_AA)
+        AC.label(img, "RS", (u + 7, v - 7), (255, 255, 255), 0.45)
 
 
 # ------------------------------------------------------------------ mandiri
@@ -373,7 +428,7 @@ def main():
             hitung()
 
         img = latar.copy()
-        gambar_jalur(img, arena, jalur)
+        gambar_jalur(img, arena, jalur, rs_titik=info.get("rs_titik", 0) if jalur else 0)
         A.gambar_robot(img, arena.ctx, *awal, (255, 255, 255), isi=True)
         if tujuan is not None:
             yaw = tujuan[2] if tujuan[2] is not None else 0.0
@@ -385,12 +440,13 @@ def main():
         teks = arena.ringkas()
         if jalur:
             teks += (f" | jalur {info['panjang_cm']:.0f} cm, {info['waktu_s'] * 1000:.0f} ms"
-                     f" ({info['perencana']})")
+                     f" ({info['perencana']}), Reeds-Shepp {info.get('rs_titik', 0)} titik")
         elif tujuan is not None:
             teks += " | TIDAK ADA JALUR"
         AC.label(img, teks, (10, 22), (255, 255, 255), 0.5)
-        AC.label(img, "kiri: tujuan | kanan: awal | hijau: maju, oranye: mundur",
+        AC.label(img, "kiri: tujuan | kanan: awal | r: hitung ulang | c: hapus | q: keluar",
                  (10, img.shape[0] - 10), (230, 230, 230), 0.45)
+        AC.label(img, LEGENDA_JALUR, (10, img.shape[0] - 30), (230, 230, 230), 0.45)
         cv2.imshow(judul, img)
 
         k = cv2.waitKey(30) & 0xFF

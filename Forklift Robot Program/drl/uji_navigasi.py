@@ -11,8 +11,9 @@ waktu nyata.
     python -m drl.uji_navigasi --perencana astar,dqfd,dqfd-murni --n 5
 
 SKENARIO
-    satu robot  rute uji dataset (tanpa rintangan, margin 8 cm) di Kalibrasi,
-                Rumah2, Rumah - n per peta, untuk ID 01 dan ID 02
+    satu robot  rute uji dataset (tanpa rintangan, margin 8 cm) di setiap peta
+                asli yang ada di dataset DAN di Camera/peta_constraint/ - n per
+                peta, untuk ID 01 dan ID 02
     pasangan    rute uji ID 01 + rute uji ID 02 di peta yang sama yang jalur
                 A*-nya BERPOTONGAN (< 20 cm), supaya wasit benar-benar bekerja
 
@@ -41,7 +42,15 @@ if __package__ in (None, ""):
 import konfig                       # noqa: E402
 
 AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PETA = ("Kalibrasi", "Rumah2", "Rumah")
+
+
+def daftar_peta(data):
+    """Peta asli yang ada di dataset kedua robot dan masih ada di Camera/peta_constraint/."""
+    konfig.pasang_path_kamera()
+    import area_constraint as AC
+    ada = set(AC.daftar_peta())
+    di_data = [{str(p) for p in d["ep_peta"] if not str(p).startswith("sintetis:")} for d in data.values()]
+    return sorted(ada.intersection(*di_data))
 BATAS_S_SATU, BATAS_S_PASANGAN = 120.0, 180.0
 
 
@@ -56,10 +65,11 @@ def pilih_skenario(n_per_peta, seed=0):
     import arena as A
     from drl import rollout as RO
     data = {rid: RO.muat_npz(os.path.join(AKAR, "drl", "data", f"demo_id{rid:02d}.npz")) for rid in (1, 2)}
+    peta_asli = daftar_peta(data)
     satu, kandidat = [], {}
     for rid, d in data.items():
         pab = RO.PabrikEnv(konfig.profil(rid))
-        for peta in PETA:
+        for peta in peta_asli:
             ar = A.Arena(peta)
             idx = [e for e in np.flatnonzero(d["ep_uji"])
                    if d["ep_peta"][e] == peta and np.isnan(d["ep_rintangan"][e]).all()
@@ -82,7 +92,7 @@ def pilih_skenario(n_per_peta, seed=0):
             kandidat[(rid, peta)] = kand
 
     pasangan = []
-    for peta in PETA:
+    for peta in peta_asli:
         n = 0
         for e1, j1, a1, t1 in kandidat[(1, peta)]:
             for e2, j2, a2, t2 in kandidat[(2, peta)]:

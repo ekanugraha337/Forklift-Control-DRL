@@ -2,43 +2,62 @@
 lingkungan.py - MDP perencanaan untuk DQfD, pengganti ruang pencarian Hybrid A*.
 
 Satu episode = satu panggilan plan(): dari pose awal, agen memilih primitif
-gerak satu per satu sampai tersambung ke tujuan. Tidak ada dinamika (jeda
-kemudi, ramp gas, kamera) - itu urusan pelacak, yang tidak berubah. Yang
-dimodelkan hanya yang juga dimodelkan Hybrid A*, dan dengan aritmetika yang
-SAMA PERSIS, supaya jalur A* adalah episode yang sah di sini dan jumlah
-biayanya sama dengan g-cost A*. Diperiksa oleh "python -m drl.adaptor_demo --uji".
+gerak satu per satu sampai TIBA di toleransi tujuan. Tidak ada dinamika (jeda
+kemudi, ramp gas, kamera) - itu urusan pelacak, yang tidak berubah.
+
+FULL DQfD (versi 2, 2026-10-20). Demonstratornya Hybrid A* + Reeds-Shepp,
+tapi saat dipakai TIDAK ADA algoritma Reeds-Shepp maupun A*: seluruh jalur
+dipilih jaringan. Dulu ekor Reeds-Shepp adalah satu aksi SAMBUNG yang
+memanggil planner._analytic; sekarang ekor itu diurai (adaptor_demo) menjadi
+primitif biasa ditambah primitif PENDEK, dan jaringan menirunya langkah demi
+langkah. Busur Reeds-Shepp memakai kelengkungan yang sama persis dengan
+primitif kemudi penuh/lurus (radius = 1/kappa_max); yang berbeda hanya
+panjangnya, dan sisa yang bukan kelipatan langkah ditutup primitif pendek.
+Diukur pada 210 ekor RS: dengan 1/2, 1/4, 1/8 langkah semuanya mendarat di
+toleransi tujuan (galat maks 1,9 cm / 2,3 deg).
+
+Bagian A* tetap direkonstruksi PERSIS: aritmetika ekspansi primitif penuh
+sama dengan loop HybridAStarPlanner.plan() sampai bit terakhir, jadi biaya
+bagian itu sama dengan g-cost A*. Diperiksa oleh "python -m drl.adaptor_demo --uji".
 
 Pustaka geraknya adalah objek HybridAStarPlanner itu sendiri: kappas, step,
-n_sub, bobot biaya, heuristik, _analytic, _at_goal, _key. Hanya ekspansi SATU
-primitif yang ditulis ulang (_ekspansi), karena di forklift_planner.py ia
-berada di dalam loop plan(), bukan fungsi tersendiri - dan berkas itu tidak
-diubah. Kalau ekspansi di sana berubah, _ekspansi harus ikut, dan uji di atas
-yang akan menangkapnya.
+n_sub, bobot biaya, heuristik, _at_goal, _key. Hanya ekspansi satu primitif
+yang ditulis ulang (_ekspansi), karena di forklift_planner.py ia berada di
+dalam loop plan(), bukan fungsi tersendiri - dan berkas itu tidak diubah.
 
 SATUAN. Seperti perencana: pose dan biaya dalam SEL grid, yaw radian. Hanya
 observasi yang dinormalisasi dari cm.
 
-AKSI (15)
-    0..6    maju,   kappa = planner.kappas[0..6]   (-kmax .. +kmax)
-    7..13   mundur, kappa = planner.kappas[0..6]
-    14      SAMBUNG: jalur Reeds-Shepp bebas ke tujuan (planner._analytic),
-            episode selesai
+AKSI (32)
+    0..6     maju,   langkah penuh, kappa = planner.kappas[0..6] (-kmax .. +kmax)
+    7..13    mundur, langkah penuh, sama
+    14..31   PENDEK: panjang {1/2, 1/4, 1/8} langkah x kappa {-kmax, 0, +kmax}
+             x {maju, mundur} - lihat aksi_info(). Hanya kemudi penuh dan
+             lurus, karena hanya itu yang dipakai Reeds-Shepp.
 
 MASK - aksi terlarang, Q-nya dibuat -inf sebelum argmax:
-    primitif yang badannya menyentuh zona di salah satu sub-titiknya
+    aksi yang badannya menyentuh zona di salah satu sub-titiknya
         (aturan A*, termasuk kelonggaran "lepas diri" bila awalnya menempel);
-    primitif yang mendarat di sel yang sudah dikunjungi (planner._key) -
-        padanan closed set, supaya rollout tidak berputar-putar;
-    SAMBUNG bila tidak ada Reeds-Shepp bebas, atau bila badan masih menempel
-        rintangan. TIDAK dibatasi jarak: A* juga mencoba Reeds-Shepp pada setiap
-        ekspansi ke-analytic_every berapa pun jaraknya, dan demonya memang
-        tersambung dari > analytic_dist. Biayanya terukur 0,3 ms rata-rata
-        (maks 0,7 ms) di jarak mana pun, jadi pembatasan tidak perlu.
+    primitif PENUH yang mendarat di sel yang sudah dikunjungi DENGAN ARAH
+        GERAK YANG SAMA (planner._key + arah) - padanan closed set supaya
+        rollout tidak berputar-putar. Arah ikut dihitung karena manuver
+        maju-mundur Reeds-Shepp memang melewati sel yang sama dua kali;
+    primitif PENDEK yang mendarat di sel HALUS yang sudah dikunjungi dengan
+        arah yang sama - sel 1/8 xy_reso (0,6 cm) dan 1/8 yaw_reso. Sel kasar
+        tidak bisa dipakai: primitif pendek hampir selalu mendarat di sel
+        kasar yang sama. Sel halus lebih kecil dari gerak terpendek (1/8
+        langkah = 0,91 cm > 0,6 x akar 2), jadi satu gerak pendek selalu
+        pindah sel, sedangkan bolak-balik ke tempat yang sama tertutup -
+        tanpa ini pencarian terbaik-dulu membuka cabang pendek yang nyaris
+        sama berulang-ulang;
+    primitif PENDEK setelah MAKS_PENDEK dipakai dalam satu episode.
 
-BIAYA per langkah = biaya ekspansi A* (reward = -biaya). Episode berakhir bila
-tersambung (SAMBUNG, atau primitif mendarat dalam toleransi tujuan), buntu
-(semua aksi ter-mask, + BIAYA_BUNTU_CM), atau melewati MAKS_LANGKAH (terpotong,
-bukan gagal - untuk DQN itu bukan keadaan terminal).
+BIAYA per langkah = rumus biaya ekspansi A* dengan panjang aksi itu
+(reward = -biaya). Untuk ekor RS jumlahnya mendekati biaya Reeds-Shepp
+(_rs_cost), tidak persis: sisa panjang dibulatkan ke 1/8 langkah. Episode
+berakhir bila TIBA (planner._at_goal), buntu (semua aksi ter-mask,
++ BIAYA_BUNTU_CM), atau melewati MAKS_LANGKAH (terpotong, bukan gagal - untuk
+DQN itu bukan keadaan terminal).
 """
 import math
 
@@ -49,10 +68,23 @@ import rencana as R
 
 N_KEMUDI = 7
 N_PRIMITIF = 2 * N_KEMUDI
-SAMBUNG = N_PRIMITIF
-N_AKSI = N_PRIMITIF + 1
+# Primitif pendek: pecahan langkah x indeks planner.kappas (kanan penuh, lurus,
+# kiri penuh) x arah. Urutannya bagian dari kontrak model - jangan diubah tanpa
+# menaikkan VERSI_AKSI.
+PECAHAN_PENDEK = (0.5, 0.25, 0.125)
+KEMUDI_PENDEK = (0, N_KEMUDI // 2, N_KEMUDI - 1)
+N_PENDEK = len(PECAHAN_PENDEK) * len(KEMUDI_PENDEK) * 2
+N_AKSI = N_PRIMITIF + N_PENDEK
 N_SINAR = 32
 N_OBS = 47
+# Dicatat di checkpoint (dqfd.meta_profil): model dengan ruang aksi lain ditolak.
+# 1 = 14 primitif + SAMBUNG (sampai 2026-10-20), 2 = full DQfD, 32 aksi.
+VERSI_AKSI = 2
+# Primitif pendek per episode. Satu segmen RS butuh <= 3 (1/2 + 1/4 + 1/8),
+# ekor RS terpanjang yang terukur 6 segmen -> 18. Sisanya cadangan.
+MAKS_PENDEK = 24
+# Sel halus untuk primitif pendek, pecahan dari xy_reso / yaw_reso perencana.
+HALUS = 8
 
 # Skala normalisasi observasi (cm). Arena 300 x 270 cm, jadi jarak ternormalisasi
 # tetap di sekitar [-1, 1].
@@ -73,26 +105,49 @@ _SINAR_ITERASI = 256
 _TETANGGA = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
 
 
+def aksi_info(planner, a):
+    """Aksi 0..N_AKSI-1 -> (arah +1/-1, kappa 1/sel, pecahan langkah 0..1)."""
+    if a < N_PRIMITIF:
+        return (1 if a < N_KEMUDI else -1), planner.kappas[a % N_KEMUDI], 1.0
+    i = a - N_PRIMITIF
+    i_pecah, sisa = divmod(i, len(KEMUDI_PENDEK) * 2)
+    i_kemudi, i_arah = divmod(sisa, 2)
+    return ((1, -1)[i_arah], planner.kappas[KEMUDI_PENDEK[i_kemudi]],
+            PECAHAN_PENDEK[i_pecah])
+
+
 def arah_kappa(planner, a):
-    """Aksi primitif 0..13 -> (arah +1/-1, kappa dalam 1/sel)."""
-    return (1 if a < N_KEMUDI else -1), planner.kappas[a % N_KEMUDI]
+    """Aksi -> (arah +1/-1, kappa dalam 1/sel). Panjangnya lihat aksi_info()."""
+    d, k, _ = aksi_info(planner, a)
+    return d, k
 
 
-def aksi_dari(planner, arah, kappa):
-    """Kebalikan arah_kappa: kappa dibulatkan ke tingkat terdekat."""
+def aksi_dari(planner, arah, kappa, pecahan=1.0):
+    """Kebalikan aksi_info: kappa dibulatkan ke tingkat terdekat.
+
+    Untuk pecahan < 1 hanya kemudi penuh dan lurus yang ada; ValueError bila
+    pecahan bukan salah satu PECAHAN_PENDEK.
+    """
     i = int(np.argmin([abs(kappa - k) for k in planner.kappas]))
-    return i + (0 if arah > 0 else N_KEMUDI)
+    if pecahan == 1.0:
+        return i + (0 if arah > 0 else N_KEMUDI)
+    if pecahan not in PECAHAN_PENDEK or i not in KEMUDI_PENDEK:
+        raise ValueError(f"tidak ada primitif pendek {pecahan} langkah, kappa {kappa:.4g}")
+    return (N_PRIMITIF + PECAHAN_PENDEK.index(pecahan) * len(KEMUDI_PENDEK) * 2
+            + KEMUDI_PENDEK.index(i) * 2 + (0 if arah > 0 else 1))
 
 
 def tabel_aksi(planner):
     """Keterangan tiap aksi: (nama, arah, kappa, sudut kemudi derajat, radius sel)."""
     baris = []
-    for a in range(N_PRIMITIF):
-        d, k = arah_kappa(planner, a)
+    for a in range(N_AKSI):
+        d, k, f = aksi_info(planner, a)
         sudut = math.degrees(math.atan(k * planner.v.L))
         radius = abs(1.0 / k) if k else float("inf")
-        baris.append((f"{'maju' if d > 0 else 'mundur'} {sudut:+.1f}", d, k, sudut, radius))
-    baris.append(("SAMBUNG", 0, 0.0, 0.0, float("inf")))
+        nama = f"{'maju' if d > 0 else 'mundur'} {sudut:+.1f}"
+        if f < 1.0:
+            nama += f" x{f:g}"
+        baris.append((nama, d, k, sudut, radius))
     return baris
 
 
@@ -122,9 +177,6 @@ class LingkunganRencana:
         self._jarak_norm = s(JARAK_NORM_CM)
         self._bebas_norm = s(BEBAS_NORM_CM)
         self._jangkau = s(SINAR_JANGKAU_CM)
-        # Batas jarak SAMBUNG - tak hingga, lihat MASK di atas. Hanya untuk
-        # percobaan; nilai terbatas membuat demo A* ada yang ter-mask.
-        self.jarak_sambung = float("inf")
         self.biaya_buntu = s(BIAYA_BUNTU_CM)
 
         # Sinar berpangkal di pusat badan, bukan di poros depan (titik acuan
@@ -156,6 +208,7 @@ class LingkunganRencana:
         self.awal = (sx, sy, syaw)
         self.tujuan = (gx, gy, gyaw)
         self._pose = []
+        self.n_pendek = 0
         self.biaya = 0.0
         self.langkah_ke = 0
         self.selesai = True
@@ -176,7 +229,11 @@ class LingkunganRencana:
         self.x, self.y, self.yaw = sx, sy, syaw
         self.d, self.k = 0, 0.0
         self.in_col = self.omap.pose_margin(v, sx, sy, syaw) <= 0
-        self.dikunjungi = {pl._key(sx, sy, syaw)}
+        # Sel awal tertutup untuk kedua arah: kembali ke pose awal tidak berguna.
+        k0 = pl._key(sx, sy, syaw)
+        self.dikunjungi = {(k0, 1), (k0, -1)}
+        h0 = self._key_halus(sx, sy, syaw)
+        self.dikunjungi_halus = {(h0, 1), (h0, -1)}
         self.selesai = False
         self._hitung_calon()
         if not self._mask.any():
@@ -209,20 +266,18 @@ class LingkunganRencana:
 
         pl = self.planner
         info = {"alasan": "", "terpotong": False}
-        if a == SAMBUNG:
-            poses, biaya = self._calon[SAMBUNG]
-            self.x, self.y, self.yaw = poses[-1][0], poses[-1][1], poses[-1][2]
-            self.selesai = self.sukses = True
-            info["alasan"] = "tersambung"
+        poses, biaya, col = self._calon[a]
+        nd, nk, pecahan = aksi_info(pl, a)
+        self.x, self.y, self.yaw = poses[-1][0], poses[-1][1], poses[-1][2]
+        self.d, self.k, self.in_col = nd, nk, col
+        if pecahan < 1.0:
+            self.n_pendek += 1
+            self.dikunjungi_halus.add((self._key_halus(self.x, self.y, self.yaw), nd))
         else:
-            poses, biaya, col = self._calon[a]
-            nd, nk = arah_kappa(pl, a)
-            self.x, self.y, self.yaw = poses[-1][0], poses[-1][1], poses[-1][2]
-            self.d, self.k, self.in_col = nd, nk, col
-            self.dikunjungi.add(pl._key(self.x, self.y, self.yaw))
-            if pl._at_goal(self.x, self.y, self.yaw, self.tujuan):
-                self.selesai = self.sukses = True
-                info["alasan"] = "tiba"
+            self.dikunjungi.add((pl._key(self.x, self.y, self.yaw), nd))
+        if pl._at_goal(self.x, self.y, self.yaw, self.tujuan):
+            self.selesai = self.sukses = True
+            info["alasan"] = "tiba"
 
         self._pose.extend(poses)
         self.biaya += biaya
@@ -250,11 +305,11 @@ class LingkunganRencana:
         dicoba tetap tertutup - padanan closed set A*, supaya cabang yang sama
         tidak dijelajahi dua kali."""
         return (self.x, self.y, self.yaw, self.d, self.k, self.in_col,
-                len(self._pose), self.biaya, self.langkah_ke)
+                len(self._pose), self.biaya, self.langkah_ke, self.n_pendek)
 
     def pulihkan_keadaan(self, s):
         (self.x, self.y, self.yaw, self.d, self.k, self.in_col,
-         n, self.biaya, self.langkah_ke) = s
+         n, self.biaya, self.langkah_ke, self.n_pendek) = s
         del self._pose[n:]
         self.selesai = self.sukses = False
         self._hitung_calon()          # mask baru: sel yang dikunjungi sejak itu ikut tertutup
@@ -267,46 +322,57 @@ class LingkunganRencana:
 
     # -------------------------------------------------------------- calon
     def _hitung_calon(self):
-        """Hitung ke-15 aksi dari keadaan sekarang: hasil + mask. Dipakai ulang step()."""
+        """Hitung semua aksi dari keadaan sekarang: hasil + mask. Dipakai ulang step()."""
         pl = self.planner
         self._calon = [None] * N_AKSI
         self._mask = np.zeros(N_AKSI, dtype=bool)
-        for a in range(N_PRIMITIF):
-            nd, nk = arah_kappa(pl, a)
+        pendek_habis = self.n_pendek >= MAKS_PENDEK
+        for a in range(N_AKSI):
+            nd, nk, pecahan = aksi_info(pl, a)
             if nd < 0 and not self.boleh_mundur:
                 continue
-            hasil = self._ekspansi(nd, nk)
+            if pecahan < 1.0 and pendek_habis:
+                continue
+            hasil = self._ekspansi(nd, nk, pecahan)
             if hasil is None:
                 continue
             px, py, pyaw = hasil[0][-1][:3]
-            if pl._key(px, py, pyaw) in self.dikunjungi:
+            if pecahan == 1.0 and (pl._key(px, py, pyaw), nd) in self.dikunjungi:
+                continue
+            if pecahan < 1.0 and (self._key_halus(px, py, pyaw), nd) in self.dikunjungi_halus:
                 continue
             self._calon[a] = hasil
             self._mask[a] = True
 
-        gx, gy = self.tujuan[0], self.tujuan[1]
-        if not self.in_col and math.hypot(gx - self.x, gy - self.y) < self.jarak_sambung:
-            rs = pl._analytic(self.omap, (self.x, self.y, self.yaw, self.d, self.k), self.tujuan)
-            if rs is not None:
-                self._calon[SAMBUNG] = rs
-                self._mask[SAMBUNG] = True
+    def _key_halus(self, x, y, yaw):
+        """Sel halus (1/HALUS sel A*) untuk aturan sel tertutup primitif pendek."""
+        pl = self.planner
+        r, ry = pl.xy_reso / HALUS, pl.yaw_reso / HALUS
+        return int(x // r), int(y // r), int((yaw % (2.0 * math.pi)) // ry)
 
-    def _ekspansi(self, nd, nk):
-        """Satu primitif dari keadaan sekarang -> (poses, biaya, masih_menempel) atau None.
+    def _ekspansi(self, nd, nk, pecahan=1.0):
+        """Satu aksi dari keadaan sekarang -> (poses, biaya, masih_menempel) atau None.
 
-        SALINAN aritmetika loop ekspansi HybridAStarPlanner.plan(), dengan
-        urutan operasi yang sama - supaya jalur dan biaya sama sampai bit
-        terakhir, bukan hanya mirip.
+        Untuk primitif PENUH ini SALINAN aritmetika loop ekspansi
+        HybridAStarPlanner.plan(), dengan urutan operasi yang sama - supaya
+        jalur dan biaya sama sampai bit terakhir, bukan hanya mirip. Primitif
+        pendek memakai rumus yang sama dengan panjang pecahan x step, dibagi
+        sub-titik selebar-lebarnya sample_ds seperti sample_rs_path.
         """
         pl, omap, v = self.planner, self.omap, self.v
         x, y, yaw = self.x, self.y, self.yaw
         in_col = self.in_col
         m0 = omap.pose_margin(v, x, y, yaw) if in_col else 0.0
-        ds = nd * pl.step / pl.n_sub
+        if pecahan == 1.0:
+            panjang, n_sub = pl.step, pl.n_sub
+        else:
+            panjang = pecahan * pl.step
+            n_sub = max(1, math.ceil(panjang / pl.sample_ds))
+        ds = nd * panjang / n_sub
         px, py, pyaw = x, y, yaw
         poses = []
         col, last_m, min_m = in_col, m0, float("inf")
-        for _ in range(pl.n_sub):
+        for _ in range(n_sub):
             if nk == 0.0:
                 px += ds * math.cos(pyaw)
                 py += ds * math.sin(pyaw)
@@ -323,13 +389,13 @@ class LingkunganRencana:
                 return None
             last_m = m
             poses.append((px, py, pyaw, nd))
-        cost = pl.step * (1.0 if nd > 0 else pl.reverse_cost)
-        cost += pl.steer_cost * pl.step * abs(nk) / pl.kappa_max
+        cost = panjang * (1.0 if nd > 0 else pl.reverse_cost)
+        cost += pl.steer_cost * panjang * abs(nk) / pl.kappa_max
         cost += pl.steer_change_cost * abs(nk - self.k) / pl.kappa_max
         if self.d != 0 and nd != self.d:
             cost += pl.switch_cost
         if min_m != float("inf"):
-            cost += pl._clearance_penalty(min_m, pl.step)
+            cost += pl._clearance_penalty(min_m, panjang)
         return poses, cost, col
 
     # ---------------------------------------------------------- observasi

@@ -83,6 +83,9 @@ GAS_PULANG_SPS = 4000        # laju leg pulang; mundur selalu pelan
 #   pos, rc, dir, drv  pelengkap untuk membaca ulang kejadiannya
 KOLOM_TELEMETRI = ("tgt_sps", "sps", "pos", "rc", "dir", "drv")
 
+# max_steer_deg robot di konfig.ROBOT sebelum diganti --kemudi-maks (lihat main).
+KEMUDI_KONFIG = None
+
 
 # ===========================================================================
 # PEREKAM
@@ -514,16 +517,38 @@ class Pelaksana:
                 self.pulang(sps, 0.0, self.args.detik_lurus)
         return hasil
 
+    def detik_busur(self, deg):
+        """Durasi busur: --detik-busur, tapi robot berputar paling banyak setengah putaran.
+
+        Laju diukur dari tali busur ujung-ke-ujung (laju_dan_kelengkungan), yang
+        tidak sah lagi begitu robot berputar penuh - tali kembali ke nol dan
+        hasilnya NaN. Di 4000 sps itu terjadi mulai ~60 deg dalam 9 detik
+        (R 13 cm, ~1,0 putaran). Setengah putaran menyisakan dua kali lipat
+        cadangan bila roda ternyata berbelok lebih tajam dari yang diminta.
+        Sampai 35 deg batas ini tidak tercapai, jadi durasinya tetap 9 detik.
+        """
+        v = abs(self.args.sps_busur) * konfig.CM_PER_STEP
+        w = v * math.tan(math.radians(abs(deg))) / konfig.WHEELBASE_CM
+        transien = konfig.SIM_KEMUDI_TUNDA_S + 3.0 * konfig.SIM_KEMUDI_TAU_S
+        if w <= 1e-9:
+            return self.args.detik_busur
+        return min(self.args.detik_busur, math.pi / w + transien)
+
     def busur(self):
-        print("\n--- BUSUR: penguatan kemudi & kejenuhan ---")
+        a = self.args
+        sudut = np.arange(a.busur_dari, a.busur_sampai + 1e-9, a.busur_langkah)
+        print(f"\n--- BUSUR: penguatan kemudi & kejenuhan "
+              f"({a.busur_dari:g}..{a.busur_sampai:g} deg, langkah {a.busur_langkah:g}) ---")
         hasil = []
-        for deg in (5, 10, 15, 20, 25, 30, 35):
+        for deg in sudut:
+            deg = float(deg)
+            detik = self.detik_busur(deg)
             for tanda in (1, -1):
-                r = self.manuver(f"busur_{tanda * deg:+03d}", self.args.sps_busur,
-                                 tanda * deg, self.args.detik_busur)
+                r = self.manuver(f"busur_{tanda * deg:+03.0f}", a.sps_busur,
+                                 tanda * deg, detik)
                 if r:
                     hasil.append(r)
-                self.pulang(self.args.sps_busur, tanda * deg, self.args.detik_busur)
+                self.pulang(a.sps_busur, tanda * deg, detik)
         return hasil
 
     def tangga(self):
@@ -811,9 +836,17 @@ def cocokkan_busur(rekaman):
         else:
             print(f"  -> STEER_SERVO_PER_DEG sebaiknya "
                   f"{konfig.STEER_SERVO_PER_DEG / g:.3f} (sekarang {konfig.STEER_SERVO_PER_DEG:.3f})")
+    else:
+        print("  Penguatan kemudi tidak dihitung: butuh >= 2 busur pada sudut <= 20 deg.")
     jenuh = np.nanmax(np.abs(dn))
+    sekarang = KEMUDI_KONFIG if KEMUDI_KONFIG is not None else konfig.MAX_STEER_DEG
     print(f"  Sudut nyata terbesar yang tercapai: {jenuh:.1f} deg "
-          f"-> MAX_STEER_DEG sebaiknya <= {jenuh:.0f} (sekarang {konfig.MAX_STEER_DEG:.0f})")
+          f"-> MAX_STEER_DEG sebaiknya <= {jenuh:.0f} (sekarang {sekarang:.1f})")
+    terpotong = np.abs(dm) > konfig.MAX_STEER_DEG + 1e-9
+    if terpotong.any():
+        print(f"  PERINGATAN: perintah {sorted(set(np.abs(dm[terpotong]).tolist()))} deg melebihi "
+              f"batas kemudi saat uji ({konfig.MAX_STEER_DEG:.1f}) dan TERPOTONG sebelum")
+        print(f"  dikirim. Kejenuhan di sana adalah batas program, bukan batas roda.")
 
 
 def cocokkan_tangga(rekaman):
@@ -1648,6 +1681,7 @@ def cocokkan_gas(rekaman):
 
 # ===========================================================================
 def main():
+    global KEMUDI_KONFIG
     ap = argparse.ArgumentParser(description="Identifikasi parameter robot")
     ap.add_argument("--id", type=int, default=konfig.ROBOT_ID,
                     help=f"robot yang diukur, lihat konfig.ROBOT (bawaan {konfig.ROBOT_ID})")
@@ -1690,11 +1724,48 @@ def main():
     ap.add_argument("--dari", default=None, metavar="FOLDER",
                     help="analisis ulang lintasan gas yang sudah terekam di FOLDER "
                          "(logs_identifikasi/...), tanpa robot dan tanpa kamera")
+    # Rentang sudut busur. Bawaan 5..35 seperti semula; untuk mencari batas roda
+    # setelah perbaikan mekanisme mis. --busur-dari 30 --busur-sampai 70.
+    ap.add_argument("--busur-dari", type=float, default=5.0, metavar="DEG")
+    ap.add_argument("--busur-sampai", type=float, default=35.0, metavar="DEG")
+    ap.add_argument("--busur-langkah", type=float, default=5.0, metavar="DEG")
+    ap.add_argument("--kemudi-maks", type=float, default=None, metavar="DEG",
+                    help="batas kemudi SELAMA identifikasi, menggantikan max_steer_deg "
+                         "robot (bawaan: terbesar dari 35 dan --busur-sampai)")
+    # Tabel kompensasi kemudi (konfig.ROBOT kemudi_kiri/_kanan) HARUS diukur dari
+    # kemudi mentah - dengan kompensasi aktif, uji busur mengukur hasil
+    # kompensasinya, dan tabel baru dari situ akan mengoreksi dua kali.
+    ap.add_argument("--tanpa-kompensasi", action="store_true",
+                    help="matikan kompensasi kemudi per sisi (untuk membuat ulang tabelnya)")
     args = ap.parse_args()
+    if not 0 < args.busur_dari <= args.busur_sampai or args.busur_langkah <= 0:
+        ap.error("butuh 0 < --busur-dari <= --busur-sampai dan --busur-langkah > 0")
+    if args.kemudi_maks is None:
+        args.kemudi_maks = max(35.0, args.busur_sampai)
+
+    # Batas kemudi dilepas dulu. robot.steer_ke_servo memotong setiap perintah ke
+    # max_steer_deg robot, jadi tanpa ini uji busur hanya mengukur batas itu
+    # sendiri: ID 02 (batas 22,0) "jenuh" di ~22 pada 2026-10-20, dan uji
+    # 2026-09-30 20:46 (batas waktu itu 23,5) "jenuh" di 22,2-23,7 - angka yang
+    # lalu dipakai menurunkan batasnya ke 22,0. Diganti di tabel ROBOT sebelum
+    # pilih_robot, supaya pemotongan robot.py, ramalan pengaman (state_space),
+    # dan simulator memakai batas yang sama. Batas sudut servo firmware
+    # (STEER_SERVO_MIN/MAX) tetap berlaku.
+    if args.id in konfig.ROBOT:
+        KEMUDI_KONFIG = konfig.ROBOT[args.id]["max_steer_deg"]
+        konfig.ROBOT[args.id] = dict(konfig.ROBOT[args.id], max_steer_deg=args.kemudi_maks)
+        if args.tanpa_kompensasi:
+            konfig.ROBOT[args.id].update(kemudi_kiri=None, kemudi_kanan=None)
+        ada = [s for s in ("kemudi_kiri", "kemudi_kanan") if konfig.ROBOT[args.id].get(s)]
+        print(f"[i] Kompensasi kemudi: {', '.join(ada) if ada else 'TIDAK aktif'}"
+              + (" - hasil busur = kemudi SETELAH kompensasi" if ada else ""))
 
     # Sebelum --dari juga: analisis ulang memakai CM_PER_STEP dan ACCEL_SPS2,
     # yang berbeda per robot.
     konfig.pilih_robot(args.id)
+    if KEMUDI_KONFIG is not None and KEMUDI_KONFIG != args.kemudi_maks:
+        print(f"[i] Batas kemudi selama identifikasi {args.kemudi_maks:.1f} deg "
+              f"(konfig.ROBOT: {KEMUDI_KONFIG:.1f}) - lihat --kemudi-maks")
     print(f"[i] Robot ID {konfig.ROBOT_ID:02d}: topik {konfig._PREFIX}/#, "
           f"tag {konfig.TAG_ID_ROBOT}, str_center {konfig.STEER_SERVO_CENTER}")
 

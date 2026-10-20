@@ -27,8 +27,14 @@ model_dqn/id0N.pt = checkpoint dengan SKOR TERBAIK, id0N_akhir.pt = terakhir.
 
 PUTARAN 2 (2026-09-30), dari hasil putaran 1: set validasi & model terbaik,
 evaluasi dengan mode mundur, fase B lebih stabil (--lr-mandiri, --lam-n-mandiri),
-latihan sendiri lebih sering di Rumah (--porsi-rumah), pra-latih 20k (putaran 1
-mentok di ~5k) dan latihan sendiri 150k.
+latihan sendiri lebih sering di peta tersulit (dulu Rumah), pra-latih 20k
+(putaran 1 mentok di ~5k) dan latihan sendiri 150k.
+
+FULL DQfD (2026-10-20): ruang aksi versi 2 (lingkungan.VERSI_AKSI) - 32 aksi,
+tanpa SAMBUNG. Peta tidak lagi ditulis mati: jenis peta dibaca dari dataset,
+dan PETA TERSULIT = jenis peta asli dengan waktu A* rata-rata terbesar di
+dataset (dipakai untuk porsi latihan sendiri --porsi-sulit, rute validasi
+terbanyak, dan pengukuran waktu). GPU: --perangkat auto|cuda|cpu.
 """
 import argparse
 import json
@@ -48,20 +54,38 @@ from drl import rollout as RO                   # noqa: E402
 from drl import skenario as S                   # noqa: E402
 from drl.dqfd import AgenDQfD, Buffer, meta_profil  # noqa: E402
 from drl.jaringan import SKALA_REWARD, bermask  # noqa: E402
-from drl.perencana_dqfd import rencanakan       # noqa: E402
+from drl.perencana_dqfd import hitung_ganti_arah, rencanakan, rincian_fase  # noqa: E402
 from drl.visual_neuron import Dasbor            # noqa: E402
 
 AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIR_MODEL = os.path.join(AKAR, "model_dqn")
-BATAS_LANGKAH_EVAL = 200          # demo terpanjang 126 langkah
+# Demo terpanjang 126 langkah sebelum full DQfD; ekor RS yang diurai menambah
+# rata-rata ~16 aksi (maks ~24 pendek + primitif penuhnya).
+BATAS_LANGKAH_EVAL = 250
 PORSI_DEMO_MANDIRI = 0.7
-# Rute validasi per jenis peta. Rumah terbanyak: di sana mutu jalur terburuk.
-N_VALIDASI = {"Kalibrasi": 20, "Rumah2": 40, "Rumah": 60, "sintetis": 40}
+# Rute validasi per jenis peta. Peta tersulit terbanyak: di sana mutu jalur terburuk.
+N_VALIDASI_JENIS = 40
+N_VALIDASI_SULIT = 60
 BOBOT_P90 = 10.0
 
 
 def _jenis(p):
     return p.split(":")[0]
+
+
+def jenis_peta(d):
+    """(semua jenis peta di dataset, jenis tersulit, porsi episode per jenis)."""
+    jenis = np.array([_jenis(p) for p in d["ep_peta"]])
+    semua = sorted(set(jenis))
+    asli = [j for j in semua if j != "sintetis"] or semua
+    sulit = max(asli, key=lambda j: float(np.mean(d["ep_waktu_astar"][jenis == j])))
+    porsi = {j: float(np.mean(jenis == j)) for j in semua}
+    return semua, sulit, porsi
+
+
+def jumlah_validasi(d):
+    semua, sulit, _ = jenis_peta(d)
+    return {j: N_VALIDASI_SULIT if j == sulit else N_VALIDASI_JENIS for j in semua}
 
 
 def pilih_per_jenis(d, episode, jumlah):
@@ -80,7 +104,9 @@ def pilih_probe(d, episode):
     lk = d["ep_langkah"]
     episode = np.asarray(episode)
     out = []
-    for j, (lo, hi) in (("Rumah", (15, 40)), ("sintetis", (8, 30)), ("Rumah2", (6, 25)), ("Kalibrasi", (2, 10))):
+    semua, sulit, _ = jenis_peta(d)
+    for j in [sulit] + [x for x in semua if x != sulit]:
+        lo, hi = (15, 50) if j == sulit else (8, 40)
         idx = episode[(jenis[episode] == j) & (lk[episode] >= lo) & (lk[episode] <= hi)]
         if len(idx):
             out.append(int(idx[len(idx) // 2]))
@@ -100,7 +126,8 @@ class Evaluator:
     def __init__(self, d, neg, pabrik, episode, n_negatif, anggaran=600):
         self.pabrik = pabrik
         self.anggaran = anggaran
-        self.sk = [RO.dari_demo(d, e) for e in pilih_per_jenis(d, episode, N_VALIDASI)]
+        self.jenis, self.sulit, _ = jenis_peta(d)
+        self.sk = [RO.dari_demo(d, e) for e in pilih_per_jenis(d, episode, jumlah_validasi(d))]
         idx = np.concatenate([np.arange(d["ep_mulai"][e], d["ep_mulai"][e] + d["ep_langkah"][e])
                               for e in episode])
         self.obs_uji = torch.as_tensor(d["obs"][idx])
@@ -110,12 +137,22 @@ class Evaluator:
         if neg is not None:
             ok = np.flatnonzero(neg["alasan"] == "tidak ada jalur")
             jenis = np.array([_jenis(p) for p in neg["peta"]])
-            for j in S.KOMPOSISI:
+            for j in self.jenis:
                 self.neg += [RO.dari_negatif(neg, i) for i in ok[jenis[ok] == j][:max(1, n_negatif // 4)]]
-        rumah = [s for s in self.sk if s.peta == "Rumah"][:8]
-        self.sk_waktu = rumah
-        self.ms_astar = float(np.mean([d["ep_waktu_astar"][int(s.nama.split("#")[1])] for s in rumah]) * 1000) \
-            if rumah else float("nan")
+        # Pembanding mutu pendaratan: titik balik demo (A* + RS) di dalam radius dekat.
+        self.balik_demo = {}
+        for sk in self.sk:
+            env, obs, _ = pabrik.buat(sk)
+            if obs is None:
+                continue
+            for a in sk.aksi_demo:
+                env.step(int(a))
+            self.balik_demo[sk.nama] = hitung_ganti_arah(env.jalur(), env.tujuan,
+                                                         env.planner.analytic_dist)[1]
+        sulit = [s for s in self.sk if _jenis(s.peta) == self.sulit][:8]
+        self.sk_waktu = sulit
+        self.ms_astar = float(np.mean([d["ep_waktu_astar"][int(s.nama.split("#")[1])] for s in sulit]) * 1000) \
+            if sulit else float("nan")
 
     def __call__(self, net):
         with torch.no_grad():
@@ -137,13 +174,17 @@ class Evaluator:
                 hm.append({"sk": sk, "sukses": False, "rasio": None})
                 continue
             r = rencanakan(net, env, mundur=True, anggaran=self.anggaran)
-            hm.append({"sk": sk, "sukses": r["sukses"],
+            hm.append({"sk": sk, "sukses": r["sukses"], **rincian_fase(env, r),
                        "rasio": env.biaya / sk.biaya_astar if r["sukses"] else None})
         rasio_m = [x["rasio"] for x in hm if x["sukses"]]
         tiba_m = 100.0 * len(rasio_m) / max(1, len(hm))
+        tiba_hm = [x for x in hm if x["sukses"]]
+        balik_dekat = float(np.mean([x["ganti_arah_dekat"] for x in tiba_hm])) if tiba_hm else float("nan")
+        balik_demo = float(np.mean([self.balik_demo.get(x["sk"].nama, 0) for x in tiba_hm])) \
+            if tiba_hm else float("nan")
         p90_m = float(np.percentile(rasio_m, 90)) if rasio_m else float("nan")
         per_jenis = {}
-        for j in S.KOMPOSISI:
+        for j in self.jenis:
             hj = [x for x in hm if _jenis(x["sk"].peta) == j]
             per_jenis[j] = 100.0 * sum(x["sukses"] for x in hj) / max(1, len(hj))
         return {
@@ -158,6 +199,9 @@ class Evaluator:
             "neg_jalur": 100.0 * sum(x["sukses"] for x in hn) / max(1, len(hn)),
             "ms_dqfd": ms, "ms_astar": self.ms_astar,
             "tiba_per_jenis": per_jenis,
+            "gagal_jauh": 100.0 * sum(x.get("fase") == "gagal_jauh" for x in hm) / max(1, len(hm)),
+            "gagal_dekat": 100.0 * sum(x.get("fase") == "gagal_dekat" for x in hm) / max(1, len(hm)),
+            "balik_dekat": balik_dekat, "balik_dekat_demo": balik_demo,
             "alasan_gagal": {a: sum(x["alasan"] == a for x in h if not x["sukses"])
                              for a in {x["alasan"] for x in h if not x["sukses"]}},
         }
@@ -224,7 +268,8 @@ def latih_robot(rid, args, device):
     total = args.pra + int(args.mandiri * args.rasio)
     riw = {"latih": {k: [] for k in ("langkah", "j_dq", "j_n", "j_e", "q", "setuju_batch")},
            "eval": {k: [] for k in ("langkah", "setuju", "tiba", "rasio_median", "neg_buntu", "ms_dqfd",
-                                     "tiba_mundur", "rasio_p90_mundur", "skor")},
+                                     "tiba_mundur", "rasio_p90_mundur", "skor", "gagal_jauh",
+                                     "gagal_dekat", "balik_dekat", "balik_dekat_demo")},
            "batas_fase": []}
     ema = {}
     t0 = time.time()
@@ -236,6 +281,7 @@ def latih_robot(rid, args, device):
     print(f"\n=== ID {rid:02d}: {len(latih_ep)} episode demo latih ({n_demo} transisi), "
           f"validasi {len(val_ep)} episode ({len(evaluator.sk)} rute dievaluasi) + {len(evaluator.neg)} negatif, "
           f"target {total} langkah gradien, perangkat {device}")
+    print(f"    peta: {', '.join(evaluator.jenis)} | tersulit (waktu A* terbesar): {evaluator.sulit}")
 
     def catat(m):
         for k in ("j_dq", "j_n", "j_e", "q", "setuju_batch"):
@@ -269,6 +315,8 @@ def latih_robot(rid, args, device):
         print(f"  [{(time.time() - t0) / 60:5.1f} mnt] {fase:<8} langkah {agen.langkah:>7}  "
               f"setuju {ev['setuju']:5.1f}%  tiba greedy {ev['tiba']:5.1f}% / mundur {ev['tiba_mundur']:5.1f}%  "
               f"rasio p90 {ev['rasio_p90_mundur']:.2f}  skor {ev['skor']:6.1f}  "
+              f"gagal jauh/dekat {ev['gagal_jauh']:4.1f}/{ev['gagal_dekat']:4.1f}%  "
+              f"balik<60cm {ev['balik_dekat']:.2f} (demo {ev['balik_dekat_demo']:.2f})  "
               f"J_E {ema.get('j_e', 0):.3f}  J_n {ema.get('j_n', 0):.3f}{tanda}", flush=True)
         return ev
 
@@ -303,20 +351,20 @@ def latih_robot(rid, args, device):
             g["lr"] = args.lr_mandiri
         agen.lam_n = args.lam_n_mandiri
         agen.sinkron_cpu()
-        rumah_ep = latih_ep[np.array([_jenis(p) for p in d["ep_peta"][latih_ep]]) == "Rumah"]
+        _, peta_sulit, porsi_jenis = jenis_peta(d)
+        sulit_ep = latih_ep[np.array([_jenis(p) for p in d["ep_peta"][latih_ep]]) == peta_sulit]
         kumpulan = RO.KumpulanRollout(pabrik, args.n_slot)
         pool_sintetis = [f"sintetis:{90_000_000 + rid * 100_000 + k}" for k in range(200)]
-        peta_acak = [p for p in S.KOMPOSISI if p != "sintetis"]
         langkah_env, utang = 0, 0.0
         tiba_ema = None
 
         def skenario_baru():
-            rumah = rng.random() < args.porsi_rumah
+            sulit = rng.random() < args.porsi_sulit
             if rng.random() < PORSI_DEMO_MANDIRI:
-                return RO.dari_demo(d, int(rng.choice(rumah_ep if rumah and len(rumah_ep) else latih_ep)))
-            if rumah:
-                return pabrik.acak(rng, "Rumah")
-            p = S.KOMPOSISI
+                return RO.dari_demo(d, int(rng.choice(sulit_ep if sulit and len(sulit_ep) else latih_ep)))
+            if sulit and peta_sulit != "sintetis":
+                return pabrik.acak(rng, peta_sulit)
+            p = porsi_jenis
             j = rng.choice(list(p), p=np.array(list(p.values())) / sum(p.values()))
             peta = pool_sintetis[int(rng.integers(len(pool_sintetis)))] if j == "sintetis" else j
             return pabrik.acak(rng, peta)
@@ -369,7 +417,8 @@ def main():
     ap.add_argument("--mandiri", type=int, default=150000, help="langkah lingkungan latihan sendiri")
     ap.add_argument("--lr-mandiri", type=float, default=5e-5, help="learning rate fase B")
     ap.add_argument("--lam-n-mandiri", type=float, default=0.5, help="bobot J_n fase B")
-    ap.add_argument("--porsi-rumah", type=float, default=0.5, help="porsi skenario Rumah di fase B")
+    ap.add_argument("--porsi-sulit", type=float, default=0.5,
+                    help="porsi skenario peta tersulit di fase B (dulu --porsi-rumah)")
     ap.add_argument("--rasio", type=float, default=0.5, help="langkah gradien per langkah lingkungan")
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--lr", type=float, default=1e-4)
@@ -388,10 +437,23 @@ def main():
     ap.add_argument("--data", default=S.DIR_DATA)
     ap.add_argument("--keluar", default=DIR_MODEL)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--cpu", action="store_true", help="paksa latih di CPU")
+    ap.add_argument("--perangkat", default="auto", choices=["auto", "cuda", "cpu"],
+                    help="auto = GPU (CUDA) bila ada; cuda = WAJIB GPU, berhenti bila tidak ada")
+    ap.add_argument("--cpu", action="store_true", help="sama dengan --perangkat cpu")
     args = ap.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
+    if args.cpu or args.perangkat == "cpu":
+        device = "cpu"
+    elif torch.cuda.is_available():
+        device = "cuda"
+        print(f"[i] GPU: {torch.cuda.get_device_name(0)} (PyTorch {torch.__version__}, "
+              f"CUDA {torch.version.cuda})")
+    elif args.perangkat == "cuda":
+        raise SystemExit(f"[!] --perangkat cuda, tapi PyTorch {torch.__version__} tidak melihat GPU. "
+                         f"Pasang PyTorch versi CUDA (pytorch.org) atau periksa driver NVIDIA.")
+    else:
+        device = "cpu"
+        print("[!] GPU tidak terdeteksi - latih di CPU (jauh lebih lambat).")
     for rid in [int(t) for t in args.id.split(",") if t.strip()]:
         if latih_robot(rid, args, device) == "semua":
             print("[i] dihentikan (ESC)")

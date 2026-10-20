@@ -143,6 +143,10 @@ class Unit:
         self.state = SIAP
         self.tujuan = None
         self.jalur = None
+        # Jumlah titik di ujung self.jalur yang berasal dari tembakan
+        # Reeds-Shepp; sisanya primitif Hybrid A* (atau aksi DQfD). Hanya
+        # bermakna selama self.jalur ada - diisi bersamanya di ambil_hasil().
+        self.jalur_rs = 0
         self.tracker = None
         self.pose = None
         self.perintah = None
@@ -509,6 +513,7 @@ class Unit:
                   f"({info.get('waktu_s', 0) * 1000:.0f} ms)")
             return
         self.jalur = jalur
+        self.jalur_rs = info.get("rs_titik", 0)
         # Kendaraan yang dipakai pelacak HARUS yang sama dengan yang dipakai
         # merencanakan: kalau perencana terpaksa mundur ke margin lebih kecil,
         # pelacak yang memakai margin penuh akan mengira jalurnya sendiri sempit
@@ -529,7 +534,8 @@ class Unit:
             self._minggir = dict(pose=info["minggir"], lawan=info["lawan"])
             self.alasan = f"minggir memberi jalan ke robot {info['lawan']:02d}"
         catatan = " (MINGGIR)" if self._minggir else " (MEMUTARI ROBOT LAIN)" if hindar else ""
-        print(f"[OK] {self.id:02d}: jalur {info['panjang_cm']:.0f} cm, {info['titik']} titik, "
+        print(f"[OK] {self.id:02d}: jalur {info['panjang_cm']:.0f} cm, {info['titik']} titik "
+              f"(Reeds-Shepp {self.jalur_rs}), "
               f"{info['waktu_s'] * 1000:.0f} ms oleh {info.get('perencana', 'A*')}, "
               f"margin {info['margin_cm']:.0f} cm"
               f"{' (DITURUNKAN)' if info.get('margin_turun') else ''}{catatan}"
@@ -800,7 +806,8 @@ class Unit:
         ctx = self.arena.ctx
         warna_id = WARNA_ID.get(self.id, (255, 255, 255))
         if self.jalur:
-            R.gambar_jalur(img, self.arena, self.jalur)
+            # Warna membedakan bagian Hybrid A* dan Reeds-Shepp - R.LEGENDA_JALUR.
+            R.gambar_jalur(img, self.arena, self.jalur, rs_titik=self.jalur_rs)
 
         if multi and self.nav.show_bayangan and self.bayangan:
             w = WARNA[MENUNGGU] if self.state == MENUNGGU else warna_id
@@ -1018,6 +1025,7 @@ class Navigasi:
         if self.multi:
             bantu = "1/2: pilih robot | " + bantu + " | b: bayangan"
         AC.label(img, bantu, (10, img.shape[0] - 10), (230, 230, 230), 0.45)
+        AC.label(img, R.LEGENDA_JALUR, (10, img.shape[0] - 30), (230, 230, 230), 0.45)
         if any(u.state == BAHAYA or u.langgar_diam for u in self.units):
             cv2.rectangle(img, (0, 0), (img.shape[1] - 1, img.shape[0] - 1), (0, 0, 255), 8)
         return img

@@ -3,8 +3,8 @@ visual_neuron.py - dasbor pelatihan DQfD: progres, simulasi perencanaan, jaringa
 
     +-----------------------------+------------------------------------------+
     | SIMULASI: jaringan menyusun | JARINGAN: input 47, aktivasi FC1/FC2     |
-    | jalur primitif demi         | (16x16), cabang V/A (8x16), Q 15 aksi,   |
-    | primitif; kipas 14 calon    | perkiraan vs kenyataan biaya-sisa        |
+    | jalur primitif demi         | (16x16), cabang V/A (8x16), Q 32 aksi,   |
+    | primitif; kipas 32 calon    | perkiraan vs kenyataan biaya-sisa        |
     | diwarnai Q; 32 sinar; A*    |                                          |
     +-----------------------------+------------------------------------------+
     | PETA NILAI -V(x,y) di       | PROGRES: fase, langkah, loss, % setuju,  |
@@ -355,7 +355,8 @@ class Dasbor:
 
     def _panel_jaringan(self, img, rect):
         x0, y0, w, h = rect
-        _teks(img, "JARINGAN  47 -> 256 -> 256 -> V 128 / A 128 -> Q 15", (x0 + 15, y0 + 18), 0.5, KUNING)
+        _teks(img, f"JARINGAN  {L.N_OBS} -> 256 -> 256 -> V 128 / A 128 -> Q {L.N_AKSI}",
+              (x0 + 15, y0 + 18), 0.5, KUNING)
         fr = getattr(self, "frame", None)
         if fr is None:
             return
@@ -384,19 +385,22 @@ class Dasbor:
         _teks(img, "Q -> biaya-sisa (sel)", (xq, yq - 8), 0.42)
         sah = biaya[mask]
         lo, hi = (sah.min(), sah.max()) if len(sah) else (0, 1)
+        # 32 baris harus muat di panel atas (sampai y 580): 16 px per baris.
+        baris_px = 16
         for i in range(L.N_AKSI):
-            yy = yq + i * 21
+            yy = yq + i * baris_px
             nama = self.label_aksi[i] if self.label_aksi else str(i)
             warna_t = TEKS if mask[i] else (90, 90, 90)
-            _teks(img, nama.replace("maju", "M").replace("mundur", "R"), (xq, yy + 13), 0.38, warna_t)
+            _teks(img, nama.replace("maju", "M").replace("mundur", "R"), (xq, yy + 11), 0.32, warna_t)
             if mask[i]:
-                pj = int(12 + 100 * (1 - (biaya[i] - lo) / (hi - lo))) if hi > lo else 112
+                pj = int(12 + 70 * (1 - (biaya[i] - lo) / (hi - lo))) if hi > lo else 82
                 warna = KUNING if i == fr["a"] else (150, 150, 150)
-                cv2.rectangle(img, (xq + 62, yy + 3), (xq + 62 + pj, yy + 16), warna, -1)
-                _teks(img, f"{biaya[i]:.0f}", (xq + 178, yy + 13), 0.36, warna_t)
+                cv2.rectangle(img, (xq + 92, yy + 2), (xq + 92 + pj, yy + 13), warna, -1)
+                _teks(img, f"{biaya[i]:.0f}", (xq + 178, yy + 11), 0.32, warna_t)
             if fr["a_astar"] == i:
-                cv2.rectangle(img, (xq + 60, yy + 1), (xq + 176, yy + 18), WARNA_ASTAR, 1)
-        _teks(img, "kuning: dipilih   kotak biru: pilihan A*", (xq, yq + 15 * 21 + 12), 0.36, REDUP)
+                cv2.rectangle(img, (xq + 90, yy), (xq + 176, yy + 15), WARNA_ASTAR, 1)
+        _teks(img, "kuning: dipilih   kotak biru: pilihan demo (A* + RS)",
+              (xq, yq + L.N_AKSI * baris_px + 10), 0.32, REDUP)
 
         # perkiraan vs kenyataan biaya-sisa sepanjang rollout
         v_now = fr["akt"]["v"][0] * -SKALA_REWARD

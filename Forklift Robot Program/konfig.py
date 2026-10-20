@@ -13,6 +13,7 @@ Dengan bekerja dalam cm, seluruh persoalan itu hilang.
 Jalankan berkas ini untuk memeriksa kewarasan seluruh nilai:
     python konfig.py
 """
+import bisect
 import json
 import math
 import os
@@ -21,10 +22,13 @@ from types import SimpleNamespace
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Lokasi cctv_lurus.py + area_constraint.py + data kalibrasi. Data kalibrasi
-# sengaja TIDAK dipindah ke sini: berkas itu milik alur kerja kamera dan dipakai
-# program lain juga.
-CAMERA_DIR = r"C:\Users\Eka Nugraha\Documents\Master ITB\Semester 3\Camera"
+# Lokasi cctv_lurus.py + area_constraint.py + data kalibrasi + peta constraint:
+# folder Camera/ di repo ini, satu tingkat di atas folder program. Dengan begitu
+# peta, kalibrasi lensa, dan ukuran robot yang DIPAKAI robot adalah yang
+# ter-commit. Sampai 2026-10-20 di branch ini nilainya menunjuk ke salinan di
+# luar repo (Documents\Master ITB\Semester 3\Camera), sehingga kalibrasi dan
+# peta yang disimpan di repo tidak terbaca (sama dengan ea1f759 di RS-optimize).
+CAMERA_DIR = os.path.normpath(os.path.join(DIR, "..", "Camera"))
 
 
 def pasang_path_kamera():
@@ -54,9 +58,32 @@ def pasang_path_kamera():
 #   max_steer_deg sudut kemudi NYATA terbesar yang sanggup dicapai, di KEDUA
 #                 sisi (perencana menganggapnya simetris, jadi yang dipakai sisi
 #                 terlemah). Menentukan R_MIN/R_PLAN/R_SAPU - lihat bagian KEMUDI.
+#   kemudi_kiri / kemudi_kanan
+#                 kompensasi kemudi per sisi: daftar (perintah, nyata) dalam
+#                 derajat, nilai mutlak, naik, mulai (0, 0) - hasil uji busur
+#                 TANPA kompensasi. robot.steer_ke_servo membaliknya: untuk
+#                 mendapat sudut nyata d, diperintahkan sudut yang menurut tabel
+#                 menghasilkan d. None = tanpa kompensasi (perintah = nyata).
 ROBOT = {
+    # max_steer: uji busur 2026-10-20 setelah perbaikan mekanisme,
+    # logs_identifikasi/20261020_112030_id01 (5..35), 20261020_120248_id01
+    # (30..60) dan 20261020_120718_id01 (60..70); 4000 sps. Sudut nyata:
+    #   kiri  (+): 30/40/50/55/60/65/70 -> 31,0/41,0/51,3/56,5/61,6/67,0/70,1
+    #   kanan (-): 30/40/50/55/60/65/70 -> 29,2/38,7/47,9/51,8/57,3/62,7/54,3
+    # Beloknya rata sampai 65 (sisa yaw ~1 deg); -70 TIDAK STABIL (sisa yaw
+    # 2,8, putar hanya 90 deg dalam 3 s) - sama dengan ID 02. Di sudut kecil
+    # kedua sisi seimbang (+-5 -> +5,02/-5,03), jadi bukan titik lurus: sisi
+    # kanan tertinggal makin jauh di sudut besar (linkage tak simetris), dan
+    # sangat berulang (-60 -> -57,34 / -57,21 di dua uji). Dipilih 55,0 seperti
+    # ID 02; sisi kanan dikompensasi lewat kemudi_kanan. Sisi kiri melebihi
+    # perintah 1-1,5 deg - belok sedikit lebih rapat, tidak dikompensasi.
+    # Rata-rata semua uji di sudut yang sama; 10 deg dianggap tepat (10,14 /
+    # 9,79 - derau). Perintah terbesar untuk nyata 55: ~57,9.
     1: dict(tag=1, steer_center=89.45, cm_per_step=0.002491, accel_sps2=12000.0,
-            max_steer_deg=35.0),
+            max_steer_deg=55.0,
+            kemudi_kanan=[(0, 0.0), (10, 10.0), (15, 14.2), (20, 19.3), (25, 24.5),
+                          (30, 29.2), (35, 34.1), (40, 38.7), (45, 43.1), (50, 47.9),
+                          (55, 51.8), (60, 57.3), (65, 62.7)]),
     # Dari kemudi_id02.csv (2026-09-30, 5 lintasan 70 cm). kalibrasi_kemudi.py
     # melaporkan pusat 106,1 - tapi skrip itu menganggap pivot firmware 89,
     # padahal str_center robot saat uji 84. Sudut fisik sebenarnya =
@@ -92,11 +119,34 @@ ROBOT = {
     # Sisi terlemah 22,2 -> 22,0. Uji lurus 20:57: titik lurus -0,36 +- 0,23 deg,
     # tak berbeda dari nol, jadi steer_center tetap. Uji tangga 20:58/20:58:
     # tunda total 0,42 / 0,28 s, rata-rata sama dengan model simulator.
+    #
+    # !! "JENUH" 20:46 DI ATAS KELIRU - itu batas PROGRAM, bukan roda. Saat uji
+    # itu max_steer_deg masih 23,5, dan robot.steer_ke_servo memotong setiap
+    # perintah ke angka itu sebelum dikirim. Uji busur 2026-10-20 11:31 dengan
+    # batas 22,0 mengulang hal yang sama (datar di 21,8 / 23,2). identifikasi.py
+    # kini melepas batas itu selama uji (--kemudi-maks, bawaan = sudut terbesar).
+    # Uji busur ulang 2026-10-20 11:42 (logs_identifikasi/20261020_114218_id02,
+    # 4000 sps, 9 s, batas dilepas), setelah perbaikan mekanisme kedua robot:
+    #   kiri  (+): +25/+30/+35 -> 25,1 / 29,5 / 33,9 deg nyata
+    #   kanan (-): -25/-30/-35 -> 25,5 / 30,5 / 35,3 deg nyata
+    # Penguatan 1,004, tidak jenuh sampai 35.
+    #
+    # Lalu 30..70 deg (--busur-dari 30 --busur-sampai 70; durasi dipendekkan
+    # ke setengah putaran di sudut besar), logs_identifikasi/20261020_115322_id02
+    # (30..65) dan 20261020_115857_id02 (65, 70). Sudut nyata, kiri / kanan:
+    #   40 -> 39,5 / 39,6     50 -> 49,2 / 49,5     55 -> 53,1 / 54,3
+    #   60 -> 57,8 / 59,6     65 -> 62,3 / 63,8 (uji 2: 60,8 / 61,5)
+    #   70 -> 65,2 / 48,9 - kanan TIDAK STABIL: laju yaw berayun 5..58 deg/s
+    #         (roda tertahan lalu lepas), sisa yaw 5,6 deg; kiri rata.
+    # Tidak ada jenuh tegas, tapi mulai 55 roda tertinggal 1-3 deg dan berbeda
+    # antar-uji. Dipilih 55,0: sudut terbesar yang masih konsisten; rencana
+    # (x PLAN_STEER_RATIO) ~41 deg, yang tertinggal < 1 deg. R_MIN 15,8 cm,
+    # R_PLAN 25,7 cm (pada 35: 32,1 / 45,6). ID 01 juga 55,0 (lihat di atas).
     # Model DQfD model_dqn/id02.pt HARUS dilatih ulang setiap nilai ini berubah
     # (kelengkungan aksinya diturunkan dari sini); perencana_dqfd menolak model
     # yang profilnya tidak cocok.
     2: dict(tag=2, steer_center=96.15, cm_per_step=0.002490, accel_sps2=12000.0,
-            max_steer_deg=22.0),
+            max_steer_deg=55.0),
 }
 
 # Robot yang dikendalikan. Pilih lewat "--id" di navigasi.py, atau lewat
@@ -107,6 +157,20 @@ MQTT_HOST = "10.210.1.1"
 MQTT_PORT = 1883
 MQTT_USER = "forklift01"
 MQTT_PASS = "testing88"
+
+
+def kemudi_perintah(tabel, nyata_deg):
+    """Sudut nyata (nilai mutlak) -> sudut yang harus diperintahkan, menurut tabel
+    kompensasi (perintah, nyata) satu sisi. Tabel kosong/None = tanpa kompensasi.
+    Di luar ujung tabel perintahnya tertahan di perintah terbesar yang diuji."""
+    if not tabel:
+        return nyata_deg
+    perintah, nyata = zip(*tabel)
+    i = bisect.bisect_right(nyata, nyata_deg)
+    if i >= len(nyata):
+        return float(perintah[-1])
+    f = (nyata_deg - nyata[i - 1]) / (nyata[i] - nyata[i - 1])
+    return perintah[i - 1] + f * (perintah[i] - perintah[i - 1])
 
 
 def profil(robot_id=None):
@@ -143,6 +207,8 @@ def profil(robot_id=None):
         cm_per_step=r["cm_per_step"],
         accel_sps2=r["accel_sps2"],
         max_steer_deg=r["max_steer_deg"],
+        kemudi_kiri=r.get("kemudi_kiri"),
+        kemudi_kanan=r.get("kemudi_kanan"),
         max_steer_rad=max_rad,
         r_min_cm=WHEELBASE_CM / math.tan(max_rad),
         r_plan_cm=r_plan,
@@ -328,7 +394,7 @@ MARGIN_CADANGAN_CM = [6.0]
 # sedangkan CUSP_PAUSE_S hanya 0,6 detik.
 #
 # Semua di atas adalah ID 01 (35,0). MAX_STEER_DEG kini per robot - tabel ROBOT;
-# ID 02 jenuh jauh lebih awal dan tidak simetris. MAX_STEER_RAD, R_MIN_CM,
+# sejak perbaikan mekanisme 2026-10-20 keduanya 55,0. MAX_STEER_RAD, R_MIN_CM,
 # R_PLAN_CM, dan R_SAPU_CM ikut dihitung di pilih_robot().
 
 # Perencana hanya memakai sebagian sudut kemudi; sisanya cadangan untuk koreksi
@@ -672,8 +738,19 @@ PARAM_RENCANA = dict(
     approach_len=32.4,       # 80 px
     goal_pos_tol=3.2,        # 8 px
     goal_yaw_tol_deg=12.0,
-    analytic_every=4,
-    analytic_dist=101.0,     # 250 px
+    # Tembakan Reeds-Shepp ke tujuan HANYA dicoba bila titik acuan robot sudah
+    # < analytic_dist dari tujuan (2026-10-20). Semula juga dicoba di setiap
+    # ekspansi ke-4 berapa pun jaraknya (analytic_every=4) dengan batas 101 cm:
+    # di ruang lapang tembakan itu langsung bebas pada ekspansi ke-4, sehingga
+    # Hybrid A* hanya membuat SATU primitif (7,3 cm) dan 93% jalur adalah
+    # Reeds-Shepp. None = percobaan berkala dimatikan (lihat rencana.py).
+    # Diukur (30 rute acak, Kalibrasi, ID 02): porsi Reeds-Shepp 93% -> 52%,
+    # tapi ganti arah per jalur 0,83 -> 1,70 (lapang) dan 1,76 -> 2,33 (dengan
+    # dinding) - A* tiba di batas 60 cm menghadap ke tujuan, bukan searah
+    # tujuan, dan Reeds-Shepp sisanya memutar arah dengan maju-mundur. Batas
+    # 80 / 100 cm: 1,13 / 0,87 ganti arah. 60 dipilih dengan sadar.
+    analytic_every=None,
+    analytic_dist=60.0,
     time_limit=2.0,
     max_expansions=30000,
 )
@@ -939,9 +1016,19 @@ def periksa():
     if STEER_SERVO_CENTER is None:
         pesan.append(("x", f"steer_center robot ID {ROBOT_ID:02d} belum diisi di konfig.ROBOT. "
                            f"Isi dengan str_center yang tersimpan di NVS robot itu."))
-    elif STEER_SERVO_CENTER + MAX_STEER_DEG * STEER_SERVO_PER_DEG > STEER_SERVO_MAX or \
-            STEER_SERVO_CENTER - MAX_STEER_DEG * STEER_SERVO_PER_DEG < STEER_SERVO_MIN:
-        pesan.append(("x", "Rentang kemudi melampaui batas servo firmware."))
+    else:
+        p = profil()
+        for sisi, tabel in (("kemudi_kiri", p.kemudi_kiri), ("kemudi_kanan", p.kemudi_kanan)):
+            if tabel and (tuple(tabel[0]) != (0, 0) or
+                          any(b[0] <= a[0] or b[1] <= a[1] for a, b in zip(tabel, tabel[1:]))):
+                pesan.append(("x", f"{sisi} robot ID {ROBOT_ID:02d} harus mulai (0, 0) dan "
+                                   f"kedua kolomnya naik."))
+        # Perintah terbesar ke servo = sudut nyata maksimum SETELAH kompensasi.
+        kiri = kemudi_perintah(p.kemudi_kiri, MAX_STEER_DEG)
+        kanan = kemudi_perintah(p.kemudi_kanan, MAX_STEER_DEG)
+        if STEER_SERVO_CENTER + kiri * STEER_SERVO_PER_DEG > STEER_SERVO_MAX or \
+                STEER_SERVO_CENTER - kanan * STEER_SERVO_PER_DEG < STEER_SERVO_MIN:
+            pesan.append(("x", "Rentang kemudi melampaui batas servo firmware."))
 
     if ACCEL_SPS2 < AKSEL_MINIMUM_SPS2:
         pesan.append(("!", f"accel robot ID {ROBOT_ID:02d} = {ACCEL_SPS2:.0f} sps/s^2, di bawah "

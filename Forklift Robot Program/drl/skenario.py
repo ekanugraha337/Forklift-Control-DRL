@@ -1,11 +1,13 @@
 """
-skenario.py - pembangkit skenario + dataset demonstrasi Hybrid A* untuk DQfD (tahap 3).
+skenario.py - pembangkit skenario + dataset demonstrasi Hybrid A* + Reeds-Shepp untuk DQfD.
 
 Satu skenario = (peta, robot, margin, rintangan tambahan, awal, tujuan). Untuk
 tiap skenario Hybrid A* dijalankan dengan parameter operasional
-(konfig.PARAM_RENCANA), jalurnya diurai menjadi aksi dan diputar ulang di
-lingkungan (adaptor_demo) - episode yang tidak identik dengan A* ditolak,
-bukan disimpan.
+(konfig.PARAM_RENCANA, Reeds-Shepp hanya < analytic_dist dari tujuan), jalurnya
+diurai menjadi aksi dan diputar ulang di lingkungan (adaptor_demo). Bagian A*
+harus identik (biaya = g-cost A*); ekor Reeds-Shepp diurai menjadi primitif
+penuh + pendek (full DQfD, lihat lingkungan.py), dan episode yang ekornya
+menyentuh margin setelah diurai ditolak - dihitung terpisah, bukan galat.
 
 SATU PENGECUALIAN: batas WAKTU A* (time_limit 2 s) dilepas; yang membatasi
 hanya max_expansions (30000). Batas waktu membuat hasilnya bergantung beban
@@ -14,7 +16,8 @@ ikut terpotong, dan dataset tidak bisa dibangkitkan ulang persis. Batas
 ekspansi deterministik.
 
 PETA
-    Kalibrasi, Rumah2, Rumah   peta constraint asli
+    peta constraint asli       SEMUA berkas di Camera/peta_constraint/ (atau
+                               --peta), porsinya dibagi rata
     sintetis:<seed>            peta acak meniru pola peta asli - dinding tepi,
                                blok persegi 12-60 cm, blok sudut, kadang dinding
                                sekat yang membentuk koridor. Supaya DQfD belajar
@@ -42,6 +45,7 @@ KELUARAN (drl/data/)
 
 Jalankan dari folder "Forklift Robot Program":
     python -m drl.skenario --id 1,2 --n 5000
+    python -m drl.skenario --id 1,2 --n 5000 --peta Kalibrasi,RuangA --porsi-sintetis 0.3
     python -m drl.skenario --id 1 --n 200 --keluar drl/data/coba
     python -m drl.skenario --pratinjau          # gambar peta sintetis + jalur demo
     python -m drl.skenario --periksa            # integritas + rekonstruksi dari metadata
@@ -66,12 +70,28 @@ import konfig                         # noqa: E402
 import rencana as R                   # noqa: E402
 from forklift_planner import ObstacleMap  # noqa: E402
 from drl import lingkungan as L       # noqa: E402
-from drl.adaptor_demo import putar_ulang, rencanakan_terekam, urai_aksi  # noqa: E402
+from drl.adaptor_demo import AC, putar_ulang, rencanakan_terekam, urai_aksi  # noqa: E402
 
-PETA_ASLI = ("Kalibrasi", "Rumah2", "Rumah")
-# Porsi episode SUKSES per jenis peta. Rumah paling besar: di situ A* paling
-# lambat, jadi di situ pula DQfD paling berguna.
-KOMPOSISI = {"Kalibrasi": 0.15, "Rumah2": 0.25, "Rumah": 0.30, "sintetis": 0.30}
+PORSI_SINTETIS = 0.3
+
+
+def buat_komposisi(peta_asli=None, porsi_sintetis=PORSI_SINTETIS):
+    """Porsi episode SUKSES per jenis peta: peta asli dibagi rata, sisanya sintetis.
+
+    peta_asli None = semua peta di Camera/peta_constraint/. Tidak ditulis mati:
+    peta yang dipakai berubah (Rumah dan Rumah2 dihapus 2026-10-20), dan
+    dataset mencatat komposisinya sendiri di ringkasan_id0N.json.
+    """
+    peta_asli = list(AC.daftar_peta() if peta_asli is None else peta_asli)
+    if not peta_asli:
+        return {"sintetis": 1.0}
+    k = {p: (1.0 - porsi_sintetis) / len(peta_asli) for p in peta_asli}
+    if porsi_sintetis > 0:
+        k["sintetis"] = porsi_sintetis
+    return k
+
+
+KOMPOSISI = buat_komposisi()
 
 SKENARIO_PER_TUGAS = 20
 TUGAS_UJI_SETIAP = 10
@@ -163,7 +183,7 @@ _CACHE_ARENA = {}
 
 
 def _arena(spek):
-    """'Rumah' atau 'sintetis:<seed>' -> Arena, di-cache per proses."""
+    """Nama peta asli atau 'sintetis:<seed>' -> Arena, di-cache per proses."""
     if spek not in _CACHE_ARENA:
         if spek.startswith("sintetis:"):
             _CACHE_ARENA[spek] = buat_peta_sintetis(int(spek.split(":", 1)[1]))
@@ -239,7 +259,8 @@ def kerja(tugas):
     for e in env.values():
         e.planner.time_limit = float("inf")      # lihat docstring modul
 
-    hasil = {"tugas": tugas, "episode": [], "negatif": [], "galat": [], "waktu_s": 0.0}
+    hasil = {"tugas": tugas, "episode": [], "negatif": [], "galat": [], "ekor_ditolak": 0,
+             "waktu_s": 0.0}
     t_mulai = time.perf_counter()
     for i in range(SKENARIO_PER_TUGAS):
         margin, omap, poli, pasangan = acak_satu(arena, per, env, rng)
@@ -264,7 +285,16 @@ def kerja(tugas):
             hasil["galat"].append(f"{spek} #{i}: urai: {ex}")
             continue
         ep, galat = putar_ulang(e, awal, tujuan, aksi, omap)
-        if galat is None and abs(e.biaya - rek.biaya) >= 1e-6:
+        n_aksi_tubuh = (len(jalur) - rek.n_ekor - 1) // e.planner.n_sub
+        if galat and galat.startswith("aksi demo ke-") and \
+                int(galat.split("ke-")[1].split(" ")[0]) >= n_aksi_tubuh:
+            # Ekor RS hasil urai menyimpang ~1 cm dan menyentuh margin.
+            hasil["ekor_ditolak"] += 1
+            continue
+        # Hanya tiba lewat primitif yang biayanya bisa dibandingkan persis;
+        # ekor RS hasil urai memang hampiran (adaptor_demo --uji memeriksa
+        # bagian A*-nya).
+        if galat is None and not rek.n_ekor and abs(e.biaya - rek.biaya) >= 1e-6:
             galat = f"biaya {e.biaya:.6f} != A* {rek.biaya:.6f}"
         if galat:
             hasil["galat"].append(f"{spek} #{i}: {galat}")
@@ -439,7 +469,8 @@ def _pilih_deterministik(per_tugas, kuota):
     Bila batas percobaan tercapai sebelum kuota, semua tugas dipakai - dan
     hanya dalam kasus itu hasilnya bisa bergantung penjadwal.
     """
-    hasil = defaultdict(lambda: {"episode": [], "negatif": [], "galat": [], "waktu_s": 0.0})
+    hasil = defaultdict(lambda: {"episode": [], "negatif": [], "galat": [], "ekor_ditolak": 0,
+                                 "waktu_s": 0.0})
     sukses, ditemukan, percobaan = Counter(), Counter(), Counter()
     for kunci, tugas in per_tugas.items():
         h = hasil[kunci[0]]
@@ -451,6 +482,7 @@ def _pilih_deterministik(per_tugas, kuota):
             diambil += min(ruang, len(r["episode"]))
             h["negatif"] += r["negatif"]
             h["galat"] += r["galat"]
+            h["ekor_ditolak"] += r["ekor_ditolak"]
             h["waktu_s"] += r["waktu_s"]
             ditemukan[kunci] += len(r["episode"])
             percobaan[kunci] += len(r["episode"]) + len(r["negatif"])
@@ -481,6 +513,8 @@ def ringkas(rid, h, kuota, sukses, ditemukan, percobaan, n_trans, dt):
         "robot": rid, "episode": len(ep), "transisi": int(n_trans),
         "episode_uji": int(sum(m["uji"] for m in ep)), "negatif": len(neg),
         "galat_putar_ulang": h["galat"][:20], "jumlah_galat": len(h["galat"]),
+        "ekor_rs_ditolak": h["ekor_ditolak"], "komposisi": KOMPOSISI,
+        "versi_aksi": L.VERSI_AKSI, "n_aksi": L.N_AKSI,
         "waktu_dinding_s": dt, "waktu_cpu_s": h["waktu_s"],
         "per_jenis": per_jenis,
         "histogram_aksi": [int(x) for x in hist],
@@ -492,7 +526,8 @@ def ringkas(rid, h, kuota, sukses, ditemukan, percobaan, n_trans, dt):
 
 def cetak_ringkasan(r):
     print(f"\n=== ID {r['robot']:02d}: {r['episode']} episode ({r['episode_uji']} uji), "
-          f"{r['transisi']} transisi, {r['negatif']} negatif, galat putar-ulang {r['jumlah_galat']}")
+          f"{r['transisi']} transisi, {r['negatif']} negatif, galat putar-ulang {r['jumlah_galat']}, "
+          f"ekor RS ditolak (menyentuh margin) {r['ekor_rs_ditolak']}")
     print("    peta        sukses/kuota  percobaan  A* ketemu  langkah rata/maks  A* ms sukses/gagal  alasan gagal")
     for j, s in r["per_jenis"].items():
         laju = s["ditemukan"] / s["percobaan"] if s["percobaan"] else 0.0
@@ -502,7 +537,8 @@ def cetak_ringkasan(r):
     h = np.array(r["histogram_aksi"], float)
     p = 100 * h / max(1.0, h.sum())
     print("    aksi (%)  maju  " + " ".join(f"{x:4.1f}" for x in p[:7]) +
-          " | mundur " + " ".join(f"{x:4.1f}" for x in p[7:14]) + f" | SAMBUNG {p[14]:.1f}")
+          " | mundur " + " ".join(f"{x:4.1f}" for x in p[7:14]) +
+          f" | pendek {p[L.N_PRIMITIF:].sum():.1f}")
     print(f"    variasi: margin 6 cm {r['margin_cadangan']}, rintangan robot lain {r['dengan_rintangan']}, "
           f"heading bebas {r['heading_bebas']}")
     for g in r["galat_putar_ulang"][:5]:
@@ -615,16 +651,22 @@ def pratinjau(rid, n_peta, seed, keluar):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Dataset demonstrasi Hybrid A* untuk DQfD")
+    ap = argparse.ArgumentParser(description="Dataset demonstrasi Hybrid A* + Reeds-Shepp untuk DQfD")
     ap.add_argument("--id", default="1,2")
     ap.add_argument("--n", type=int, default=5000, help="episode sukses per robot")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--pekerja", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument("--keluar", default=DIR_DATA)
+    ap.add_argument("--peta", default=None,
+                    help="peta asli, dipisah koma; bawaan semua di Camera/peta_constraint/")
+    ap.add_argument("--porsi-sintetis", type=float, default=PORSI_SINTETIS)
     ap.add_argument("--pratinjau", action="store_true", help="gambar 6 peta sintetis + jalur demo")
     ap.add_argument("--periksa", action="store_true", help="periksa integritas dataset di --keluar")
     args = ap.parse_args()
     ids = [int(t) for t in args.id.split(",") if t.strip()]
+    global KOMPOSISI
+    KOMPOSISI = buat_komposisi([t.strip() for t in args.peta.split(",") if t.strip()]
+                               if args.peta else None, args.porsi_sintetis)
 
     if args.periksa:
         sys.exit(0 if all([periksa(rid, args.keluar) for rid in ids]) else 1)
