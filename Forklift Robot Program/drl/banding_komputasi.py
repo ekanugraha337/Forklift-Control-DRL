@@ -53,7 +53,7 @@ PERENCANA = ("astar", "dqfd", "dqfd-murni")
 
 def rute_uji(rid, peta, n):
     """Rute uji dataset di peta itu, dalam cm seperti yang diterima navigasi.py."""
-    d = RO.muat_npz(os.path.join(AKAR, "drl", "data", f"demo_id{rid:02d}.npz"))
+    d = RO.muat_npz(os.path.join(AKAR, "drl", "data", f"demo_jauh_id{rid:02d}.npz"))
     ar = A.Arena(peta)
     idx = [e for e in np.flatnonzero(d["ep_uji"]) if d["ep_peta"][e] == peta][:n]
     out = []
@@ -64,7 +64,7 @@ def rute_uji(rid, peta, n):
         poli = d["ep_rintangan"][e]
         out.append({"e": int(e), "awal": a, "tujuan": (tc[0], tc[1], None if np.isnan(t[2]) else tc[2]),
                     "rintangan": [] if np.isnan(poli).any() else [poli],
-                    "margin": float(d["ep_margin"][e]), "biaya_astar": float(d["ep_biaya"][e])})
+                    "margin": float(d["ep_margin"][e]), "biaya_astar": float(d["ep_biaya_astar"][e])})
     return ar, out
 
 

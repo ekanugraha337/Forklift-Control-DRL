@@ -29,10 +29,13 @@ class Skenario:
     awal: tuple                       # (gx, gy, yaw) sel
     tujuan: tuple                     # (gx, gy, yaw atau None) sel
     rintangan: np.ndarray = None      # (4, 2) cm, badan robot lain; None = tidak ada
-    biaya_astar: float = None         # g-cost A*; None = tidak diketahui / A* gagal
-    aksi_demo: list = None            # aksi A*; None = bukan dari demo
+    biaya_astar: float = None         # biaya demo jenis ini (A* atau ekor RS terurai); None = tidak diketahui
+    aksi_demo: list = None            # aksi demo; None = bukan dari demo
     nama: str = ""
     info: dict = field(default_factory=dict)
+    d0: int = 0                       # model dekat: arah & kelengkungan yang sedang berjalan
+    k0: float = 0.0                   #   di pose serah (0 = berangkat dari diam)
+    biaya_astar_total: float = None   # biaya demo A* + RS SELURUH rute (pembanding gabungan)
 
 
 def muat_npz(jalur):
@@ -41,6 +44,30 @@ def muat_npz(jalur):
     menjadi menit."""
     with np.load(jalur) as f:
         return {k: f[k] for k in f.files}
+
+
+def muat_gabung(daftar):
+    """Beberapa dataset demo satu jenis (mis. demo_dekat + demo_dekat_tambahan) -> satu dict.
+
+    Larik per transisi disambung; indeks episode (ep_mulai, ep_id) digeser.
+    Nama episode tetap unik karena urutannya ikut sambungan.
+    """
+    d = [muat_npz(p) for p in daftar]
+    if len(d) == 1:
+        return d[0]
+    out = {}
+    geser_t = np.cumsum([0] + [len(x["aksi"]) for x in d[:-1]])
+    geser_e = np.cumsum([0] + [len(x["ep_mulai"]) for x in d[:-1]])
+    for k in d[0]:
+        if k == "jenis":
+            out[k] = d[0][k]
+        elif k == "ep_mulai":
+            out[k] = np.concatenate([x[k] + g for x, g in zip(d, geser_t)])
+        elif k == "ep_id":
+            out[k] = np.concatenate([x[k] + g for x, g in zip(d, geser_e)])
+        else:
+            out[k] = np.concatenate([x[k] for x in d])
+    return out
 
 
 def _tujuan(t):
@@ -56,7 +83,10 @@ def dari_demo(d, e):
                     rintangan=None if np.isnan(poli).any() else poli,
                     biaya_astar=float(d["ep_biaya"][e]),
                     aksi_demo=[int(a) for a in d["aksi"][s0:s0 + T]],
-                    nama=f"demo#{e}")
+                    nama=f"demo#{e}",
+                    d0=int(d["ep_d0"][e]) if "ep_d0" in d else 0,
+                    k0=float(d["ep_k0"][e]) if "ep_k0" in d else 0.0,
+                    biaya_astar_total=float(d["ep_biaya_astar"][e]) if "ep_biaya_astar" in d else None)
 
 
 def dari_negatif(n, i):
@@ -68,10 +98,18 @@ def dari_negatif(n, i):
 
 
 class PabrikEnv:
-    """Membangun lingkungan untuk skenario. Arena & Perencana di-cache per peta."""
+    """Membangun lingkungan untuk skenario. Arena & Perencana di-cache per peta.
 
-    def __init__(self, profil):
+    jenis: 'jauh' / 'dekat' (lingkungan.py). nilai_serah: hanya jenis jauh,
+    diteruskan ke lingkungan (nilai akhir dari model dekat).
+    peluang_dekat: untuk acak() - model dekat berlatih dari start di dalam radius.
+    """
+
+    def __init__(self, profil, jenis="dekat", nilai_serah=None, peluang_dekat=None):
         self.p = profil
+        self.jenis = jenis
+        self.nilai_serah = nilai_serah
+        self.peluang_dekat = peluang_dekat
         self._per = {}
 
     def arena(self, peta):
@@ -89,8 +127,9 @@ class PabrikEnv:
         """(env, obs, info). Lingkungan BARU tiap kali: keadaan perencana
         (_hcost, _approach_dirs) tersimpan di objeknya, jadi tidak boleh dipakai
         bersama dua episode yang berjalan serempak."""
-        env = L.LingkunganRencana(self.arena(sk.peta), self.p, margin_cm=sk.margin)
-        obs, info = env.reset(sk.awal, sk.tujuan, self.omap(sk))
+        env = L.LingkunganRencana(self.arena(sk.peta), self.p, margin_cm=sk.margin,
+                                  jenis=self.jenis, nilai_serah=self.nilai_serah)
+        obs, info = env.reset(sk.awal, sk.tujuan, self.omap(sk), d0=sk.d0, k0=sk.k0)
         return env, obs, info
 
     def acak(self, rng, peta):
@@ -98,10 +137,10 @@ class PabrikEnv:
         arena = self.arena(peta)
         if peta not in self._per:
             self._per[peta] = R.Perencana(arena, self.p)
-        env = {m: L.LingkunganRencana(arena, self.p, margin_cm=m)
+        env = {m: L.LingkunganRencana(arena, self.p, margin_cm=m, jenis=self.jenis)
                for m in (S.konfig.SAFETY_MARGIN_CM, *S.konfig.MARGIN_CADANGAN_CM)}
         for _ in range(20):
-            margin, _, poli, pasangan = S.acak_satu(arena, self._per[peta], env, rng)
+            margin, _, poli, pasangan = S.acak_satu(arena, self._per[peta], env, rng, self.peluang_dekat)
             if pasangan is not None:
                 return Skenario(peta=peta, margin=margin, awal=pasangan[0], tujuan=pasangan[1],
                                 rintangan=poli, nama=f"acak:{peta}")
@@ -155,7 +194,7 @@ class KumpulanRollout:
             s["aksi"].append(a)
             s["reward"].append(r)
             s["q_pilih"].append(float(q[j, a]))
-            s["mask"].append(s["env"].mask() if not akhir else np.zeros(L.N_AKSI, bool))
+            s["mask"].append(s["env"].mask() if not akhir else np.zeros(s["env"].n_aksi, bool))
             if akhir:
                 selesai.append((i, ringkas_episode(s, info)))
                 self.slot[i] = None
@@ -201,8 +240,8 @@ def jalankan(net, pabrik, daftar_sk, n_slot=32, epsilon=0.0, rng=None):
 def transisi_episode(obs, aksi, reward, mask, terminal, gamma, n):
     """Episode -> larik transisi 1-langkah dan n-langkah untuk buffer.
 
-    obs (T+1, 47), aksi (T,), reward (T,) SUDAH diskalakan, mask (T+1, 15).
-    terminal: episode berakhir di keadaan terminal (tiba/tersambung/buntu).
+    obs (T+1, 47), aksi (T,), reward (T,) SUDAH diskalakan, mask (T+1, n_aksi).
+    terminal: episode berakhir di keadaan terminal (tiba/serah/buntu).
     False = terpotong MAKS_LANGKAH - keadaan terakhir tetap di-bootstrap.
     """
     T = len(aksi)

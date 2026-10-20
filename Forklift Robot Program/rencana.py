@@ -320,17 +320,18 @@ class Perencana:
 # Reeds-Shepp = tembakan analitik penutup ke tujuan (info["rs_titik"]).
 WARNA_HA_MAJU, WARNA_HA_MUNDUR = (0, 255, 0), (0, 165, 255)      # hijau, oranye
 WARNA_RS_MAJU, WARNA_RS_MUNDUR = (255, 255, 0), (255, 0, 255)    # biru muda, ungu
-LEGENDA_JALUR = ("jalur Hybrid A*: hijau maju, oranye mundur | "
-                 "Reeds-Shepp: biru muda maju, ungu mundur")
+LEGENDA_JALUR = ("Hybrid A* / DQfD jauh: hijau maju, oranye mundur | "
+                 "Reeds-Shepp / DQfD dekat: biru muda maju, ungu mundur")
 
 
-def gambar_jalur(img, arena, jalur_sel, rs_titik=0,
+def gambar_jalur(img, arena, jalur_sel, rs_titik=0, label="RS",
                  warna_maju=WARNA_HA_MAJU, warna_mundur=WARNA_HA_MUNDUR):
     """Jalur digambar per arah gerak dan per asal.
 
     Maju dan mundur diberi warna berbeda. rs_titik = jumlah titik di ujung
-    jalur yang berasal dari Reeds-Shepp (Perencana.rencanakan -> info): bagian
-    itu digambar dengan WARNA_RS_*, dan titik sambungnya ditandai "RS".
+    jalur yang berasal dari Reeds-Shepp, atau dari model DQfD dekat
+    (Perencana.rencanakan -> info): bagian itu digambar dengan WARNA_RS_*, dan
+    titik sambungnya ditandai label ("RS" untuk Hybrid A*, "serah" untuk DQfD).
     """
     if not jalur_sel or len(jalur_sel) < 2:
         return
@@ -351,7 +352,7 @@ def gambar_jalur(img, arena, jalur_sel, rs_titik=0,
     if awal_rs is not None:
         u, v = (int(c) for c in px[awal_rs - 1])
         cv2.circle(img, (u, v), 5, (255, 255, 255), 2, cv2.LINE_AA)
-        AC.label(img, "RS", (u + 7, v - 7), (255, 255, 255), 0.45)
+        AC.label(img, label, (u + 7, v - 7), (255, 255, 255), 0.45)
 
 
 # ------------------------------------------------------------------ mandiri
@@ -428,7 +429,8 @@ def main():
             hitung()
 
         img = latar.copy()
-        gambar_jalur(img, arena, jalur, rs_titik=info.get("rs_titik", 0) if jalur else 0)
+        gambar_jalur(img, arena, jalur, rs_titik=info.get("rs_titik", 0) if jalur else 0,
+                     label="serah" if str(info.get("perencana", "")).startswith("dqfd") else "RS")
         A.gambar_robot(img, arena.ctx, *awal, (255, 255, 255), isi=True)
         if tujuan is not None:
             yaw = tujuan[2] if tujuan[2] is not None else 0.0

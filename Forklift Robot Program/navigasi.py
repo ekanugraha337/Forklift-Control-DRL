@@ -144,9 +144,11 @@ class Unit:
         self.tujuan = None
         self.jalur = None
         # Jumlah titik di ujung self.jalur yang berasal dari tembakan
-        # Reeds-Shepp; sisanya primitif Hybrid A* (atau aksi DQfD). Hanya
-        # bermakna selama self.jalur ada - diisi bersamanya di ambil_hasil().
+        # Reeds-Shepp, atau dari model DQfD dekat; sisanya primitif Hybrid A*
+        # (atau model DQfD jauh). Hanya bermakna selama self.jalur ada - diisi
+        # bersamanya di ambil_hasil().
         self.jalur_rs = 0
+        self.jalur_label = "RS"
         self.tracker = None
         self.pose = None
         self.perintah = None
@@ -514,6 +516,7 @@ class Unit:
             return
         self.jalur = jalur
         self.jalur_rs = info.get("rs_titik", 0)
+        self.jalur_label = "serah" if str(info.get("perencana", "")).startswith("dqfd") else "RS"
         # Kendaraan yang dipakai pelacak HARUS yang sama dengan yang dipakai
         # merencanakan: kalau perencana terpaksa mundur ke margin lebih kecil,
         # pelacak yang memakai margin penuh akan mengira jalurnya sendiri sempit
@@ -535,7 +538,7 @@ class Unit:
             self.alasan = f"minggir memberi jalan ke robot {info['lawan']:02d}"
         catatan = " (MINGGIR)" if self._minggir else " (MEMUTARI ROBOT LAIN)" if hindar else ""
         print(f"[OK] {self.id:02d}: jalur {info['panjang_cm']:.0f} cm, {info['titik']} titik "
-              f"(Reeds-Shepp {self.jalur_rs}), "
+              f"({'model dekat' if self.jalur_label == 'serah' else 'Reeds-Shepp'} {self.jalur_rs}), "
               f"{info['waktu_s'] * 1000:.0f} ms oleh {info.get('perencana', 'A*')}, "
               f"margin {info['margin_cm']:.0f} cm"
               f"{' (DITURUNKAN)' if info.get('margin_turun') else ''}{catatan}"
@@ -807,7 +810,7 @@ class Unit:
         warna_id = WARNA_ID.get(self.id, (255, 255, 255))
         if self.jalur:
             # Warna membedakan bagian Hybrid A* dan Reeds-Shepp - R.LEGENDA_JALUR.
-            R.gambar_jalur(img, self.arena, self.jalur, rs_titik=self.jalur_rs)
+            R.gambar_jalur(img, self.arena, self.jalur, rs_titik=self.jalur_rs, label=self.jalur_label)
 
         if multi and self.nav.show_bayangan and self.bayangan:
             w = WARNA[MENUNGGU] if self.state == MENUNGGU else warna_id

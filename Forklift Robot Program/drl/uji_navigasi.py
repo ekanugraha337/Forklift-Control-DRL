@@ -64,7 +64,7 @@ def pilih_skenario(n_per_peta, seed=0):
     """Skenario satu robot & pasangan, dari rute uji dataset. Deterministik."""
     import arena as A
     from drl import rollout as RO
-    data = {rid: RO.muat_npz(os.path.join(AKAR, "drl", "data", f"demo_id{rid:02d}.npz")) for rid in (1, 2)}
+    data = {rid: RO.muat_npz(os.path.join(AKAR, "drl", "data", f"demo_jauh_id{rid:02d}.npz")) for rid in (1, 2)}
     peta_asli = daftar_peta(data)
     satu, kandidat = [], {}
     for rid, d in data.items():
@@ -74,7 +74,7 @@ def pilih_skenario(n_per_peta, seed=0):
             idx = [e for e in np.flatnonzero(d["ep_uji"])
                    if d["ep_peta"][e] == peta and np.isnan(d["ep_rintangan"][e]).all()
                    and d["ep_margin"][e] >= konfig.SAFETY_MARGIN_CM and d["ep_langkah"][e] >= 3]
-            idx = sorted(idx, key=lambda e: d["ep_biaya"][e])
+            idx = sorted(idx, key=lambda e: d["ep_biaya_astar"][e])
             pilih = [idx[int(i)] for i in np.linspace(0, len(idx) - 1, min(n_per_peta, len(idx)))]
             for e in pilih:
                 satu.append({"jenis": "satu", "peta": peta, "ids": [rid],

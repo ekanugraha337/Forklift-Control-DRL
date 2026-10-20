@@ -1,8 +1,10 @@
 """
 perencana_dqfd.py - merencanakan jalur dengan jaringan DQfD.
 
-    rencanakan(net, env, mundur=True, anggaran=600, batas_waktu=None)
-    rencanakan_terbaik(net, env, anggaran=600, batas_waktu=None, bobot=1.0)
+    rencanakan(net, env, mundur=True, anggaran=600, batas_waktu=None, terima=None)
+    rencanakan_terbaik(net, env, anggaran=600, batas_waktu=None, bobot=1.0, terima=None)
+    cari(net, env, metode, ...)        satu model, metode mundur / terbaik / gabungan
+    rencanakan_dua(...)                DUA model: jauh sampai serah, lalu dekat
     DQfDPlanner       antarmuka sama dengan HybridAStarPlanner (tahap 9)
 
 MUNDUR (rencanakan): greedy - dari tiap keadaan ambil aksi sah dengan Q
@@ -30,6 +32,13 @@ yang sama (closed set, lihat MASK di lingkungan.py).
 FULL DQfD (2026-10-20): tidak ada Reeds-Shepp maupun A* di sini - SAMBUNG
 dihapus, ekor RS demonstrator ditiru jaringan dengan primitif penuh + pendek.
 A* hanya muncul sebagai CADANGAN di mode "dqfd"; "dqfd-murni" tanpa cadangan.
+
+DUA MODEL (versi aksi 4, ver-1-2): model JAUH (meniru masukan & keluaran Hybrid
+A*) mencari sampai di dalam 60 cm (batas terjauh) DAN tidak ada halangan untuk
+mendarat; selama masih ada halangan model jauh MELANJUTKAN. "Tidak ada halangan"
+diperiksa model DEKAT (meniru masukan & keluaran Reeds-Shepp) sendiri: ia
+mencoba mendarat dari pose itu (rencanakan_dua -> cek_serah); berhasil tanpa
+tabrakan = berhenti di situ.
 """
 import copy
 import heapq
@@ -95,23 +104,13 @@ def _jarak_tujuan(env):
     return math.hypot(env.tujuan[0] - env.x, env.tujuan[1] - env.y)
 
 
-def rincian_fase(env, hasil):
-    """Pemisah kegagalan & mutu pendaratan - dasar keputusan satu vs dua model.
-
-    Batasnya radius DEKAT = analytic_dist perencana (60 cm): di dalamnya
-    demonstrator memakai Reeds-Shepp. Kembalian dict:
-      fase              'tiba' | 'gagal_jauh' (tidak pernah masuk radius dekat:
-                        masalah NAVIGASI) | 'gagal_dekat' (masuk tapi tidak
-                        mendarat: masalah PRESISI - tanda perlu model dekat)
-      ganti_arah        titik balik maju/mundur di jalur (hanya bila tiba)
-      ganti_arah_dekat  titik balik yang terjadi di dalam radius dekat
-    hasil: kembalian rencanakan()/rencanakan_terbaik() (memuat jarak_min).
-    """
-    if hasil["sukses"]:
-        g, gd = hitung_ganti_arah(env.jalur(), env.tujuan, env.planner.analytic_dist)
-        return {"fase": "tiba", "ganti_arah": g, "ganti_arah_dekat": gd}
-    fase = "gagal_dekat" if hasil.get("jarak_min", float("inf")) < env.planner.analytic_dist else "gagal_jauh"
-    return {"fase": fase, "ganti_arah": None, "ganti_arah_dekat": None}
+def mutu_jalur(jalur, tujuan, radius, cm):
+    """Ganti arah (seluruh jalur / di dalam radius serah) dan galat pose akhir (cm, derajat)."""
+    g, gd = hitung_ganti_arah(jalur, tujuan, radius)
+    x, y, yaw = jalur[-1][:3]
+    ep = math.hypot(tujuan[0] - x, tujuan[1] - y) * cm
+    ey = abs(math.degrees(math.remainder(yaw - tujuan[2], 2.0 * math.pi))) if tujuan[2] is not None else None
+    return {"ganti_arah": g, "ganti_arah_dekat": gd, "galat_posisi_cm": ep, "galat_arah_deg": ey}
 
 
 def hitung_ganti_arah(jalur, tujuan, radius):
@@ -135,10 +134,12 @@ def _urutan(net, env):
     return list(sah[np.argsort(-q[sah], kind="stable")])
 
 
-def rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=None):
+def rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, terima=None):
     """env harus sudah di-reset. Kembalian dict: sukses, alasan, dicoba, mundur, waktu_s.
 
     batas_waktu (s): berhenti bila terlampaui, seperti time_limit A*. None = tanpa batas.
+    terima: fungsi(env) -> bool, dipanggil saat episode selesai sukses (model
+    jauh: serah). False = keadaan itu diperlakukan buntu dan pencarian berlanjut.
     """
     t0 = time.perf_counter()
     snap0 = env.simpan_keadaan()
@@ -170,9 +171,11 @@ def rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=None
         _, _, akhir, info = env.step(a)
         dicoba += 1
         jarak_min = min(jarak_min, _jarak_tujuan(env))
-        if info["sukses"]:
+        if info["sukses"] and (terima is None or terima(env)):
             return {"sukses": True, "alasan": info["alasan"], "dicoba": dicoba, "mundur": n_mundur,
                     "waktu_s": time.perf_counter() - t0, "jarak_min": 0.0}
+        if info["sukses"]:
+            alasan = "semua pose serah gagal didaratkan"
         if akhir:
             di = None
             if not mundur:
@@ -189,11 +192,12 @@ def rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=None
             "waktu_s": time.perf_counter() - t0, "jarak_min": jarak_min}
 
 
-def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bobot=1.0):
+def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bobot=1.0, terima=None):
     """Pencarian terbaik-dulu berpandu Q. env harus sudah di-reset.
 
     Kembalian dict sama dengan rencanakan(): sukses, alasan, dicoba, mundur
     (= berapa kali pindah cabang), waktu_s. Jalur ada di env.jalur() bila sukses.
+    terima: seperti rencanakan().
     """
     t0 = time.perf_counter()
     # Simpul: keadaan lingkungan + induk + pose yang ditambahkan langkahnya.
@@ -210,11 +214,12 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
         with torch.no_grad():
             q = net(torch.as_tensor(env.observasi()[None]))[0].numpy()
         g = env.biaya
-        pl = env.planner
         for a in sah:
             a = int(a)
             poses, c, _ = env._calon[a]
-            if pl._at_goal(poses[-1][0], poses[-1][1], poses[-1][2], env.tujuan):
+            # Model dekat: langkah yang langsung tiba biayanya tepat. Model jauh
+            # tidak: sisa biayanya (mendarat) justru yang diperkirakan Q-nya.
+            if env.jenis == "dekat" and env._tiba(poses[-1][0], poses[-1][1], poses[-1][2]):
                 f = g + c                                  # terminal: biaya tepat
             else:
                 h = max(0.0, -float(q[a]) * SKALA_REWARD - c)
@@ -253,9 +258,11 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
         _, _, akhir, info = env.step(a)
         dicoba += 1
         jarak_min = min(jarak_min, _jarak_tujuan(env))
-        if info["sukses"]:
+        if info["sukses"] and (terima is None or terima(env)):
             return {"sukses": True, "alasan": info["alasan"], "dicoba": dicoba, "mundur": pindah,
                     "waktu_s": time.perf_counter() - t0, "jarak_min": 0.0}
+        if info["sukses"]:
+            alasan = "semua pose serah gagal didaratkan"
         j = len(snap)
         snap.append(env.simpan_keadaan())
         induk.append(i)
@@ -269,24 +276,157 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
             "waktu_s": time.perf_counter() - t0, "jarak_min": jarak_min}
 
 
+def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, terima=None, mulai_ulang=None):
+    """Satu model, satu metode. env sudah di-reset. Kembalian dict rencanakan() + 'metode'.
+
+    gabungan: terbaik-dulu (PORSI_WAKTU_TERBAIK dari batas waktu), lalu mundur
+    bila gagal. mulai_ulang(): me-reset env ke keadaan awal yang sama - sel
+    tertutup milik pencarian pertama tidak boleh menutup pencarian kedua.
+    """
+    t0 = time.perf_counter()
+    if metode == "mundur":
+        h = rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=batas_waktu,
+                       terima=terima)
+        h["metode"] = "mundur"
+        return h
+    bt = None if batas_waktu is None else (PORSI_WAKTU_TERBAIK * batas_waktu if metode == "gabungan"
+                                           else batas_waktu)
+    h = rencanakan_terbaik(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=BOBOT_TERBAIK,
+                           terima=terima)
+    h["metode"] = "terbaik"
+    if h["sukses"] or metode == "terbaik":
+        return h
+    sisa = None if batas_waktu is None else batas_waktu - (time.perf_counter() - t0)
+    if sisa is not None and sisa <= 0:
+        return h
+    if mulai_ulang is None or mulai_ulang() is None:
+        return h
+    hm = rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=sisa, terima=terima)
+    hm["metode"] = "terbaik -> mundur"
+    hm["dicoba"] += h["dicoba"]
+    hm["waktu_s"] = time.perf_counter() - t0
+    if not hm["sukses"]:
+        hm["alasan"] = f"terbaik: {h['alasan']}; mundur: {hm['alasan']}"
+    return hm
+
+
+# Batas waktu satu percobaan pendaratan dari satu pose serah (model dekat), dan
+# berapa pose serah yang boleh dicoba sebelum menyerah.
+#
+# MAKS_SERAH 6 -> 12 (2026-10-20, model ID 01 langkah jauh 55000 / dekat 95000):
+#                            30 rute yang gagal      80 rute acak       waktu median (acak)
+#   6, pose pertama          0/30                    73/80              205 ms
+#   12, pose pertama         20/30                   76/80              151 ms
+#   anggaran x3 + 2 s, 12    22/30                   -                  -
+#   <=12 kandidat diurut g + V model dekat, coba 6: 10/30, 73/80 - urutan V tidak
+#   membantu (model dekat buta rintangan, V-nya terlalu optimis di tempat sempit).
+# Yang menentukan adalah BANYAKNYA pose serah yang dicoba, bukan anggaran per
+# pencarian. Rute normal tidak melambat: biasanya berhasil di percobaan 1-2.
+BATAS_DEKAT_S = 0.6
+MAKS_SERAH = 12
+
+
+def rencanakan_dua(net_jauh, net_dekat, env_jauh, env_dekat, awal, tujuan, omap=None,
+                   metode=METODE_BAWAAN, batas_waktu=None, batas_dekat=BATAS_DEKAT_S):
+    """Model jauh sampai serah, lalu model dekat. Tanpa Reeds-Shepp, tanpa A*.
+
+    Model jauh berhenti di dalam 60 cm bila TIDAK ADA HALANGAN untuk mendarat,
+    dan melanjutkan selama masih ada. "Tidak ada halangan" diperiksa oleh
+    model dekat sendiri: di setiap pose yang lolos saringan cepat lingkungan
+    (di dalam 60 cm, peta Dijkstra bebas), model dekat mencoba mendarat
+    (env_jauh.cek_serah). Berhasil tanpa tabrakan = berhenti di situ; gagal =
+    model jauh lanjut memperkecil jarak. Paling banyak MAKS_SERAH percobaan.
+
+    Kembalian dict:
+      sukses, alasan, fase       'tiba' | 'gagal_jauh' (tidak ada pose yang lolos
+                                 saringan sama sekali: masalah NAVIGASI) |
+                                 'gagal_dekat' (ada, semua gagal didaratkan: PRESISI)
+      jalur                      jalur gabungan (format plan()), [] bila gagal
+      biaya                      biaya jalur jauh + dekat (sel)
+      n_jauh_titik, n_serah      titik bagian jauh; percobaan pendaratan
+      metode_jauh, metode_dekat, dicoba, waktu_s
+    """
+    t0 = time.perf_counter()
+    st = {"n_serah": 0, "dekat": None, "jalur_dekat": None, "biaya_dekat": 0.0}
+
+    def sisa():
+        return None if batas_waktu is None else max(0.0, batas_waktu - (time.perf_counter() - t0))
+
+    def daratkan(mulai, d0, k0):
+        obs, info = env_dekat.reset(mulai, tujuan, omap, d0=d0, k0=k0)
+        if obs is None:
+            if info["alasan"] == "sudah di tujuan":
+                st.update(dekat={"sukses": True, "metode": "-", "dicoba": 0},
+                          jalur_dekat=[(*mulai, d0 or 1)], biaya_dekat=0.0)
+                return True
+            return False
+        bw = batas_dekat if sisa() is None else min(batas_dekat, sisa())
+        h = cari(net_dekat, env_dekat, metode, batas_waktu=bw,
+                 mulai_ulang=lambda: env_dekat.reset(mulai, tujuan, omap, d0=d0, k0=k0)[0])
+        if h["sukses"]:
+            st.update(dekat=h, jalur_dekat=env_dekat.jalur(), biaya_dekat=env_dekat.biaya)
+        return h["sukses"]
+
+    def cek_serah(e):
+        """Tidak ada halangan = model dekat bisa mendarat dari pose ini."""
+        if st["n_serah"] >= MAKS_SERAH or (sisa() is not None and sisa() <= 0):
+            return False
+        st["n_serah"] += 1
+        return daratkan((e.x, e.y, e.yaw), e.d, e.k)
+
+    hasil = {"sukses": False, "jalur": [], "biaya": 0.0, "n_jauh_titik": 0, "metode_jauh": "-",
+             "metode_dekat": "-", "dicoba": 0}
+    env_jauh.cek_serah = cek_serah
+    try:
+        obs, info = env_jauh.reset(awal, tujuan, omap)
+        if obs is None and info["alasan"] == "sudah di radius dekat":
+            hasil.update(sukses=True, fase="tiba", alasan="")
+        elif obs is None:
+            hasil.update(fase="gagal_dekat" if st["n_serah"] else "gagal_jauh", alasan=info["alasan"])
+        else:
+            hj = cari(net_jauh, env_jauh, metode, batas_waktu=sisa(),
+                      mulai_ulang=lambda: env_jauh.reset(awal, tujuan, omap)[0])
+            hasil.update(sukses=hj["sukses"], metode_jauh=hj["metode"], dicoba=hj["dicoba"],
+                         alasan=hj["alasan"] if not hj["sukses"] else "")
+            if hj["sukses"]:
+                hasil.update(fase="tiba", n_jauh_titik=len(env_jauh.jalur()), biaya=env_jauh.biaya)
+            else:
+                hasil["fase"] = "gagal_dekat" if st["n_serah"] else "gagal_jauh"
+    finally:
+        env_jauh.cek_serah = None
+    if hasil["sukses"]:
+        jauh = env_jauh.jalur() if hasil["n_jauh_titik"] else []
+        dekat = st["jalur_dekat"] or []
+        hasil["jalur"] = jauh + dekat[1 if jauh else 0:]
+        hasil["biaya"] += st["biaya_dekat"]
+        hasil["metode_dekat"] = st["dekat"]["metode"]
+        hasil["dicoba"] += st["dekat"].get("dicoba", 0)
+    hasil.update(n_serah=st["n_serah"], waktu_s=time.perf_counter() - t0)
+    return hasil
+
+
 # ------------------------------------------------------------ operasional
 _MODEL = {}
 
 
-def muat_model(robot_id, dir_model=None):
-    """Jaringan robot ini dari model_dqn/id0N.pt, di-cache per proses, di CPU.
+def jalur_model(robot_id, jenis, dir_model=None):
+    return os.path.join(dir_model or DIR_MODEL, f"id{robot_id:02d}_{jenis}.pt")
+
+
+def muat_model(robot_id, jenis, dir_model=None):
+    """Jaringan model 'jauh' / 'dekat' robot ini dari model_dqn/id0N_<jenis>.pt, di-cache, di CPU.
 
     torch dibatasi SATU thread: forward satu keadaan hanya 0,03 ms, dan thread
     tambahan justru berebut inti dengan loop kendali 20 Hz di navigasi.py.
     """
-    jalur = os.path.join(dir_model or DIR_MODEL, f"id{robot_id:02d}.pt")
+    jalur = jalur_model(robot_id, jenis, dir_model)
     if jalur not in _MODEL:
         if not os.path.exists(jalur):
-            raise SystemExit(f"[!] Model DQfD robot {robot_id:02d} belum ada: {jalur}\n"
-                             f"    Latih dulu: python -m drl.latih --id {robot_id}")
+            raise SystemExit(f"[!] Model DQfD {jenis} robot {robot_id:02d} belum ada: {jalur}\n"
+                             f"    Latih dulu: python -m drl.latih --id {robot_id} --model dekat,jauh")
         from drl.dqfd import muat_jaringan, periksa_profil
         torch.set_num_threads(1)
-        net, meta = muat_jaringan(jalur)
+        net, meta = muat_jaringan(jalur, jenis=jenis)
         if meta.get("robot") not in (None, robot_id):
             raise SystemExit(f"[!] {jalur} milik robot {meta['robot']:02d}, bukan {robot_id:02d}")
         periksa_profil(meta, konfig.profil(robot_id), jalur)
@@ -302,6 +442,10 @@ class DQfDPlanner:
     (x, y, yaw, arah) dalam sel - jadi pelacak, wasit, dan navigasi tidak
     tahu jalurnya dari mana.
 
+    Dua model per robot (id0N_jauh.pt, id0N_dekat.pt), dijalankan lewat
+    rencanakan_dua(). last_stats["rs_titik"] = jumlah titik bagian model dekat,
+    supaya navigasi.py menandainya dengan warna bagian Reeds-Shepp.
+
     astar: HybridAStarPlanner untuk kendaraan & margin yang sama. Dipakai dua
     cara: SALINANNYA sebagai pustaka gerak lingkungan (keadaan _hcost milik
     salinan, tidak mengganggu aslinya), dan aslinya sebagai CADANGAN bila
@@ -311,6 +455,8 @@ class DQfDPlanner:
 
     def __init__(self, astar, arena, profil, margin_cm, cadangan=True,
                  anggaran=None, dir_model=None, gerbang_k=None, metode=METODE_BAWAAN):
+        if metode not in ("terbaik", "mundur", "gabungan"):
+            raise ValueError(f"metode DQfD '{metode}' tidak dikenal")
         self.astar = astar
         self.metode = metode
         # Gerbang hanya bermakna bila ada cadangan; tanpa cadangan menolak
@@ -319,75 +465,60 @@ class DQfDPlanner:
         self.v = astar.v
         self.time_limit = astar.time_limit
         self.cadangan = cadangan
-        if metode not in ("terbaik", "mundur", "gabungan"):
-            raise ValueError(f"metode DQfD '{metode}' tidak dikenal")
-        # anggaran berlaku untuk metode tunggal; gabungan memakai bawaan masing-masing.
-        self.anggaran = anggaran or (ANGGARAN_TERBAIK if metode == "terbaik" else ANGGARAN_BAWAAN)
-        self.net = muat_model(profil.id, dir_model)
-        self.env = L.LingkunganRencana(arena, profil, margin_cm=margin_cm, planner=copy.copy(astar))
+        self.net_jauh = muat_model(profil.id, "jauh", dir_model)
+        self.net_dekat = muat_model(profil.id, "dekat", dir_model)
+        pustaka = copy.copy(astar)
+        self.env_jauh = L.LingkunganRencana(arena, profil, margin_cm=margin_cm, planner=pustaka,
+                                            jenis="jauh")
+        self.env_dekat = L.LingkunganRencana(arena, profil, margin_cm=margin_cm, planner=pustaka,
+                                             jenis="dekat")
         self.last_stats = {}
+
+    def _perkiraan(self, omap, start, goal):
+        """-V(s0) x skala model yang memulai rute: perkiraan biaya total (gerbang mutu)."""
+        # Tanpa percobaan pendaratan: di sini hanya perlu tahu model mana yang memulai.
+        self.env_jauh.cek_serah = lambda e: True
+        try:
+            obs, info = self.env_jauh.reset(start, goal, omap)
+        finally:
+            self.env_jauh.cek_serah = None
+        net = self.net_jauh
+        if obs is None:
+            obs, _ = self.env_dekat.reset(start, goal, omap)
+            net = self.net_dekat
+        if obs is None:
+            return None
+        with torch.no_grad():
+            _, akt = net(torch.as_tensor(obs[None]), aktivasi=True)
+        return max(1.0, -float(akt["v"][0, 0]) * SKALA_REWARD)
 
     def plan(self, omap, start, goal):
         t0 = time.perf_counter()
-        obs, info = self.env.reset(start, goal, omap)
-        if obs is None and info["alasan"] == "sudah di tujuan":
-            self.last_stats = {"expansions": 0, "time": 0.0, "reason": "sudah di tujuan",
+        perkiraan = self._perkiraan(omap, start, goal) if self.gerbang_k is not None else None
+        h = rencanakan_dua(self.net_jauh, self.net_dekat, self.env_jauh, self.env_dekat,
+                           start, goal, omap, metode=self.metode, batas_waktu=self.time_limit)
+        if h["sukses"] and not h["jalur"]:
+            self.last_stats = {"expansions": 0, "time": h["waktu_s"], "reason": "sudah di tujuan",
                                "perencana": "dqfd"}
             return []
-        dq = {"sukses": False, "alasan": info["alasan"], "dicoba": 0, "mundur": 0, "waktu_s": 0.0}
-        perkiraan = None
-        if obs is not None:
-            with torch.no_grad():
-                _, akt = self.net(torch.as_tensor(obs[None]), aktivasi=True)
-            perkiraan = max(1.0, -float(akt["v"][0, 0]) * SKALA_REWARD)
-            if self.metode == "terbaik":
-                dq = rencanakan_terbaik(self.net, self.env, anggaran=self.anggaran,
-                                        batas_waktu=self.time_limit, bobot=BOBOT_TERBAIK)
-                dq["metode"] = "terbaik"
-            elif self.metode == "mundur":
-                dq = rencanakan(self.net, self.env, mundur=True, anggaran=self.anggaran,
-                                batas_waktu=self.time_limit)
-                dq["metode"] = "mundur"
-            else:
-                dq = self._gabungan(omap, start, goal, t0)
-        if dq["sukses"]:
-            rasio = self.env.biaya / perkiraan
-            if self.gerbang_k is None or rasio <= self.gerbang_k:
-                self.last_stats = {"expansions": dq["dicoba"], "time": time.perf_counter() - t0,
-                                   "reason": "", "perencana": f"dqfd ({dq['metode']})",
-                                   "mundur": dq["mundur"], "rasio_perkiraan": rasio}
-                return self.env.jalur()
-            dq["alasan"] = f"ditolak gerbang mutu (biaya {rasio:.2f} x perkiraan)"
+        if h["sukses"]:
+            rasio = h["biaya"] / perkiraan if perkiraan else None
+            if self.gerbang_k is None or rasio is None or rasio <= self.gerbang_k:
+                self.last_stats = {
+                    "expansions": h["dicoba"], "time": time.perf_counter() - t0, "reason": "",
+                    "perencana": f"dqfd (jauh {h['metode_jauh']}, dekat {h['metode_dekat']}, "
+                                 f"serah dicoba {h['n_serah']})",
+                    "rasio_perkiraan": rasio,
+                    "rs_titik": len(h["jalur"]) - max(h["n_jauh_titik"], 1)}
+                return h["jalur"]
+            h["alasan"] = f"ditolak gerbang mutu (biaya {rasio:.2f} x perkiraan)"
         if not self.cadangan:
-            self.last_stats = {"expansions": dq["dicoba"], "time": time.perf_counter() - t0,
-                               "reason": f"DQfD: {dq['alasan']}", "perencana": "dqfd"}
+            self.last_stats = {"expansions": h["dicoba"], "time": time.perf_counter() - t0,
+                               "reason": f"DQfD ({h.get('fase', '')}): {h['alasan']}", "perencana": "dqfd"}
             return None
         self.astar.time_limit = self.time_limit
         jalur = self.astar.plan(omap, start, goal)
-        return self._catat_cadangan(jalur, dq, t0)
-
-    def _gabungan(self, omap, start, goal, t0):
-        """Terbaik-dulu, lalu mundur bila gagal. Lingkungan di-reset di antaranya:
-        sel tertutup milik pencarian pertama tidak boleh menutup pencarian kedua."""
-        dq = rencanakan_terbaik(self.net, self.env, anggaran=ANGGARAN_TERBAIK,
-                                batas_waktu=PORSI_WAKTU_TERBAIK * self.time_limit,
-                                bobot=BOBOT_TERBAIK)
-        dq["metode"] = "terbaik"
-        if dq["sukses"]:
-            return dq
-        sisa = self.time_limit - (time.perf_counter() - t0)
-        if sisa <= 0:
-            return dq
-        self.env.reset(start, goal, omap)
-        dm = rencanakan(self.net, self.env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=sisa)
-        dm["metode"] = "terbaik -> mundur"
-        dm["dicoba"] += dq["dicoba"]
-        if not dm["sukses"]:
-            dm["alasan"] = f"terbaik: {dq['alasan']}; mundur: {dm['alasan']}"
-        return dm
-
-    def _catat_cadangan(self, jalur, dq, t0):
         self.last_stats = dict(self.astar.last_stats or {})
         self.last_stats.update(time=time.perf_counter() - t0, perencana="A* (cadangan)",
-                               dqfd_gagal=dq["alasan"])
+                               dqfd_gagal=h["alasan"])
         return jalur

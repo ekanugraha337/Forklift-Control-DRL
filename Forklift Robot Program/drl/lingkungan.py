@@ -1,63 +1,73 @@
 """
 lingkungan.py - MDP perencanaan untuk DQfD, pengganti ruang pencarian Hybrid A*.
 
-Satu episode = satu panggilan plan(): dari pose awal, agen memilih primitif
-gerak satu per satu sampai TIBA di toleransi tujuan. Tidak ada dinamika (jeda
-kemudi, ramp gas, kamera) - itu urusan pelacak, yang tidak berubah.
+DUA MODEL PER ROBOT (versi aksi 4, branch ver-1-2). Demonstratornya Hybrid A* +
+Reeds-Shepp; saat dipakai TIDAK ADA algoritma Reeds-Shepp maupun A* - seluruh
+jalur dipilih dua jaringan, masing-masing meniru MASUKAN dan KELUARAN algoritma
+yang ditirunya:
 
-FULL DQfD (versi 2, 2026-10-20). Demonstratornya Hybrid A* + Reeds-Shepp,
-tapi saat dipakai TIDAK ADA algoritma Reeds-Shepp maupun A*: seluruh jalur
-dipilih jaringan. Dulu ekor Reeds-Shepp adalah satu aksi SAMBUNG yang
-memanggil planner._analytic; sekarang ekor itu diurai (adaptor_demo) menjadi
-primitif biasa ditambah primitif PENDEK, dan jaringan menirunya langkah demi
-langkah. Busur Reeds-Shepp memakai kelengkungan yang sama persis dengan
-primitif kemudi penuh/lurus (radius = 1/kappa_max); yang berbeda hanya
-panjangnya, dan sisa yang bukan kelipatan langkah ditutup primitif pendek.
-Diukur pada 210 ekor RS: dengan 1/2, 1/4, 1/8 langkah semuanya mendarat di
-toleransi tujuan (galat maks 1,9 cm / 2,3 deg).
+    jauh   meniru HYBRID A*
+           masukan  pose awal & tujuan + PETA RINTANGAN: 47 angka (tujuan
+                    relatif, 32 sinar, peta Dijkstra, margin, gerak terakhir)
+           keluaran 14 primitif (7 tingkat kemudi x maju/mundur), 7,3 cm
+    dekat  meniru REEDS-SHEPP
+           masukan  HANYA pose tujuan relatif terhadap robot, dibagi radius
+                    belok R (seperti reeds_shepp_paths), + arah & kemudi yang
+                    sedang berjalan (seperti _rs_cost) + target pendekatan
+                    lurus (_approach_dirs): 9 angka. TIDAK melihat rintangan -
+                    sama dengan RS, yang tabrakannya dicek terpisah oleh A*.
+                    Di sini tabrakan dicegah mask, dan pencarian mencoba aksi
+                    berikutnya menurut Q (seperti _best_free_rs mencoba
+                    kandidat dari yang termurah).
+           keluaran 30 = segmen RS: {kanan penuh, lurus, kiri penuh} x {maju,
+                    mundur} x panjang {1, 1/2, 1/4, 1/8, 1/16 langkah}.
+                    Busur RS memakai kelengkungan yang sama persis dengan
+                    kemudi penuh (radius = 1/kappa_max); panjang sisanya
+                    dibulatkan ke 1/16 langkah (200/200 ekor RS mendarat
+                    <= 1,0 cm & 1,2 deg).
 
-Bagian A* tetap direkonstruksi PERSIS: aritmetika ekspansi primitif penuh
-sama dengan loop HybridAStarPlanner.plan() sampai bit terakhir, jadi biaya
-bagian itu sama dengan g-cost A*. Diperiksa oleh "python -m drl.adaptor_demo --uji".
+SERAH (akhir episode jauh). Model jauh berhenti begitu titik acuan di dalam 60 cm
+(analytic_dist, batas TERJAUH) DAN TIDAK ADA HALANGAN untuk mendarat. Selama
+masih ada halangan, model jauh MELANJUTKAN - memperkecil jarak - sampai bebas,
+lalu model dekat mengambil alih. "Tidak ada halangan" diperiksa dua tahap:
+    1. saringan cepat (_boleh_coba_serah): peta Dijkstra tidak memaksa memutar
+       (biaya Dijkstra = jarak oktil grid), atau sudah < RADIUS_SERAH_PAKSA_CM;
+    2. cek_serah(env): jalur pendaratan benar-benar bebas.
+         - saat LATIH (bawaan): tembakan Reeds-Shepp dari pose itu bebas -
+           syarat yang SAMA PERSIS dengan saat Hybrid A* beralih ke RS. Jadi
+           demo jauh berhenti tepat di titik demonstrator beralih, dan demo
+           dekat 100% Reeds-Shepp. RS di sini peran demonstrator, bukan
+           perencana yang dipakai robot.
+         - saat DIPAKAI (perencana_dqfd): model DEKAT mencoba mendarat dari
+           pose itu; berhasil tanpa tabrakan = tidak ada halangan.
 
-Pustaka geraknya adalah objek HybridAStarPlanner itu sendiri: kappas, step,
-n_sub, bobot biaya, heuristik, _at_goal, _key. Hanya ekspansi satu primitif
-yang ditulis ulang (_ekspansi), karena di forklift_planner.py ia berada di
-dalam loop plan(), bukan fungsi tersendiri - dan berkas itu tidak diubah.
+Bagian A* direkonstruksi PERSIS: aritmetika ekspansi primitif penuh sama dengan
+loop HybridAStarPlanner.plan() sampai bit terakhir. Diperiksa oleh
+"python -m drl.adaptor_demo --uji". Pustaka geraknya objek HybridAStarPlanner
+itu sendiri (kappas, step, n_sub, bobot biaya, heuristik, _analytic, _key);
+hanya ekspansi satu primitif yang ditulis ulang (_ekspansi), karena di
+forklift_planner.py ia berada di dalam loop plan() - dan berkas itu tidak diubah.
 
 SATUAN. Seperti perencana: pose dan biaya dalam SEL grid, yaw radian. Hanya
-observasi yang dinormalisasi dari cm.
-
-AKSI (32)
-    0..6     maju,   langkah penuh, kappa = planner.kappas[0..6] (-kmax .. +kmax)
-    7..13    mundur, langkah penuh, sama
-    14..31   PENDEK: panjang {1/2, 1/4, 1/8} langkah x kappa {-kmax, 0, +kmax}
-             x {maju, mundur} - lihat aksi_info(). Hanya kemudi penuh dan
-             lurus, karena hanya itu yang dipakai Reeds-Shepp.
+observasi yang dinormalisasi.
 
 MASK - aksi terlarang, Q-nya dibuat -inf sebelum argmax:
     aksi yang badannya menyentuh zona di salah satu sub-titiknya
         (aturan A*, termasuk kelonggaran "lepas diri" bila awalnya menempel);
-    primitif PENUH yang mendarat di sel yang sudah dikunjungi DENGAN ARAH
+    aksi panjang PENUH yang mendarat di sel yang sudah dikunjungi DENGAN ARAH
         GERAK YANG SAMA (planner._key + arah) - padanan closed set supaya
         rollout tidak berputar-putar. Arah ikut dihitung karena manuver
-        maju-mundur Reeds-Shepp memang melewati sel yang sama dua kali;
-    primitif PENDEK yang mendarat di sel HALUS yang sudah dikunjungi dengan
-        arah yang sama - sel 1/8 xy_reso (0,6 cm) dan 1/8 yaw_reso. Sel kasar
-        tidak bisa dipakai: primitif pendek hampir selalu mendarat di sel
-        kasar yang sama. Sel halus lebih kecil dari gerak terpendek (1/8
-        langkah = 0,91 cm > 0,6 x akar 2), jadi satu gerak pendek selalu
-        pindah sel, sedangkan bolak-balik ke tempat yang sama tertutup -
-        tanpa ini pencarian terbaik-dulu membuka cabang pendek yang nyaris
-        sama berulang-ulang;
-    primitif PENDEK setelah MAKS_PENDEK dipakai dalam satu episode.
+        maju-mundur RS memang melewati sel yang sama dua kali;
+    aksi PENDEK (dekat) yang mendarat di sel HALUS yang sudah dikunjungi
+        dengan arah yang sama - 1/16 sel A* (0,3 cm, 0,625 deg), lebih kecil
+        dari gerak terpendek (0,46 cm > 0,3 x akar 2);
+    aksi PENDEK setelah MAKS_PENDEK dipakai dalam satu episode.
 
-BIAYA per langkah = rumus biaya ekspansi A* dengan panjang aksi itu
-(reward = -biaya). Untuk ekor RS jumlahnya mendekati biaya Reeds-Shepp
-(_rs_cost), tidak persis: sisa panjang dibulatkan ke 1/8 langkah. Episode
-berakhir bila TIBA (planner._at_goal), buntu (semua aksi ter-mask,
-+ BIAYA_BUNTU_CM), atau melewati MAKS_LANGKAH (terpotong, bukan gagal - untuk
-DQN itu bukan keadaan terminal).
+BIAYA per langkah = rumus biaya ekspansi A* dengan panjang aksi itu (reward =
+-biaya). Episode berakhir bila SERAH (jauh; reward - nilai_serah, perkiraan
+model dekat tentang biaya mendarat), TIBA (dekat; <= TOL_DEKAT_CM & TOL_DEKAT_DEG),
+buntu (semua aksi ter-mask, + BIAYA_BUNTU_CM), atau MAKS_LANGKAH (terpotong,
+bukan gagal - untuk DQN itu bukan keadaan terminal).
 """
 import math
 
@@ -68,26 +78,34 @@ import rencana as R
 
 N_KEMUDI = 7
 N_PRIMITIF = 2 * N_KEMUDI
-# Primitif pendek: pecahan langkah x indeks planner.kappas (kanan penuh, lurus,
-# kiri penuh) x arah. Urutannya bagian dari kontrak model - jangan diubah tanpa
-# menaikkan VERSI_AKSI.
-PECAHAN_PENDEK = (0.5, 0.25, 0.125)
-KEMUDI_PENDEK = (0, N_KEMUDI // 2, N_KEMUDI - 1)
-N_PENDEK = len(PECAHAN_PENDEK) * len(KEMUDI_PENDEK) * 2
-N_AKSI = N_PRIMITIF + N_PENDEK
+JENIS = ("jauh", "dekat")
+# Aksi model dekat = segmen Reeds-Shepp. Urutannya bagian dari kontrak model -
+# jangan diubah tanpa menaikkan VERSI_AKSI.
+PANJANG_DEKAT = (1.0, 0.5, 0.25, 0.125, 0.0625)
+KEMUDI_DEKAT = (0, N_KEMUDI // 2, N_KEMUDI - 1)     # indeks planner.kappas: kanan penuh, lurus, kiri penuh
+NAMA_KEMUDI_DEKAT = ("R", "S", "L")
+PECAHAN_PENDEK = PANJANG_DEKAT[1:]
+_N_AKSI = {"jauh": N_PRIMITIF, "dekat": len(PANJANG_DEKAT) * len(KEMUDI_DEKAT) * 2}
+_N_OBS = {"jauh": 47, "dekat": 9}
 N_SINAR = 32
-N_OBS = 47
 # Dicatat di checkpoint (dqfd.meta_profil): model dengan ruang aksi lain ditolak.
-# 1 = 14 primitif + SAMBUNG (sampai 2026-10-20), 2 = full DQfD, 32 aksi.
-VERSI_AKSI = 2
-# Primitif pendek per episode. Satu segmen RS butuh <= 3 (1/2 + 1/4 + 1/8),
-# ekor RS terpanjang yang terukur 6 segmen -> 18. Sisanya cadangan.
-MAKS_PENDEK = 24
-# Sel halus untuk primitif pendek, pecahan dari xy_reso / yaw_reso perencana.
-HALUS = 8
+# 1 = 14 primitif + SAMBUNG; 2 = satu model, 32 aksi (ver-1-1); 3 = dua model,
+# jauh 14 / dekat 38 aksi, masukan sama (ver-1-2, awal); 4 = dua model meniru
+# masukan & keluaran A* (47 / 14) dan RS (9 / 30).
+VERSI_AKSI = 4
+# Aksi pendek per episode. Satu segmen RS butuh <= 4 (1/2 + 1/4 + 1/8 + 1/16),
+# ekor RS terpanjang yang terukur 6 segmen -> 24. Sisanya cadangan.
+MAKS_PENDEK = 32
+# Sel halus untuk aksi pendek, pecahan dari xy_reso / yaw_reso perencana.
+HALUS = 16
+# Toleransi TIBA model dekat (model jauh tidak tiba, ia menyerahkan).
+TOL_DEKAT_CM = 1.0
+TOL_DEKAT_DEG = 2.0
+# Saringan serah: di dalam jarak ini (cm) peta Dijkstra tidak lagi disyaratkan
+# bebas - untuk tujuan yang mepet rintangan. cek_serah tetap harus lolos.
+RADIUS_SERAH_PAKSA_CM = 25.0
 
-# Skala normalisasi observasi (cm). Arena 300 x 270 cm, jadi jarak ternormalisasi
-# tetap di sekitar [-1, 1].
+# Normalisasi observasi model jauh (cm). Arena 300 x 270 cm -> sekitar [-1, 1].
 JARAK_NORM_CM = 300.0
 SINAR_JANGKAU_CM = 100.0
 BEBAS_NORM_CM = 20.0
@@ -105,48 +123,66 @@ _SINAR_ITERASI = 256
 _TETANGGA = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
 
 
-def aksi_info(planner, a):
-    """Aksi 0..N_AKSI-1 -> (arah +1/-1, kappa 1/sel, pecahan langkah 0..1)."""
-    if a < N_PRIMITIF:
+def _cek_jenis(jenis):
+    if jenis not in JENIS:
+        raise ValueError(f"jenis lingkungan '{jenis}' tidak dikenal, pilih {JENIS}")
+
+
+def n_aksi(jenis):
+    """Jumlah aksi (keluaran jaringan): jauh 14, dekat 30."""
+    _cek_jenis(jenis)
+    return _N_AKSI[jenis]
+
+
+def n_obs(jenis):
+    """Jumlah masukan jaringan: jauh 47, dekat 9."""
+    _cek_jenis(jenis)
+    return _N_OBS[jenis]
+
+
+def aksi_info(planner, a, jenis):
+    """Aksi -> (arah +1/-1, kappa 1/sel, pecahan langkah 0..1)."""
+    if jenis == "jauh":
         return (1 if a < N_KEMUDI else -1), planner.kappas[a % N_KEMUDI], 1.0
-    i = a - N_PRIMITIF
-    i_pecah, sisa = divmod(i, len(KEMUDI_PENDEK) * 2)
+    i_panjang, sisa = divmod(a, len(KEMUDI_DEKAT) * 2)
     i_kemudi, i_arah = divmod(sisa, 2)
-    return ((1, -1)[i_arah], planner.kappas[KEMUDI_PENDEK[i_kemudi]],
-            PECAHAN_PENDEK[i_pecah])
+    return ((1, -1)[i_arah], planner.kappas[KEMUDI_DEKAT[i_kemudi]], PANJANG_DEKAT[i_panjang])
 
 
-def arah_kappa(planner, a):
+def arah_kappa(planner, a, jenis):
     """Aksi -> (arah +1/-1, kappa dalam 1/sel). Panjangnya lihat aksi_info()."""
-    d, k, _ = aksi_info(planner, a)
+    d, k, _ = aksi_info(planner, a, jenis)
     return d, k
 
 
-def aksi_dari(planner, arah, kappa, pecahan=1.0):
+def aksi_dari(planner, arah, kappa, pecahan=1.0, jenis="jauh"):
     """Kebalikan aksi_info: kappa dibulatkan ke tingkat terdekat.
 
-    Untuk pecahan < 1 hanya kemudi penuh dan lurus yang ada; ValueError bila
-    pecahan bukan salah satu PECAHAN_PENDEK.
+    jenis dekat hanya punya kemudi penuh dan lurus, dan panjang PANJANG_DEKAT;
+    ValueError bila (kappa, pecahan) bukan segmen RS.
     """
     i = int(np.argmin([abs(kappa - k) for k in planner.kappas]))
-    if pecahan == 1.0:
+    if jenis == "jauh":
+        if pecahan != 1.0:
+            raise ValueError("model jauh hanya punya primitif penuh")
         return i + (0 if arah > 0 else N_KEMUDI)
-    if pecahan not in PECAHAN_PENDEK or i not in KEMUDI_PENDEK:
-        raise ValueError(f"tidak ada primitif pendek {pecahan} langkah, kappa {kappa:.4g}")
-    return (N_PRIMITIF + PECAHAN_PENDEK.index(pecahan) * len(KEMUDI_PENDEK) * 2
-            + KEMUDI_PENDEK.index(i) * 2 + (0 if arah > 0 else 1))
+    if pecahan not in PANJANG_DEKAT or i not in KEMUDI_DEKAT:
+        raise ValueError(f"bukan segmen Reeds-Shepp: {pecahan} langkah, kappa {kappa:.4g}")
+    return PANJANG_DEKAT.index(pecahan) * len(KEMUDI_DEKAT) * 2 + KEMUDI_DEKAT.index(i) * 2 \
+        + (0 if arah > 0 else 1)
 
 
-def tabel_aksi(planner):
+def tabel_aksi(planner, jenis):
     """Keterangan tiap aksi: (nama, arah, kappa, sudut kemudi derajat, radius sel)."""
     baris = []
-    for a in range(N_AKSI):
-        d, k, f = aksi_info(planner, a)
+    for a in range(n_aksi(jenis)):
+        d, k, f = aksi_info(planner, a, jenis)
         sudut = math.degrees(math.atan(k * planner.v.L))
         radius = abs(1.0 / k) if k else float("inf")
-        nama = f"{'maju' if d > 0 else 'mundur'} {sudut:+.1f}"
-        if f < 1.0:
-            nama += f" x{f:g}"
+        if jenis == "dekat":
+            nama = f"{NAMA_KEMUDI_DEKAT[KEMUDI_DEKAT.index(planner.kappas.index(k))]}{'+' if d > 0 else '-'} x{f:g}"
+        else:
+            nama = f"{'maju' if d > 0 else 'mundur'} {sudut:+.1f}"
         baris.append((nama, d, k, sudut, radius))
     return baris
 
@@ -157,9 +193,16 @@ class LingkunganRencana:
     planner: HybridAStarPlanner yang dijadikan pustaka gerak. None = dibangun
     dari konfig untuk profil & margin ini, dengan fungsi yang sama yang dipakai
     Perencana (rencana.buat_kendaraan / buat_perencana).
+    jenis: 'jauh' atau 'dekat', lihat docstring modul.
+    nilai_serah: hanya jauh - fungsi(env) -> biaya (sel) mendarat dari pose
+    serah, ditambahkan ke biaya langkah terakhir. None = 0.
+    cek_serah: hanya jauh - fungsi(env) -> bool, "jalur pendaratan bebas" di
+    pose sekarang. None = tembakan Reeds-Shepp bebas (saat latih, peran
+    demonstrator). perencana_dqfd memasang model dekat di sini.
     """
 
-    def __init__(self, arena, profil=None, margin_cm=None, planner=None):
+    def __init__(self, arena, profil=None, margin_cm=None, planner=None, jenis="dekat",
+                 nilai_serah=None, cek_serah=None):
         self.arena = arena
         self.p = profil or konfig.profil()
         self.margin_cm = konfig.SAFETY_MARGIN_CM if margin_cm is None else float(margin_cm)
@@ -172,9 +215,18 @@ class LingkunganRencana:
         self.planner = planner
         self.v = planner.v
         self.boleh_mundur = -1 in planner.dirs
+        self.jenis = jenis
+        self.n_aksi = n_aksi(jenis)
+        self.n_obs = n_obs(jenis)
+        self.nilai_serah = nilai_serah
+        self.cek_serah = cek_serah
 
         s = arena.panjang_ke_sel
         self._jarak_norm = s(JARAK_NORM_CM)
+        self.radius_serah = planner.analytic_dist
+        self.radius_paksa = s(RADIUS_SERAH_PAKSA_CM) if RADIUS_SERAH_PAKSA_CM is not None else 0.0
+        self.tol_pos = s(TOL_DEKAT_CM)
+        self.tol_yaw = math.radians(TOL_DEKAT_DEG)
         self._bebas_norm = s(BEBAS_NORM_CM)
         self._jangkau = s(SINAR_JANGKAU_CM)
         self.biaya_buntu = s(BIAYA_BUNTU_CM)
@@ -194,12 +246,16 @@ class LingkunganRencana:
         self.selesai = True
 
     # ------------------------------------------------------------ episode
-    def reset(self, awal, tujuan, omap=None):
+    def reset(self, awal, tujuan, omap=None, d0=0, k0=0.0):
         """awal = (gx, gy, yaw); tujuan = (gx, gy, yaw atau None). Dalam SEL.
 
         omap: peta dengan rintangan tambahan (Perencana.peta_dengan), None = arena.
+        d0, k0: arah gerak dan kelengkungan yang sedang berjalan - untuk model
+        dekat yang melanjutkan model jauh di pose serah (biaya ganti arah /
+        ganti kemudi langkah pertama ikut benar). 0 = berangkat dari diam.
         Kembalian (obs, info). obs None bila pasangan ini tidak sah - dengan
-        pemeriksaan yang sama dengan awal plan().
+        pemeriksaan yang sama dengan awal plan(). Jenis jauh yang sudah boleh
+        serah di pose awal: alasan "sudah di radius dekat".
         """
         self.omap = self.arena.omap if omap is None else omap
         pl, v = self.planner, self.v
@@ -210,6 +266,7 @@ class LingkunganRencana:
         self._pose = []
         self.n_pendek = 0
         self.biaya = 0.0
+        self.biaya_serah = 0.0
         self.langkah_ke = 0
         self.selesai = True
         self.sukses = False
@@ -218,7 +275,7 @@ class LingkunganRencana:
             return None, {"sah": False, "alasan": "tujuan menabrak rintangan"}
         if gyaw is None and self.omap.clearance(gx, gy) < v.half_width:
             return None, {"sah": False, "alasan": "tujuan terlalu dekat rintangan"}
-        if pl._at_goal(sx, sy, syaw, self.tujuan):
+        if self.jenis == "dekat" and self._tiba(sx, sy, syaw):
             return None, {"sah": False, "alasan": "sudah di tujuan"}
 
         # Keadaan bersama di objek perencana, diisi persis seperti plan().
@@ -227,11 +284,13 @@ class LingkunganRencana:
         self._hgrid = np.array(pl._hcost, dtype=np.float64)
 
         self.x, self.y, self.yaw = sx, sy, syaw
-        self.d, self.k = 0, 0.0
+        self.d, self.k = d0, k0
         self.in_col = self.omap.pose_margin(v, sx, sy, syaw) <= 0
+        if self.jenis == "jauh" and self._boleh_serah():
+            return None, {"sah": False, "alasan": "sudah di radius dekat"}
         # Sel awal tertutup untuk kedua arah: kembali ke pose awal tidak berguna.
-        k0 = pl._key(sx, sy, syaw)
-        self.dikunjungi = {(k0, 1), (k0, -1)}
+        kunci = pl._key(sx, sy, syaw)
+        self.dikunjungi = {(kunci, 1), (kunci, -1)}
         h0 = self._key_halus(sx, sy, syaw)
         self.dikunjungi_halus = {(h0, 1), (h0, -1)}
         self.selesai = False
@@ -267,7 +326,7 @@ class LingkunganRencana:
         pl = self.planner
         info = {"alasan": "", "terpotong": False}
         poses, biaya, col = self._calon[a]
-        nd, nk, pecahan = aksi_info(pl, a)
+        nd, nk, pecahan = aksi_info(pl, a, self.jenis)
         self.x, self.y, self.yaw = poses[-1][0], poses[-1][1], poses[-1][2]
         self.d, self.k, self.in_col = nd, nk, col
         if pecahan < 1.0:
@@ -275,14 +334,20 @@ class LingkunganRencana:
             self.dikunjungi_halus.add((self._key_halus(self.x, self.y, self.yaw), nd))
         else:
             self.dikunjungi.add((pl._key(self.x, self.y, self.yaw), nd))
-        if pl._at_goal(self.x, self.y, self.yaw, self.tujuan):
-            self.selesai = self.sukses = True
-            info["alasan"] = "tiba"
-
         self._pose.extend(poses)
         self.biaya += biaya
         self.langkah_ke += 1
         reward = -biaya
+
+        if self.jenis == "dekat" and self._tiba(self.x, self.y, self.yaw):
+            self.selesai = self.sukses = True
+            info["alasan"] = "tiba"
+        elif self.jenis == "jauh" and self._boleh_serah():
+            self.selesai = self.sukses = True
+            info["alasan"] = "serah"
+            if self.nilai_serah is not None:
+                self.biaya_serah = float(self.nilai_serah(self))
+                reward -= self.biaya_serah
 
         if not self.selesai:
             self._hitung_calon()
@@ -320,15 +385,62 @@ class LingkunganRencana:
             return []
         return [(*self.awal, self._pose[0][3])] + self._pose
 
+    # -------------------------------------------------------------- serah
+    def _di_radius(self, x, y):
+        """Sudah di radius serah? Sama dengan syarat Reeds-Shepp Hybrid A* (titik acuan, '<')."""
+        return math.hypot(self.tujuan[0] - x, self.tujuan[1] - y) < self.radius_serah
+
+    def bebas_ke_tujuan(self, x, y):
+        """Peta Dijkstra tidak memaksa memutar: biaya Dijkstra holonomik = jarak oktil grid.
+
+        Heuristik Hybrid A* (_holonomic_heuristic) adalah Dijkstra 8-tetangga di
+        grid h_reso, dengan sel yang terlalu sempit untuk badan sebagai
+        rintangan. Di ruang bebas biayanya PERSIS jarak oktil antar-sel; lebih
+        besar berarti jalannya harus memutari sesuatu.
+        """
+        pl = self.planner
+        r = pl.h_reso
+        H = self._hgrid
+        ny, nx = H.shape
+        ix, iy = min(nx - 1, max(0, int(x // r))), min(ny - 1, max(0, int(y // r)))
+        tx = min(nx - 1, max(0, int(self.tujuan[0] // r)))
+        ty = min(ny - 1, max(0, int(self.tujuan[1] // r)))
+        dx, dy = abs(ix - tx), abs(iy - ty)
+        oktil = r * (max(dx, dy) + (math.sqrt(2.0) - 1.0) * min(dx, dy))
+        return bool(H[iy, ix] <= oktil + 1e-6)
+
+    def _boleh_coba_serah(self, x, y):
+        """Saringan cepat: di dalam 60 cm, dan peta Dijkstra bebas (atau < radius paksa)."""
+        if not self._di_radius(x, y):
+            return False
+        if math.hypot(self.tujuan[0] - x, self.tujuan[1] - y) < self.radius_paksa:
+            return True
+        return self.bebas_ke_tujuan(x, y)
+
+    def rs_bebas(self):
+        """Tembakan Reeds-Shepp dari pose sekarang bebas tabrakan - syarat Hybrid A*
+        beralih ke RS (plan(): titik acuan < analytic_dist, badan tidak menempel,
+        _analytic tidak None). Peran demonstrator: dipakai saat LATIH saja."""
+        if self.in_col:
+            return False
+        return self.planner._analytic(self.omap, (self.x, self.y, self.yaw, self.d, self.k),
+                                      self.tujuan) is not None
+
+    def _boleh_serah(self):
+        """Model jauh berhenti di sini? Saringan cepat + jalur pendaratan bebas."""
+        if not self._boleh_coba_serah(self.x, self.y):
+            return False
+        return self.cek_serah(self) if self.cek_serah is not None else self.rs_bebas()
+
     # -------------------------------------------------------------- calon
     def _hitung_calon(self):
         """Hitung semua aksi dari keadaan sekarang: hasil + mask. Dipakai ulang step()."""
         pl = self.planner
-        self._calon = [None] * N_AKSI
-        self._mask = np.zeros(N_AKSI, dtype=bool)
+        self._calon = [None] * self.n_aksi
+        self._mask = np.zeros(self.n_aksi, dtype=bool)
         pendek_habis = self.n_pendek >= MAKS_PENDEK
-        for a in range(N_AKSI):
-            nd, nk, pecahan = aksi_info(pl, a)
+        for a in range(self.n_aksi):
+            nd, nk, pecahan = aksi_info(pl, a, self.jenis)
             if nd < 0 and not self.boleh_mundur:
                 continue
             if pecahan < 1.0 and pendek_habis:
@@ -344,8 +456,15 @@ class LingkunganRencana:
             self._calon[a] = hasil
             self._mask[a] = True
 
+    def _tiba(self, x, y, yaw):
+        """Tiba versi model dekat: TOL_DEKAT_CM dan TOL_DEKAT_DEG (arah bebas: posisi saja)."""
+        gx, gy, gyaw = self.tujuan
+        if math.hypot(gx - x, gy - y) > self.tol_pos:
+            return False
+        return gyaw is None or abs(math.remainder(yaw - gyaw, 2.0 * math.pi)) <= self.tol_yaw
+
     def _key_halus(self, x, y, yaw):
-        """Sel halus (1/HALUS sel A*) untuk aturan sel tertutup primitif pendek."""
+        """Sel halus (1/HALUS sel A*) untuk aturan sel tertutup aksi pendek."""
         pl = self.planner
         r, ry = pl.xy_reso / HALUS, pl.yaw_reso / HALUS
         return int(x // r), int(y // r), int((yaw % (2.0 * math.pi)) // ry)
@@ -355,7 +474,7 @@ class LingkunganRencana:
 
         Untuk primitif PENUH ini SALINAN aritmetika loop ekspansi
         HybridAStarPlanner.plan(), dengan urutan operasi yang sama - supaya
-        jalur dan biaya sama sampai bit terakhir, bukan hanya mirip. Primitif
+        jalur dan biaya sama sampai bit terakhir, bukan hanya mirip. Aksi
         pendek memakai rumus yang sama dengan panjang pecahan x step, dibagi
         sub-titik selebar-lebarnya sample_ds seperti sample_rs_path.
         """
@@ -400,8 +519,44 @@ class LingkunganRencana:
 
     # ---------------------------------------------------------- observasi
     def observasi(self):
-        """Vektor 47 angka. Tata letaknya di catatan Obsidian, bagian 7.1."""
-        o = np.zeros(N_OBS, dtype=np.float32)
+        """Masukan jaringan: jauh 47 angka (_obs_jauh), dekat 9 angka (_obs_dekat)."""
+        return self._obs_jauh() if self.jenis == "jauh" else self._obs_dekat()
+
+    def _obs_dekat(self):
+        """9 angka = masukan Reeds-Shepp. Tanpa sinar, tanpa peta.
+
+            0-1  tujuan relatif (maju, samping) / R   R = radius belok rencana (1/kappa_max)
+            2-3  selisih arah hadap tujuan (cos, sin)  - (1, 0) bila arah bebas
+            4    penanda arah tujuan bebas
+            5-6  pendekatan lurus muat dari depan / dari belakang (_approach_dirs)
+            7    arah gerak yang sedang berjalan       +1 / -1 / 0
+            8    kelengkungan yang sedang berjalan     kappa / kappa_max
+        Persis yang dipakai A* untuk menyusun dan menilai tembakan RS:
+        reeds_shepp_paths((x, y, yaw), target, radius), target dari
+        _approach_dirs, _rs_cost(segmen, d, k).
+        """
+        o = np.zeros(_N_OBS["dekat"], dtype=np.float32)
+        pl = self.planner
+        gx, gy, gyaw = self.tujuan
+        c, s = math.cos(self.yaw), math.sin(self.yaw)
+        dx, dy = gx - self.x, gy - self.y
+        R = pl.radius
+        o[0] = (c * dx + s * dy) / R
+        o[1] = (-s * dx + c * dy) / R
+        if gyaw is None:
+            o[2], o[3], o[4] = 1.0, 0.0, 1.0
+        else:
+            e = gyaw - self.yaw
+            o[2], o[3] = math.cos(e), math.sin(e)
+        o[5] = 1.0 in pl._approach_dirs
+        o[6] = -1.0 in pl._approach_dirs
+        o[7] = self.d
+        o[8] = self.k / pl.kappa_max
+        return o
+
+    def _obs_jauh(self):
+        """47 angka = masukan Hybrid A*: tujuan, peta rintangan (sinar + Dijkstra), margin."""
+        o = np.zeros(_N_OBS["jauh"], dtype=np.float32)
         pl = self.planner
         x, y, yaw = self.x, self.y, self.yaw
         gx, gy, gyaw = self.tujuan

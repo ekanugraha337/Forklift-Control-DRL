@@ -196,7 +196,7 @@ class Dasbor:
         pr = self.probe()
         self.env, _, _ = self.pabrik.buat(pr.sk)
         if self.label_aksi is None:
-            self.label_aksi = [b[0] for b in L.tabel_aksi(self.env.planner)]
+            self.label_aksi = [b[0] for b in L.tabel_aksi(self.env.planner, self.env.jenis)]
         self.aksi = []
         self.v_prediksi = []
         self.biaya_langkah = []
@@ -343,6 +343,8 @@ class Dasbor:
               (x0 + 10, y0 + h - 6), 0.36, REDUP)
 
     def _sinar(self, img, P, env, obs, pose):
+        if env.jenis != "jauh":
+            return                  # model dekat (Reeds-Shepp) tidak punya sinar
         x, y, yaw = pose
         off = env._pusat_off
         cx = x + off * math.cos(yaw)
@@ -355,9 +357,9 @@ class Dasbor:
 
     def _panel_jaringan(self, img, rect):
         x0, y0, w, h = rect
-        _teks(img, f"JARINGAN  {L.N_OBS} -> 256 -> 256 -> V 128 / A 128 -> Q {L.N_AKSI}",
-              (x0 + 15, y0 + 18), 0.5, KUNING)
         fr = getattr(self, "frame", None)
+        _teks(img, f"JARINGAN  {len(fr['obs']) if fr else '?'} -> 256 -> 256 -> V 128 / A 128 -> "
+                   f"Q {len(fr['q']) if fr else '?'}", (x0 + 15, y0 + 18), 0.5, KUNING)
         if fr is None:
             return
         # input
@@ -368,8 +370,10 @@ class Dasbor:
             t = (np.clip(v, -1, 1) + 1) / 2
             warna = tuple(int(u) for u in _cmap(np.array([t]), cv2.COLORMAP_COOL)[0])
             cv2.rectangle(img, (xi + i * sel, yi), (xi + i * sel + sel - 2, yi + 18), warna, -1)
-        for nama, a, b in (("tujuan", 0, 8), ("prim.", 8, 10), ("32 sinar", 10, 42), ("heur.", 42, 45),
-                           ("margin", 45, 47)):
+        kelompok = ((("tujuan", 0, 8), ("prim.", 8, 10), ("32 sinar", 10, 42), ("heur.", 42, 45),
+                     ("margin", 45, 47)) if len(o) == 47 else
+                    (("tujuan /R", 0, 2), ("arah", 2, 5), ("dekat.", 5, 7), ("gerak", 7, 9)))
+        for nama, a, b in kelompok:
             _teks(img, nama, (xi + a * sel, yi + 32), 0.36, REDUP)
             cv2.line(img, (xi + a * sel, yi + 21), (xi + b * sel - 2, yi + 21), REDUP, 1)
         akt = fr["akt"]
@@ -385,9 +389,10 @@ class Dasbor:
         _teks(img, "Q -> biaya-sisa (sel)", (xq, yq - 8), 0.42)
         sah = biaya[mask]
         lo, hi = (sah.min(), sah.max()) if len(sah) else (0, 1)
-        # 32 baris harus muat di panel atas (sampai y 580): 16 px per baris.
-        baris_px = 16
-        for i in range(L.N_AKSI):
+        # Sampai 38 baris (model dekat) harus muat di panel atas (sampai y 580).
+        n_aksi = len(q)
+        baris_px = max(12, min(21, 520 // max(1, n_aksi)))
+        for i in range(n_aksi):
             yy = yq + i * baris_px
             nama = self.label_aksi[i] if self.label_aksi else str(i)
             warna_t = TEKS if mask[i] else (90, 90, 90)
@@ -400,7 +405,7 @@ class Dasbor:
             if fr["a_astar"] == i:
                 cv2.rectangle(img, (xq + 90, yy), (xq + 176, yy + 15), WARNA_ASTAR, 1)
         _teks(img, "kuning: dipilih   kotak biru: pilihan demo (A* + RS)",
-              (xq, yq + L.N_AKSI * baris_px + 10), 0.32, REDUP)
+              (xq, yq + n_aksi * baris_px + 10), 0.32, REDUP)
 
         # perkiraan vs kenyataan biaya-sisa sepanjang rollout
         v_now = fr["akt"]["v"][0] * -SKALA_REWARD
@@ -488,8 +493,9 @@ def putar(dir_model, fps=12.0):
     _, meta = muat_jaringan(ck[0])
     rid = meta["robot"]
     prof = konfig.profil(rid)
-    pabrik = RO.PabrikEnv(prof)
-    d = RO.muat_npz(meta["data_demo"])
+    pabrik = RO.PabrikEnv(prof, meta.get("jenis", "dekat"))
+    from drl import skenario as S
+    d = RO.muat_gabung([os.path.join(S.DIR_DATA, os.path.basename(p)) for p in meta["data_demo"]])
     probes = [RO.dari_demo(d, e) for e in meta["probe"]]
     das = Dasbor(prof, pabrik, probes, judul=f"Putar ulang DQfD ID {rid:02d}", fps=fps)
     print("[i] n: checkpoint berikutnya, b: sebelumnya, r: rute berikutnya, q: keluar")
@@ -531,7 +537,7 @@ def putar(dir_model, fps=12.0):
 
 def main():
     ap = argparse.ArgumentParser(description="Dasbor DQfD: putar ulang checkpoint")
-    ap.add_argument("--putar", required=True, help="folder model, mis. model_dqn/id01")
+    ap.add_argument("--putar", required=True, help="folder model, mis. model_dqn/id01_dekat")
     ap.add_argument("--fps", type=float, default=12.0)
     args = ap.parse_args()
     putar(args.putar, args.fps)

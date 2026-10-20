@@ -1,11 +1,15 @@
 """
 jaringan.py - Dueling DQN untuk DQfD. Susunannya di catatan Obsidian bagian 7.
 
-    input 47 -> FC1 256 -> FC2 256 -+-> V-hidden 128 -> V(s)   1 -+
-                                    +-> A-hidden 128 -> A(s,a) 32 +-> Q = V + A - rata(A)
+    input m -> FC1 256 -> FC2 256 -+-> V-hidden 128 -> V(s)   1 -+
+                                   +-> A-hidden 128 -> A(s,a) n  +-> Q = V + A - rata(A)
 
-148.129 parameter (ruang aksi versi 2, 32 aksi; versi 1 dengan 15 aksi:
-145.936). Sama untuk ID 01 dan ID 02; bobotnya terpisah.
+m, n = jumlah masukan dan aksi jenis modelnya (lingkungan.n_obs / n_aksi).
+Versi aksi 4 punya DUA model per robot:
+    jauh   meniru Hybrid A*:   m = 47, n = 14  -> 145.807 parameter
+    dekat  meniru Reeds-Shepp: m =  9, n = 30  -> 138.143 parameter
+Lapis tersembunyi sama; yang meniru algoritmanya adalah masukan & keluarannya.
+Susunannya sama untuk ID 01 dan ID 02; bobotnya terpisah.
 
 Q dalam satuan -(biaya-sisa ke tujuan) / SKALA_REWARD, jadi -Q x SKALA_REWARD
 adalah perkiraan biaya A* (satuan sel) dari keadaan itu.
@@ -14,7 +18,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from drl.lingkungan import N_AKSI, N_OBS
 
 # Reward = -biaya / SKALA_REWARD. Biaya per langkah median 17 (primitif penuh;
 # primitif pendek lebih murah), jadi Q ada di kisaran satuan sampai puluhan.
@@ -24,7 +27,7 @@ Q_TERLARANG = -1e9
 
 
 class JaringanDQfD(nn.Module):
-    def __init__(self, n_obs=N_OBS, n_aksi=N_AKSI, lebar=256, cabang=128):
+    def __init__(self, n_aksi, n_obs, lebar=256, cabang=128):
         super().__init__()
         self.fc1 = nn.Linear(n_obs, lebar)
         self.fc2 = nn.Linear(lebar, lebar)

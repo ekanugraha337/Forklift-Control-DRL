@@ -22,23 +22,26 @@ import torch
 import torch.nn.functional as F
 
 from drl.jaringan import JaringanDQfD, bermask
-from drl.lingkungan import N_AKSI, N_OBS, VERSI_AKSI
+from drl.lingkungan import JENIS, VERSI_AKSI, n_aksi as jumlah_aksi, n_obs as jumlah_obs
 
-KOLOM = {
-    "obs": ((N_OBS,), torch.float32), "aksi": ((), torch.int64), "mask": ((N_AKSI,), torch.bool),
-    "r1": ((), torch.float32), "obs1": ((N_OBS,), torch.float32), "mask1": ((N_AKSI,), torch.bool),
-    "akhir1": ((), torch.bool), "g1": ((), torch.float32),
-    "rn": ((), torch.float32), "obsn": ((N_OBS,), torch.float32), "maskn": ((N_AKSI,), torch.bool),
-    "akhirn": ((), torch.bool), "gn": ((), torch.float32),
-}
+
+def kolom(n_aksi, n_obs):
+    """Bentuk kolom buffer: lebar obs dan mask = masukan dan aksi jenis model."""
+    return {
+        "obs": ((n_obs,), torch.float32), "aksi": ((), torch.int64), "mask": ((n_aksi,), torch.bool),
+        "r1": ((), torch.float32), "obs1": ((n_obs,), torch.float32), "mask1": ((n_aksi,), torch.bool),
+        "akhir1": ((), torch.bool), "g1": ((), torch.float32),
+        "rn": ((), torch.float32), "obsn": ((n_obs,), torch.float32), "maskn": ((n_aksi,), torch.bool),
+        "akhirn": ((), torch.bool), "gn": ((), torch.float32),
+    }
 
 
 class Buffer:
-    def __init__(self, kapasitas, device, alpha=0.4, eps_agen=1e-3, eps_demo=1.0):
+    def __init__(self, kapasitas, device, n_aksi, n_obs, alpha=0.4, eps_agen=1e-3, eps_demo=1.0):
         self.N, self.device = kapasitas, device
         self.alpha, self.eps_agen, self.eps_demo = alpha, eps_agen, eps_demo
         self.t = {k: torch.zeros((kapasitas, *bentuk), dtype=dt, device=device)
-                  for k, (bentuk, dt) in KOLOM.items()}
+                  for k, (bentuk, dt) in kolom(n_aksi, n_obs).items()}
         self.demo = np.zeros(kapasitas, bool)
         self.pa = np.zeros(kapasitas)          # prioritas^alpha
         self.pa_maks = 1.0
@@ -64,7 +67,7 @@ class Buffer:
             self.ptr = int(self.n_demo + (self.ptr - self.n_demo + T) % ruang)
             self.isi = min(self.N, self.isi + T)
         it = torch.as_tensor(idx, device=self.device)
-        for k in KOLOM:
+        for k in self.t:
             self.t[k][it] = torch.as_tensor(np.asarray(tr[k]), device=self.device).to(self.t[k].dtype)
         self.demo[idx] = demo
         self.pa[idx] = self.pa_maks
@@ -88,18 +91,19 @@ class Buffer:
 
 
 class AgenDQfD:
-    def __init__(self, device, lr=1e-4, gamma=0.995, n=10, lam_n=1.0, lam_e=1.0,
+    def __init__(self, device, n_aksi, n_obs, lr=1e-4, gamma=0.995, n=10, lam_n=1.0, lam_e=1.0,
                  l2=1e-5, margin=0.8, target_setiap=2000, seed=0):
         torch.manual_seed(seed)
         self.device = device
+        self.n_aksi, self.n_obs = n_aksi, n_obs
         self.gamma, self.n = gamma, n
         self.lam_n, self.lam_e, self.margin = lam_n, lam_e, margin
         self.target_setiap = target_setiap
-        self.net = JaringanDQfD().to(device)
+        self.net = JaringanDQfD(n_aksi, n_obs).to(device)
         self.target = copy.deepcopy(self.net)
         self.opt = torch.optim.Adam(self.net.parameters(), lr=lr, weight_decay=l2)
         # Salinan CPU untuk rollout & dasbor, disinkronkan sesekali.
-        self.cpu = JaringanDQfD()
+        self.cpu = JaringanDQfD(n_aksi, n_obs)
         self.sinkron_cpu()
         self.langkah = 0
 
@@ -156,8 +160,9 @@ class AgenDQfD:
                     "opt": self.opt.state_dict(), "langkah": self.langkah, **meta}, jalur)
 
 
-def muat_jaringan(jalur, device="cpu"):
-    """Jaringan dari checkpoint, siap dipakai (eval)."""
+def muat_jaringan(jalur, device="cpu", jenis=None):
+    """Jaringan dari checkpoint, siap dipakai (eval). jenis: 'jauh'/'dekat' yang
+    diharapkan pemanggil; None = tidak diperiksa."""
     ck = torch.load(jalur, map_location=device, weights_only=False)
     # Diperiksa SEBELUM bobot dimuat: model ruang aksi lama (15 keluaran, dengan
     # SAMBUNG) akan gagal di load_state_dict dengan pesan bentuk tensor yang
@@ -165,10 +170,14 @@ def muat_jaringan(jalur, device="cpu"):
     versi = ck.get("versi_aksi", 1)
     if versi != VERSI_AKSI:
         raise SystemExit(f"[!] {jalur} memakai ruang aksi versi {versi}, program sekarang versi "
-                         f"{VERSI_AKSI} ({N_AKSI} aksi, full DQfD tanpa SAMBUNG).\n"
+                         f"{VERSI_AKSI} (dua model per robot: jauh meniru Hybrid A* - {jumlah_obs('jauh')} "
+                         f"masukan / {jumlah_aksi('jauh')} aksi, dekat meniru Reeds-Shepp - "
+                         f"{jumlah_obs('dekat')} masukan / {jumlah_aksi('dekat')} aksi).\n"
                          f"    Bangkitkan ulang demo dan latih ulang: python -m drl.skenario lalu "
                          f"python -m drl.latih")
-    net = JaringanDQfD().to(device)
+    if jenis is not None and ck.get("jenis") != jenis:
+        raise SystemExit(f"[!] {jalur} adalah model '{ck.get('jenis')}', bukan '{jenis}'")
+    net = JaringanDQfD(ck["n_aksi"], ck["n_obs"]).to(device)
     net.load_state_dict(ck["net"])
     net.eval()
     return net, ck
@@ -177,7 +186,14 @@ def muat_jaringan(jalur, device="cpu"):
 def meta_profil(prof):
     """Bagian profil robot yang menentukan arti aksi - disimpan di checkpoint."""
     return {"max_steer_deg": float(prof.max_steer_deg), "r_plan_cm": float(prof.r_plan_cm),
-            "versi_aksi": VERSI_AKSI, "n_aksi": N_AKSI}
+            "versi_aksi": VERSI_AKSI}
+
+
+def meta_model(prof, jenis):
+    """meta_profil + jenis model (jauh/dekat) dan jumlah aksinya."""
+    if jenis not in JENIS:
+        raise ValueError(f"jenis model '{jenis}' tidak dikenal")
+    return {**meta_profil(prof), "jenis": jenis, "n_aksi": jumlah_aksi(jenis), "n_obs": jumlah_obs(jenis)}
 
 
 def periksa_profil(meta, prof, jalur):
