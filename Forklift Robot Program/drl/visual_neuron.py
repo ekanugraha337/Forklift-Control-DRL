@@ -116,6 +116,8 @@ class Probe:
         if sk.aksi_demo:
             e2, _, _ = pabrik.buat(sk)
             for a in sk.aksi_demo:
+                if e2.selesai:          # cek_serah model dekat bisa berhenti lebih awal
+                    break
                 e2.step(a)
             self.jalur_astar = e2.jalur()
         self._grid(env)

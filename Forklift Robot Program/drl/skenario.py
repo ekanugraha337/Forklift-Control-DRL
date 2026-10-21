@@ -51,6 +51,8 @@ KELUARAN (drl/data/)
                          saat latih (reward di sini TANPA nilai itu)
     demo_dekat_id01.npz  episode model dekat, ep_awal = pose serah, ep_d0/ep_k0
     demo_dekat_tambahan_id01.npz   (--hanya-dekat)
+    demo_dekat_dagger_id01.npz     (python -m drl.dagger: demo RS dari pose serah
+                         yang dicapai model jauh terlatih)
     negatif_id01.npz     skenario yang gagal di A*
     ringkasan_id01.json
 
@@ -628,10 +630,11 @@ def cetak_ringkasan(r):
 
 # ---------------------------------------------------------------- periksa
 def berkas_demo(dir_data, rid, jenis):
-    """Dataset model jenis ini: [demo_jauh] atau [demo_dekat, demo_dekat_tambahan bila ada]."""
+    """Dataset model jenis ini: [demo_jauh] atau [demo_dekat, demo_dekat_tambahan,
+    demo_dekat_dagger (drl.dagger) - yang ada]."""
     nama = [f"demo_{jenis}_id{rid:02d}.npz"]
     if jenis == "dekat":
-        nama.append(f"demo_dekat_tambahan_id{rid:02d}.npz")
+        nama += [f"demo_dekat_tambahan_id{rid:02d}.npz", f"demo_dekat_dagger_id{rid:02d}.npz"]
     return [os.path.join(dir_data, n) for n in nama if os.path.exists(os.path.join(dir_data, n))]
 
 

@@ -100,15 +100,17 @@ def dari_negatif(n, i):
 class PabrikEnv:
     """Membangun lingkungan untuk skenario. Arena & Perencana di-cache per peta.
 
-    jenis: 'jauh' / 'dekat' (lingkungan.py). nilai_serah: hanya jenis jauh,
-    diteruskan ke lingkungan (nilai akhir dari model dekat).
+    jenis: 'jauh' / 'dekat' (lingkungan.py). nilai_serah, cek_serah: hanya jenis
+    jauh, diteruskan ke lingkungan (nilai akhir dan syarat berhenti; lihat
+    perencana_dqfd.buat_cek_pendaratan).
     peluang_dekat: untuk acak() - model dekat berlatih dari start di dalam radius.
     """
 
-    def __init__(self, profil, jenis="dekat", nilai_serah=None, peluang_dekat=None):
+    def __init__(self, profil, jenis="dekat", nilai_serah=None, peluang_dekat=None, cek_serah=None):
         self.p = profil
         self.jenis = jenis
         self.nilai_serah = nilai_serah
+        self.cek_serah = cek_serah
         self.peluang_dekat = peluang_dekat
         self._per = {}
 
@@ -128,7 +130,8 @@ class PabrikEnv:
         (_hcost, _approach_dirs) tersimpan di objeknya, jadi tidak boleh dipakai
         bersama dua episode yang berjalan serempak."""
         env = L.LingkunganRencana(self.arena(sk.peta), self.p, margin_cm=sk.margin,
-                                  jenis=self.jenis, nilai_serah=self.nilai_serah)
+                                  jenis=self.jenis, nilai_serah=self.nilai_serah,
+                                  cek_serah=self.cek_serah)
         obs, info = env.reset(sk.awal, sk.tujuan, self.omap(sk), d0=sk.d0, k0=sk.k0)
         return env, obs, info
 

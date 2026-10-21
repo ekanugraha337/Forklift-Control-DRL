@@ -64,10 +64,11 @@ MASK - aksi terlarang, Q-nya dibuat -inf sebelum argmax:
     aksi PENDEK setelah MAKS_PENDEK dipakai dalam satu episode.
 
 BIAYA per langkah = rumus biaya ekspansi A* dengan panjang aksi itu (reward =
--biaya). Episode berakhir bila SERAH (jauh; reward - nilai_serah, perkiraan
-model dekat tentang biaya mendarat), TIBA (dekat; <= TOL_DEKAT_CM & TOL_DEKAT_DEG),
-buntu (semua aksi ter-mask, + BIAYA_BUNTU_CM), atau MAKS_LANGKAH (terpotong,
-bukan gagal - untuk DQN itu bukan keadaan terminal).
+-biaya). Episode berakhir bila SERAH (jauh; reward - nilai_serah, biaya mendarat
+model dekat), TIBA (dekat; <= TOL_DEKAT_CM & TOL_DEKAT_DEG), buntu (semua aksi
+ter-mask, + BIAYA_BUNTU_CM), SERAH HABIS (jauh; cek_serah mengembalikan None =
+jatah percobaan pendaratan habis, gagal, + BIAYA_BUNTU_CM), atau MAKS_LANGKAH
+(terpotong, bukan gagal - untuk DQN itu bukan keadaan terminal).
 """
 import math
 
@@ -197,8 +198,11 @@ class LingkunganRencana:
     nilai_serah: hanya jauh - fungsi(env) -> biaya (sel) mendarat dari pose
     serah, ditambahkan ke biaya langkah terakhir. None = 0.
     cek_serah: hanya jauh - fungsi(env) -> bool, "jalur pendaratan bebas" di
-    pose sekarang. None = tembakan Reeds-Shepp bebas (saat latih, peran
-    demonstrator). perencana_dqfd memasang model dekat di sini.
+    pose sekarang. None = tembakan Reeds-Shepp bebas (peran demonstrator,
+    dipakai saat membuat dataset). perencana_dqfd memasang model dekat di sini
+    (rencanakan_dua, buat_cek_pendaratan). Fungsi boleh mengembalikan None:
+    jatah percobaan habis, episode berakhir gagal. env.n_coba_serah = jumlah
+    pemanggilan dalam episode ini.
     """
 
     def __init__(self, arena, profil=None, margin_cm=None, planner=None, jenis="dekat",
@@ -267,6 +271,7 @@ class LingkunganRencana:
         self.n_pendek = 0
         self.biaya = 0.0
         self.biaya_serah = 0.0
+        self.n_coba_serah = 0
         self.langkah_ke = 0
         self.selesai = True
         self.sukses = False
@@ -342,12 +347,18 @@ class LingkunganRencana:
         if self.jenis == "dekat" and self._tiba(self.x, self.y, self.yaw):
             self.selesai = self.sukses = True
             info["alasan"] = "tiba"
-        elif self.jenis == "jauh" and self._boleh_serah():
-            self.selesai = self.sukses = True
-            info["alasan"] = "serah"
-            if self.nilai_serah is not None:
-                self.biaya_serah = float(self.nilai_serah(self))
-                reward -= self.biaya_serah
+        elif self.jenis == "jauh":
+            serah = self._boleh_serah()
+            if serah:
+                self.selesai = self.sukses = True
+                info["alasan"] = "serah"
+                if self.nilai_serah is not None:
+                    self.biaya_serah = float(self.nilai_serah(self))
+                    reward -= self.biaya_serah
+            elif serah is None:
+                self.selesai = True
+                reward -= self.biaya_buntu
+                info["alasan"] = "serah habis"
 
         if not self.selesai:
             self._hitung_calon()
@@ -427,10 +438,14 @@ class LingkunganRencana:
                                       self.tujuan) is not None
 
     def _boleh_serah(self):
-        """Model jauh berhenti di sini? Saringan cepat + jalur pendaratan bebas."""
+        """Model jauh berhenti di sini? Saringan cepat + jalur pendaratan bebas.
+        True / False, atau None dari cek_serah (jatah habis: berhenti, gagal)."""
         if not self._boleh_coba_serah(self.x, self.y):
             return False
-        return self.cek_serah(self) if self.cek_serah is not None else self.rs_bebas()
+        if self.cek_serah is None:
+            return self.rs_bebas()
+        self.n_coba_serah += 1
+        return self.cek_serah(self)
 
     # -------------------------------------------------------------- calon
     def _hitung_calon(self):

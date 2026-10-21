@@ -9,13 +9,22 @@ latih.py - melatih DQfD per robot: pra-latih dari demo, lalu latihan sendiri.
 DUA MODEL PER ROBOT (versi aksi 4, ver-1-2), lihat lingkungan.py - model jauh
 meniru masukan & keluaran Hybrid A* (47 / 14), model dekat meniru masukan &
 keluaran Reeds-Shepp (9 / 30):
-    dekat  model_dqn/id0N_dekat.pt - dari demo_dekat (+ demo_dekat_tambahan bila
-           ada). Dilatih LEBIH DULU.
-    jauh   model_dqn/id0N_jauh.pt - dari demo_jauh. Imbalan di pose serah =
-           max_a Q model dekat di pose itu (perkiraan biaya mendarat), dihitung
-           di sini dari ep_obs_serah dataset dan, saat latihan sendiri, oleh
-           lingkungan (nilai_serah). Jadi model jauh belajar tiba di batas
-           60 cm dengan arah yang enak untuk didaratkan. Butuh id0N_dekat.pt.
+    dekat  model_dqn/id0N_dekat.pt - dari demo_dekat (+ demo_dekat_tambahan,
+           + demo_dekat_dagger bila ada). Dilatih LEBIH DULU.
+    jauh   model_dqn/id0N_jauh.pt - dari demo_jauh. Butuh id0N_dekat.pt.
+           Imbalan di pose serah (--nilai-akhir):
+             pendaratan (bawaan) - PENDARATAN SUNGGUHAN model dekat dari pose
+               serah: biaya jalurnya bila berhasil, biaya buntu bila gagal.
+               Demo: episode jauh diputar ulang, lalu model dekat mendarat dari
+               pose akhirnya. Fase B: lingkungan jauh berhenti HANYA di pose
+               tempat model dekat benar-benar bisa mendarat (sama dengan saat
+               pengujian, rencanakan_dua), paling banyak --maks-pendaratan
+               percobaan per episode, lalu gagal.
+             v - perkiraan max_a Q model dekat di pose serah (cara lama;
+               berhenti di pose tembakan RS bebas). Lebih cepat, tapi model
+               dekat yang buta rintangan sering terlalu optimis.
+           Jadi model jauh belajar tiba di batas 60 cm di pose yang benar-benar
+           bisa didaratkan.
 
 FASE A - PRA-LATIH: hanya data demo (episode bukan-uji). Jaringan belajar
     meniru demonstrator (J_E) sekaligus memperkirakan biaya-sisa (J_DQ, J_n).
@@ -60,7 +69,8 @@ from drl import rollout as RO                   # noqa: E402
 from drl import skenario as S                   # noqa: E402
 from drl.dqfd import AgenDQfD, Buffer, meta_model, muat_jaringan  # noqa: E402
 from drl.jaringan import SKALA_REWARD, bermask  # noqa: E402
-from drl.perencana_dqfd import jalur_model, mutu_jalur, rencanakan, rencanakan_dua  # noqa: E402
+from drl.perencana_dqfd import (BATAS_DEKAT_S, MAKS_SERAH, METODE_BAWAAN, buat_cek_pendaratan,  # noqa: E402
+                                jalur_model, mutu_jalur, rencanakan, rencanakan_dua)
 from drl.visual_neuron import Dasbor            # noqa: E402
 
 AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -82,7 +92,9 @@ def jenis_peta(d):
     jenis = np.array([_jenis(p) for p in d["ep_peta"]])
     semua = sorted(set(jenis))
     asli = [j for j in semua if j != "sintetis"] or semua
-    sulit = max(asli, key=lambda j: float(np.mean(d["ep_waktu_astar"][jenis == j])))
+    # nanmean: episode DAgger tidak punya waktu A* (NaN)
+    w = {j: d["ep_waktu_astar"][jenis == j] for j in asli}
+    sulit = max(asli, key=lambda j: float(np.nanmean(w[j])) if np.isfinite(w[j]).any() else -1.0)
     porsi = {j: float(np.mean(jenis == j)) for j in semua}
     return semua, sulit, porsi
 
@@ -166,6 +178,41 @@ def buat_nilai_serah(net_dekat):
     return nilai
 
 
+def nilai_akhir_pendaratan(d, episode, ulang, cek, nilai, cadangan):
+    """Imbalan akhir demo jauh dari pendaratan sungguhan model dekat (sel).
+
+    Tiap episode diputar ulang di lingkungan demonstrator (ulang: PabrikEnv
+    jauh tanpa cek_serah - berhenti di pose tembakan RS bebas, persis akhir
+    demo), lalu model dekat mendarat dari pose itu: biaya jalurnya bila
+    berhasil, biaya buntu bila gagal. Episode yang tidak bisa diputar ulang
+    memakai cadangan[e]. Kembalian (larik per episode dataset, n berhasil, n dicoba).
+    """
+    akhir = np.array(cadangan, dtype=np.float64)
+    n_ok = n = 0
+    t0 = time.time()
+    for i, e in enumerate(episode):
+        sk = RO.dari_demo(d, int(e))
+        env, obs, _ = ulang.buat(sk)
+        if obs is None:
+            continue
+        for a in sk.aksi_demo:
+            if env.selesai:
+                break
+            env.step(int(a))
+        if not env.sukses:
+            continue
+        n += 1
+        if cek(env):
+            n_ok += 1
+            akhir[e] = nilai(env)
+        else:
+            akhir[e] = env.biaya_buntu
+        if (i + 1) % 500 == 0:
+            print(f"    pendaratan demo {i + 1}/{len(episode)}: berhasil {100.0 * n_ok / max(1, n):.1f}% "
+                  f"({time.time() - t0:.0f} s)", flush=True)
+    return akhir, n_ok, n
+
+
 # ------------------------------------------------------------ evaluasi
 class Evaluator:
     """Evaluasi pada himpunan episode yang diberikan (validasi saat latih).
@@ -192,10 +239,12 @@ class Evaluator:
             jn = np.array([_jenis(p) for p in neg["peta"]])
             for j in self.jenis:
                 self.neg += [RO.dari_negatif(neg, i) for i in ok[jn[ok] == j][:max(1, n_negatif // 4)]]
-        # Pembanding: titik balik demo di jalur jenis ini.
+        # Pembanding: titik balik demo di jalur jenis ini. Diputar ulang di
+        # lingkungan demonstrator (tanpa cek_serah model dekat).
+        ulang = RO.PabrikEnv(pabrik.p, jenis)
         self.balik_demo = {}
         for sk in self.sk:
-            env, obs, _ = pabrik.buat(sk)
+            env, obs, _ = ulang.buat(sk)
             if obs is None:
                 continue
             for a in sk.aksi_demo:
@@ -334,18 +383,31 @@ def latih_model(rid, jenis, args, device):
             raise SystemExit(f"[!] Model jauh butuh model dekat yang sudah dilatih: {jd}\n"
                              f"    Latih dulu: python -m drl.latih --id {rid} --model dekat")
         net_dekat, _ = muat_jaringan(jd, jenis="dekat")
-        pabrik = RO.PabrikEnv(prof, "jauh", nilai_serah=buat_nilai_serah(net_dekat))
+        if args.nilai_akhir == "pendaratan":
+            cek, nilai = buat_cek_pendaratan(net_dekat, args.metode_pendaratan, args.batas_pendaratan,
+                                             args.maks_pendaratan)
+            pabrik = RO.PabrikEnv(prof, "jauh", nilai_serah=nilai, cek_serah=cek)
+        else:
+            pabrik = RO.PabrikEnv(prof, "jauh", nilai_serah=buat_nilai_serah(net_dekat))
     else:
         pabrik = RO.PabrikEnv(prof, "dekat", peluang_dekat=1.0)
 
     latih_ep, val_ep = bagi_validasi(d)
     n_demo = int(d["ep_langkah"][latih_ep].sum())
     buf = Buffer(n_demo + args.kapasitas, device, n_aksi, L.n_obs(jenis))
-    akhir_jauh = None
+    akhir_jauh, info_akhir = None, ""
     if jenis == "jauh":
         # Imbalan di pose serah dari model dekat (dataset menyimpan reward TANPA nilai ini).
         biaya_buntu = pabrik.arena(str(d["ep_peta"][0])).panjang_ke_sel(L.BIAYA_BUNTU_CM)
         akhir_jauh = nilai_akhir(net_dekat, d["ep_obs_serah"], d["ep_mask_serah"], biaya_buntu)
+        if args.nilai_akhir == "pendaratan":
+            print(f"[i] ID {rid:02d} jauh: model dekat mendarat dari akhir {len(latih_ep)} demo "
+                  f"({args.metode_pendaratan}, maks {args.batas_pendaratan} s) ...", flush=True)
+            t = time.time()
+            akhir_jauh, n_ok, n_coba = nilai_akhir_pendaratan(
+                d, latih_ep, RO.PabrikEnv(prof, "jauh"), cek, nilai, akhir_jauh)
+            info_akhir = (f"pendaratan model dekat berhasil di {n_ok}/{n_coba} pose akhir demo "
+                          f"({100.0 * n_ok / max(1, n_coba):.1f}%, {time.time() - t:.0f} s); gagal = biaya buntu")
     for e in latih_ep:
         obs, aksi, rew, mask = RO.episode_demo(d, e)
         if akhir_jauh is not None:
@@ -385,8 +447,10 @@ def latih_model(rid, jenis, args, device):
           f"gradien, perangkat {device}")
     print(f"    peta: {', '.join(evaluator.jenis)} | tersulit (waktu A* terbesar): {evaluator.sulit}")
     if akhir_jauh is not None:
-        print(f"    nilai akhir di pose serah (model dekat): median {np.median(akhir_jauh):.0f} sel, "
-              f"p90 {np.percentile(akhir_jauh, 90):.0f}")
+        print(f"    nilai akhir di pose serah ({args.nilai_akhir}): median {np.median(akhir_jauh[latih_ep]):.0f} sel, "
+              f"p90 {np.percentile(akhir_jauh[latih_ep], 90):.0f}")
+        if info_akhir:
+            print(f"    {info_akhir}")
 
     def catat(m):
         for k in ("j_dq", "j_n", "j_e", "q", "setuju_batch"):
@@ -534,6 +598,16 @@ def main():
     ap.add_argument("--eval-setiap", type=int, default=5000, help="langkah gradien antar-evaluasi")
     ap.add_argument("--n-negatif", type=int, default=16)
     ap.add_argument("--fps", type=float, default=6.0)
+    ap.add_argument("--nilai-akhir", default="pendaratan", choices=["pendaratan", "v"],
+                    help="model jauh: imbalan di pose serah = pendaratan sungguhan model dekat "
+                         "(bawaan) atau perkiraan V model dekat (cara lama)")
+    ap.add_argument("--metode-pendaratan", default=METODE_BAWAAN, choices=["mundur", "terbaik", "gabungan"],
+                    help="pencarian model dekat untuk --nilai-akhir pendaratan (bawaan = pengujian)")
+    ap.add_argument("--batas-pendaratan", type=float, default=BATAS_DEKAT_S,
+                    help="detik per percobaan pendaratan (bawaan = pengujian). Mis. --metode-pendaratan "
+                         "mundur --batas-pendaratan 0.3: ~4x lebih cepat, lebih pesimis")
+    ap.add_argument("--maks-pendaratan", type=int, default=MAKS_SERAH,
+                    help="percobaan pendaratan per episode fase B, lalu gagal (pengujian: MAKS_SERAH)")
     ap.add_argument("--transfer", action="store_true", help="ID 02 mulai dari bobot ID 01 (jenis sama)")
     ap.add_argument("--data", default=S.DIR_DATA)
     ap.add_argument("--keluar", default=DIR_MODEL)

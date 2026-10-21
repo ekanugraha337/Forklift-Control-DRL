@@ -96,15 +96,16 @@ Model jauh berhenti, lalu model dekat mengambil alih, bila **kedua** syarat terp
 1. **Titik acuan di dalam 60 cm** dari tujuan (`analytic_dist`). Ini batas **terjauh**, sama dengan jarak demonstrator mulai mencoba Reeds-Shepp.
 2. **Tidak ada halangan untuk mendarat.** Diperiksa dua tahap:
 
-| Tahap | Saat latihan (demonstrator) | Saat pengujian (robot) |
-|---|---|---|
-| Saringan cepat | Peta Dijkstra tidak memaksa memutar (biaya Dijkstra = jarak oktil grid), atau sudah < 25 cm (`RADIUS_SERAH_PAKSA_CM`) | sama |
-| Jalur pendaratan bebas | **Tembakan Reeds-Shepp dari pose itu bebas tabrakan**, syarat yang sama persis dengan saat Hybrid A\* beralih ke RS | **Model dekat mencoba mendarat dari pose itu** dan berhasil tanpa tabrakan |
+| Tahap                  | Membuat dataset (demonstrator)                                                                                        | Latihan sendiri model jauh (fase B)                                                                                               | Saat pengujian (robot)                                                     |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Saringan cepat         | Peta Dijkstra tidak memaksa memutar (biaya Dijkstra = jarak oktil grid), atau sudah < 25 cm (`RADIUS_SERAH_PAKSA_CM`) | sama                                                                                                                              | sama                                                                       |
+| Jalur pendaratan bebas | **Tembakan Reeds-Shepp dari pose itu bebas tabrakan**, syarat yang sama persis dengan saat Hybrid A\* beralih ke RS   | **Model dekat mencoba mendarat** (sama dengan pengujian, `buat_cek_pendaratan`), maks 12 percobaan per episode lalu episode gagal | **Model dekat mencoba mendarat dari pose itu** dan berhasil tanpa tabrakan |
 
 Bila masih ada halangan, **model jauh berjalan lanjut** dan memperkecil jarak, lalu dicek lagi di pose berikutnya. Saat pengujian, paling banyak **12** percobaan pendaratan per rute (`MAKS_SERAH`, semula 6; lihat bagian 12.1), masing-masing ≤ 0,6 s (`BATAS_DEKAT_S`).
 
 Akibatnya:
-- Saat latihan, model jauh berhenti **tepat** di titik demonstrator beralih ke Reeds-Shepp, jadi demo jauh = primitif Hybrid A\* dan demo dekat = **100% segmen Reeds-Shepp**.
+- Di dataset, model jauh berhenti **tepat** di titik demonstrator beralih ke Reeds-Shepp, jadi demo jauh = primitif Hybrid A\* dan demo dekat = **100% segmen Reeds-Shepp**.
+- Di latihan sendiri model jauh, aturan berhentinya sudah sama dengan pengujian (langkah 4, bagian 10.4).
 - Saat pengujian, tidak ada Reeds-Shepp sama sekali. Yang memutuskan "tidak ada halangan" adalah model dekat sendiri.
 
 Demonstrator memakai parameter `konfig.PARAM_RENCANA`: Reeds-Shepp hanya dicoba < 60 cm dari tujuan (percobaan berkala `analytic_every` dimatikan), dan Hybrid A\* selalu mengambil RS begitu tembakannya bebas (79/79 terukur).
@@ -285,8 +286,8 @@ Semua max/argmax hanya atas aksi sah (mask). Buffer: prioritized replay proporsi
 
 ### 10.2 Urutan dan fase
 
-1. **Model dekat dilatih dulu**, dari `demo_dekat` + `demo_dekat_tambahan` (digabung otomatis).
-2. **Model jauh** sesudahnya. Imbalan akhir demonya dihitung dari `ep_obs_serah` / `ep_mask_serah` dengan model dekat; dataset menyimpan reward tanpa nilai itu. Saat latihan sendiri, lingkungan memanggil model dekat di setiap pose berhenti (`nilai_serah`), dan aturan berhenti memakai cek demonstrator (tembakan RS bebas).
+1. **Model dekat dilatih dulu**, dari `demo_dekat` + `demo_dekat_tambahan` + `demo_dekat_dagger` bila ada (digabung otomatis).
+2. **Model jauh** sesudahnya. Dataset menyimpan reward **tanpa** imbalan di pose serah; imbalan itu dipasang saat latih dari model dekat (`--nilai-akhir`, bagian 10.4).
 
 | | Fase A: pra-latih | Fase B: latihan sendiri |
 |---|---|---|
@@ -314,6 +315,52 @@ Lain-lain:
 - `gagal_jauh`: tidak pernah mencapai pose yang lolos saringan berhenti, artinya masalah **navigasi**.
 - `gagal_dekat`: ada pose seperti itu, tetapi semua gagal didaratkan, artinya masalah **presisi**.
 
+### 10.4 Langkah 3 dan 4: menyamakan latihan dengan pengujian
+
+Hasil 12.1 menunjukkan sisa kegagalan adalah **gagal dekat**: model jauh menyerahkan di pose yang tidak bisa didaratkan model dekat. Dua sebabnya, dan perbaikannya:
+
+| | Langkah 3: DAgger (`drl/dagger.py`) | Langkah 4: nilai akhir dari pendaratan sungguhan (`latih.py`) |
+|---|---|---|
+| Masalah | Model dekat hanya pernah melihat pose serah **demonstrator**. Saat dipakai, ia mulai dari pose serah **model jauh**: arah datang, jarak, dan kemudi berjalan yang lain | Model jauh dulu belajar dari V model dekat (terlalu optimis, 12.1) dan berhenti di pose tembakan RS bebas, bukan di pose yang bisa didaratkan model dekat |
+| Cara | Rute acak (sebaran = dataset, seed 7) dijalankan dengan `rencanakan_dua` dan **dua model terlatih**. Setiap pose tempat model jauh mencoba serah dicatat (`catat=`). Dari tiap pose, demonstrator membuat demo: tembakan RS terbaik yang bebas (`planner._analytic`), diurai menjadi segmen model dekat, dan diputar ulang dengan `d0` / `k0` pose itu | **Demo jauh**: tiap episode diputar ulang, lalu model dekat mendarat dari pose akhirnya. Berhasil = biaya jalur pendaratannya; gagal = biaya buntu. **Fase B**: lingkungan jauh berhenti hanya di pose tempat model dekat **benar-benar mendarat**, dan imbalannya adalah biaya pendaratan itu. Setelah 12 percobaan gagal, episode berakhir gagal (`serah habis`, + biaya buntu) |
+| Keluaran | `demo_dekat_dagger_id0N.npz` (+ `ep_dekat_berhasil`), `ringkasan_dagger_id0N.json`. Semua episode bukan-uji | Opsi `--nilai-akhir pendaratan` (bawaan) atau `v` (cara lama). Pencarian pendaratan sama dengan pengujian: `--metode-pendaratan gabungan --batas-pendaratan 0.6` |
+
+Uji kecil (2026-10-21, model ID 01 yang sekarang):
+
+| Uji | Hasil |
+|---|---|
+| DAgger, 40 rute | 38 tiba, 2 gagal dekat. **109 pose serah dicoba, 71 gagal didaratkan.** 59 demo RS (27 di antaranya dari pose yang gagal); tembakan RS terhalang di 45 pose, menyentuh margin 3, tidak presisi 2. Semua 59 episode lolos putar ulang (`_periksa_satu`) |
+| Pendaratan dari pose akhir 200 demo jauh | mundur 0,3 s: **121/200 (60%)**, 11 s. Gabungan 0,6 s (= pengujian): **147/200 (73,5%)**, 54 s. Mundur 1,0 s: 121/200, jadi yang membatasi mundur adalah anggarannya, bukan waktunya |
+| Biaya pendaratan (yang berhasil) | median 210 sel, sedangkan V model dekat memperkirakan 167: **V memang terlalu optimis** |
+
+Artinya model dekat yang sekarang gagal mendarat dari sekitar seperempat pose serah **demonstrator**, padahal pose itu ada di data latihnya. Kelemahan presisi ini tidak semua bisa ditutup DAgger. Urutan latih ulangnya **dagger → dekat → jauh**, karena nilai akhir model jauh bergantung pada model dekat yang baru.
+
+Waktu latih jauh terukur (ID 01): sekitar **3 jam 45 menit**, sebelumnya sekitar 40 menit. Rinciannya: 17 menit pendaratan 3.100 demo + evaluasi awal, 17 menit fase A, 3 jam 11 menit fase B (8 → 19 menit per 5.000 langkah gradien). Yang mahal adalah pendaratan yang gagal, karena selalu menghabiskan jatah penuh 0,6 s. ID 02 serupa (11:58 → 15:31).
+
+DAgger 3.000 skenario ID 01: 6.760 pose serah dicoba, 4.108 gagal didaratkan model dekat lama, menghasilkan 4.123 demo RS (1.855 dari pose yang gagal), 70.605 transisi, 5,7 menit.
+
+**Hasil latih ulang** (2026-10-21, set uji, metode gabungan). Model ID 01: jauh langkah 60.000, dekat langkah 90.000. Model ID 02: jauh langkah 95.000, dekat langkah 90.000.
+
+| | ID 01 sebelum → **sesudah** | ID 02 sebelum → **sesudah** |
+|---|---|---|
+| Tiba | 96,5% → **96,9%** (29 → 26 rute gagal) | 96,5% → **97,8%** (28 → 18 rute gagal) |
+| Gagal jauh / gagal dekat | 0,2 / 3,3% → 0,1 / 3,0% | 0,2 / 3,2% → 0,1 / 2,1% |
+| Rumah | 91,2% → 90,7% | 90,5% → **93,0%** |
+| Kalibrasi / Rumah2 / sintetis | 100 / 99,5 / 96,4% → 100 / 99,5 / **98,0%** | 100 / 98,9 / 97,3% → 100 / 98,9 / **99,2%** |
+| Rute dekat saja / rute penuh | 98,9 / 93,7% → 99,1 / 94,2% | 99,3 / 93,0% → 99,1 / **96,1%** |
+| Biaya vs A\* + RS (median / p90) | 1,02 / 1,60× → 1,04 / 1,71× | 1,02 / 1,59× → 1,04 / 1,58× |
+| Ganti arah rata-rata | 3,26 → 3,78 | 3,38 → 3,15 |
+| Waktu median / p90 | 154 / 2.826 → 233 / 2.324 ms | 266 / 2.366 → 191 / 2.204 ms |
+| Percobaan serah rata-rata | 2,10 → 2,00 | 2,10 → 1,95 |
+| Galat akhir rata (maks) | 0,67 cm / 0,83° (1,00 cm / 1,98°) | 0,68 cm / 0,79° (1,00 cm / 1,99°) |
+| Negatif: ikut buntu, jalur ditemukan (sah) | 97% → 98,7%, 2 (2) | 93% → 94,7%, 8 (8) |
+
+Sisa kegagalan, hampir semuanya **gagal dekat**:
+- ID 01, 26 rute: Rumah 20 (17 rute penuh, 3 rute dekat), sintetis 5, Rumah2 1.
+- ID 02, 18 rute: Rumah 14 (satu di antaranya gagal jauh), sintetis 2, Rumah2 2.
+
+Kesimpulan: ID 02 membaik jelas, ID 01 hanya sedikit, dan Rumah ID 01 tidak membaik. Perbedaan yang mencolok: model jauh ID 01 yang terpilih berasal dari langkah 60.000, sedangkan ID 02 dari langkah 95.000.
+
 ## 11. Dataset (`skenario.py`)
 
 | Berkas (`drl/data/`) | Isi |
@@ -321,6 +368,7 @@ Lain-lain:
 | `demo_jauh_id0N.npz` | Episode model jauh (primitif A\*), plus `ep_obs_serah` (9 angka) / `ep_mask_serah` (30) model dekat di pose serah |
 | `demo_dekat_id0N.npz` | Episode model dekat (segmen RS) dari potongan demo utama; `ep_awal` = pose serah, `ep_d0` / `ep_k0` |
 | `demo_dekat_tambahan_id0N.npz` | `--hanya-dekat`: skenario yang start-nya 15–60 cm dari tujuan |
+| `demo_dekat_dagger_id0N.npz` | `python -m drl.dagger`: demo RS dari pose serah yang dicapai model jauh terlatih (bagian 10.4) |
 | `negatif_id0N.npz` | Skenario yang gagal di Hybrid A\*: DQfD harus ikut buntu |
 | `ringkasan_id0N.json` | Jumlah per peta, demo ditolak per kode, histogram aksi, komposisi |
 
@@ -369,7 +417,25 @@ Evaluasi pertama (model ID 01: jauh langkah 55.000, dekat langkah 95.000) tiba 9
 
 - Yang menentukan adalah **banyaknya pose serah yang dicoba**, bukan anggaran per pencarian.
 - **Urutan berdasarkan V model dekat tidak membantu.** Model dekat buta rintangan, jadi V-nya terlalu optimis di tempat sempit dan tidak bisa membedakan pose serah yang mudah dari yang sulit.
-- Rute normal tidak melambat, karena biasanya berhasil di percobaan pertama atau kedua (rata-rata 2,2). Perkiraan tiba ID 01 naik ke sekitar 97%; evaluasi ulang penuh belum dijalankan.
+- Rute normal tidak melambat, karena biasanya berhasil di percobaan pertama atau kedua (rata-rata 2,2).
+
+**Evaluasi penuh dengan `MAKS_SERAH` = 12** (2026-10-21, set uji, metode gabungan, model yang sama):
+
+| | ID 01 (828 rute) | ID 02 (808 rute) |
+|---|---|---|
+| Tiba, sebelum → sesudah | 91,1% → **96,5%** | 92,9% → **96,5%** |
+| Gagal jauh / gagal dekat | 0,2 / 3,3% (semula 0,2 / 8,7%) | 0,2 / 3,2% (semula 0,2 / 6,8%) |
+| Tiba di Rumah | 78,6% → 91,2% | 83,6% → 90,5% |
+| Tiba Kalibrasi / Rumah2 / sintetis | 100 / 99,5 / 96,4% | 100 / 98,9 / 97,3% |
+| Tiba rute dekat saja / rute penuh | 98,9 / 93,7% | 99,3 / 93,0% |
+| Biaya vs A\* + RS (median / p90) | 1,02 / 1,60× | 1,02 / 1,59× |
+| Ganti arah (DQfD / A\*) | 3,26 / 1,35 | 3,38 / 1,38 |
+| Galat akhir rata (maks) | 0,68 cm / 0,81° (1,00 cm / 2,00°) | 0,69 cm / 0,80° (1,00 cm / 2,00°) |
+| Waktu median / p90 (A\*) | 154 / 2.826 ms (3 / 57 ms) | 266 / 2.366 ms (3 / 40 ms) |
+| Percobaan serah rata-rata | 2,10 | 2,10 |
+| Negatif: buntu, jalur ditemukan (sah) | 97%, 5 (5) | 93%, 10 (10) |
+
+Sisa kegagalan (29 dan 28 rute) sebagian besar **rute penuh di Rumah** (16 per robot) dan di peta sintetis (7 per robot). Jalur yang tiba semuanya sah menurut pemeriksaan independen.
 
 **Kompatibilitas model.** Checkpoint mencatat `max_steer_deg`, `r_plan_cm`, `versi_aksi` (= 4), `jenis`, `n_aksi`, dan `n_obs`. Model dengan profil kemudi, ruang aksi, atau jenis lain ditolak dengan pesan yang menyuruh latih ulang. Model dan data versi sebelumnya diarsipkan di `model_dqn/arsip_*` dan `drl/data/arsip_*`.
 
@@ -378,7 +444,9 @@ Evaluasi pertama (model ID 01: jauh langkah 55.000, dekat langkah 95.000) tiba 9
 > [!warning] Disetel setelah pelatihan penuh
 > - **Metode pencarian** (mundur / terbaik-dulu / gabungan): pilih dari `drl.evaluasi` di set uji.
 > - **`BATAS_DEKAT_S`** (0,6 s). `MAKS_SERAH` sudah ditetapkan 12 (bagian 12.1).
-> - **Latih ulang supaya model jauh menyerahkan di pose yang benar-benar bisa didaratkan**: model dekat dilatih dari pose serah yang dicapai model jauh (DAgger), dan nilai akhir model jauh diambil dari hasil pendaratan sungguhan.
+> - **Model jauh ID 01 langkah 95.000** (`id01_jauh_akhir.pt`) belum dievaluasi. Model ID 02 yang terbaik justru di langkah 95.000.
+> - **Model dekat yang melihat rintangan**: 9 masukan RS + 32 sinar 40 cm + 6 ruang manuver = 47 masukan (147.871 parameter), keluaran tetap 30 segmen RS. Menyimpang dari "input RS murni", jadi perlu keputusan.
+> - **Biaya bila pendaratan gagal** di demo jauh: sekarang biaya buntu (5.000 cm). Bila model jauh jadi ragu berhenti, pertimbangkan nilai yang lebih kecil.
 > - **`RADIUS_SERAH_PAKSA_CM`** (25 cm): tetap, atau `None` supaya saringan Dijkstra berlaku mutlak.
 
 - **Bobot per peta**: ketiga peta asli dibagi rata. Opsi `--bobot` belum dibuat.
@@ -395,6 +463,12 @@ python -m drl.skenario --id 1,2 --n 5000 --hanya-dekat     # demo dekat tambahan
 python -m drl.skenario --id 1,2 --periksa                  # integritas semua dataset
 python -m drl.latih --id 1,2 --perangkat cuda              # dekat lalu jauh; --model dekat / jauh, --tampil
 python -m drl.evaluasi --id 1,2                            # nilai di set uji
+
+# langkah 3 + 4 (butuh model jauh & dekat yang sudah ada)
+python -m drl.dagger --id 1,2 --n 3000                     # demo dekat dari pose serah model jauh
+python -m drl.latih --id 1,2 --model dekat --perangkat cuda   # dekat dengan data DAgger
+python -m drl.latih --id 1,2 --model jauh --perangkat cuda    # jauh, nilai akhir = pendaratan sungguhan
+python -m drl.evaluasi --id 1,2
 python navigasi.py --simulasi --id 1 --perencana dqfd-murni
 ```
 

@@ -326,8 +326,49 @@ BATAS_DEKAT_S = 0.6
 MAKS_SERAH = 12
 
 
+def buat_cek_pendaratan(net_dekat, metode=METODE_BAWAAN, batas_waktu=BATAS_DEKAT_S, maks_coba=None):
+    """(cek_serah, nilai_serah) untuk lingkungan jauh: PENDARATAN SUNGGUHAN model dekat.
+
+    cek_serah(env): model dekat mencoba mendarat dari pose env (pencarian
+    `metode`, paling lama batas_waktu detik); True bila berhasil tanpa tabrakan.
+    Ini yang dipakai saat pengujian (rencanakan_dua), jadi lingkungan latih
+    model jauh yang memakainya berhenti di pose yang SAMA dengan saat dipakai.
+    nilai_serah(env): biaya jalur pendaratan yang baru ditemukan cek_serah di
+    pose itu (dipanggil lingkungan tepat setelah cek_serah berhasil).
+    maks_coba: jatah percobaan per episode (seperti MAKS_SERAH saat pengujian);
+    sesudahnya cek mengembalikan None - episode jauh berakhir gagal.
+    Satu lingkungan dekat per lingkungan jauh (disimpan di atributnya), berbagi
+    objek perencana - tujuan & peta sama, jadi keadaan perencana tetap benar.
+    """
+    def cek(env):
+        if maks_coba is not None and env.n_coba_serah > maks_coba:
+            return None
+        ed = getattr(env, "_env_dekat", None)
+        if ed is None:
+            ed = env._env_dekat = L.LingkunganRencana(env.arena, env.p, margin_cm=env.margin_cm,
+                                                      planner=env.planner, jenis="dekat")
+        mulai, d0, k0 = (env.x, env.y, env.yaw), env.d, env.k
+        env._biaya_daratan = env.biaya_buntu
+        obs, info = ed.reset(mulai, env.tujuan, env.omap, d0=d0, k0=k0)
+        if obs is None:
+            if info["alasan"] != "sudah di tujuan":
+                return False
+            env._biaya_daratan = 0.0
+            return True
+        h = cari(net_dekat, ed, metode, batas_waktu=batas_waktu,
+                 mulai_ulang=lambda: ed.reset(mulai, env.tujuan, env.omap, d0=d0, k0=k0)[0])
+        if h["sukses"]:
+            env._biaya_daratan = ed.biaya
+        return h["sukses"]
+
+    def nilai(env):
+        return float(getattr(env, "_biaya_daratan", env.biaya_buntu))
+
+    return cek, nilai
+
+
 def rencanakan_dua(net_jauh, net_dekat, env_jauh, env_dekat, awal, tujuan, omap=None,
-                   metode=METODE_BAWAAN, batas_waktu=None, batas_dekat=BATAS_DEKAT_S):
+                   metode=METODE_BAWAAN, batas_waktu=None, batas_dekat=BATAS_DEKAT_S, catat=None):
     """Model jauh sampai serah, lalu model dekat. Tanpa Reeds-Shepp, tanpa A*.
 
     Model jauh berhenti di dalam 60 cm bila TIDAK ADA HALANGAN untuk mendarat,
@@ -345,6 +386,8 @@ def rencanakan_dua(net_jauh, net_dekat, env_jauh, env_dekat, awal, tujuan, omap=
       biaya                      biaya jalur jauh + dekat (sel)
       n_jauh_titik, n_serah      titik bagian jauh; percobaan pendaratan
       metode_jauh, metode_dekat, dicoba, waktu_s
+    catat: daftar; bila diberikan, tiap percobaan pendaratan ditambahkan sebagai
+    dict(pose, d, k, sukses) - bahan DAgger (drl.dagger).
     """
     t0 = time.perf_counter()
     st = {"n_serah": 0, "dekat": None, "jalur_dekat": None, "biaya_dekat": 0.0}
@@ -372,7 +415,10 @@ def rencanakan_dua(net_jauh, net_dekat, env_jauh, env_dekat, awal, tujuan, omap=
         if st["n_serah"] >= MAKS_SERAH or (sisa() is not None and sisa() <= 0):
             return False
         st["n_serah"] += 1
-        return daratkan((e.x, e.y, e.yaw), e.d, e.k)
+        ok = daratkan((e.x, e.y, e.yaw), e.d, e.k)
+        if catat is not None:
+            catat.append({"pose": (e.x, e.y, e.yaw), "d": e.d, "k": e.k, "sukses": ok})
+        return ok
 
     hasil = {"sukses": False, "jalur": [], "biaya": 0.0, "n_jauh_titik": 0, "metode_jauh": "-",
              "metode_dekat": "-", "dicoba": 0}
