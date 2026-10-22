@@ -6,9 +6,9 @@ latih.py - melatih DQfD per robot: pra-latih dari demo, lalu latihan sendiri.
     python -m drl.latih --id 1 --model dekat --pra 5000 --mandiri 0   # cepat, hanya pra-latih
     python -m drl.visual_neuron --putar model_dqn/id01_dekat    # putar ulang sesudahnya
 
-DUA MODEL PER ROBOT (versi aksi 4, ver-1-2), lihat lingkungan.py - model jauh
-meniru masukan & keluaran Hybrid A* (47 / 14), model dekat meniru masukan &
-keluaran Reeds-Shepp (9 / 30):
+DUA MODEL PER ROBOT (versi aksi 5, ver-1-3), lihat lingkungan.py - model jauh
+meniru masukan & keluaran Hybrid A* (47 / 14), model dekat meniru keluaran
+Reeds-Shepp dengan masukan RS + rintangan (47 / 30):
     dekat  model_dqn/id0N_dekat.pt - dari demo_dekat (+ demo_dekat_tambahan,
            + demo_dekat_dagger bila ada). Dilatih LEBIH DULU.
     jauh   model_dqn/id0N_jauh.pt - dari demo_jauh. Butuh id0N_dekat.pt.
@@ -22,7 +22,7 @@ keluaran Reeds-Shepp (9 / 30):
                percobaan per episode, lalu gagal.
              v - perkiraan max_a Q model dekat di pose serah (cara lama;
                berhenti di pose tembakan RS bebas). Lebih cepat, tapi model
-               dekat yang buta rintangan sering terlalu optimis.
+               dekat versi 4 yang buta rintangan sering terlalu optimis.
            Jadi model jauh belajar tiba di batas 60 cm di pose yang benar-benar
            bisa didaratkan.
 
@@ -67,7 +67,7 @@ import konfig                                   # noqa: E402
 from drl import lingkungan as L                 # noqa: E402
 from drl import rollout as RO                   # noqa: E402
 from drl import skenario as S                   # noqa: E402
-from drl.dqfd import AgenDQfD, Buffer, meta_model, muat_jaringan  # noqa: E402
+from drl.dqfd import AgenDQfD, Buffer, meta_model, muat_jaringan, periksa_profil  # noqa: E402
 from drl.jaringan import SKALA_REWARD, bermask  # noqa: E402
 from drl.perencana_dqfd import (BATAS_DEKAT_S, MAKS_SERAH, METODE_BAWAAN, buat_cek_pendaratan,  # noqa: E402
                                 jalur_model, mutu_jalur, rencanakan, rencanakan_dua)
@@ -211,6 +211,38 @@ def nilai_akhir_pendaratan(d, episode, ulang, cek, nilai, cadangan):
             print(f"    pendaratan demo {i + 1}/{len(episode)}: berhasil {100.0 * n_ok / max(1, n):.1f}% "
                   f"({time.time() - t0:.0f} s)", flush=True)
     return akhir, n_ok, n
+
+
+def bobot_awal(agen, jalur, jenis, prof, device):
+    """Mulai latihan dari checkpoint lain berjenis sama (--awal).
+
+    Bila checkpoint itu punya masukan LEBIH SEDIKIT - satu-satunya yang dikenal:
+    model dekat versi 4, 9 masukan = indeks 0-8 versi 5 (identik, diperiksa di
+    dataset) - bobot FC1-nya disalin ke kolom pertama, dan kolom masukan baru
+    (sinar & ruang manuver) diberi bobot NOL. Di awal latihan jaringan menghitung
+    Q persis seperti model lama; masukan baru baru dipakai sejauh menurunkan loss.
+    Model terbaik dipilih dari validasi, termasuk evaluasi "awal" di langkah 0,
+    jadi hasil latihan tidak bisa lebih buruk dari model lama di set validasi.
+    """
+    if not os.path.exists(jalur):
+        raise SystemExit(f"[!] --awal: {jalur} tidak ada")
+    ck = torch.load(jalur, map_location=device, weights_only=False)
+    if ck.get("jenis") != jenis or ck.get("n_aksi") != L.n_aksi(jenis):
+        raise SystemExit(f"[!] --awal: {jalur} adalah model '{ck.get('jenis')}' dengan {ck.get('n_aksi')} aksi, "
+                         f"bukan model {jenis} dengan {L.n_aksi(jenis)} aksi")
+    periksa_profil(ck, prof, jalur)
+    lama, baru = ck["n_obs"], L.n_obs(jenis)
+    sd = {k: v.clone() for k, v in ck["net"].items()}
+    if lama != baru:
+        if not (jenis == "dekat" and lama == L.N_OBS_RS):
+            raise SystemExit(f"[!] --awal: {jalur} punya {lama} masukan, program {baru}; pemetaan masukannya "
+                             f"tidak dikenal (hanya model dekat {L.N_OBS_RS} masukan -> {baru})")
+        w = sd["fc1.weight"]
+        sd["fc1.weight"] = torch.cat([w, torch.zeros((w.shape[0], baru - lama), dtype=w.dtype, device=w.device)], 1)
+    agen.net.load_state_dict(sd)
+    agen.target.load_state_dict(sd)
+    agen.sinkron_cpu()
+    return lama, baru, ck.get("langkah")
 
 
 # ------------------------------------------------------------ evaluasi
@@ -424,6 +456,11 @@ def latih_model(rid, jenis, args, device):
         agen.target.load_state_dict(ck["net"])
         agen.sinkron_cpu()
         print(f"[i] ID {rid:02d} {jenis}: bobot awal dari {sumber} (transfer)")
+    if args.awal:
+        sumber = jalur_model(rid, jenis, args.awal)
+        lama, baru, langkah = bobot_awal(agen, sumber, jenis, prof, device)
+        print(f"[i] ID {rid:02d} {jenis}: bobot awal dari {sumber} (langkah {langkah}, {lama} masukan"
+              + (f"; {baru - lama} masukan baru berbobot nol)" if baru != lama else ")"))
 
     evaluator = Evaluator(d, neg, pabrik, val_ep, args.n_negatif, jenis, net_dekat)
     probe_idx = pilih_probe(d, val_ep)
@@ -609,6 +646,9 @@ def main():
     ap.add_argument("--maks-pendaratan", type=int, default=MAKS_SERAH,
                     help="percobaan pendaratan per episode fase B, lalu gagal (pengujian: MAKS_SERAH)")
     ap.add_argument("--transfer", action="store_true", help="ID 02 mulai dari bobot ID 01 (jenis sama)")
+    ap.add_argument("--awal", default=None,
+                    help="folder berisi id0N_<jenis>.pt untuk bobot awal, mis. model_dqn/arsip_v4_dekat_buta: "
+                         "model dekat versi 4 (9 masukan), masukan rintangan baru mulai berbobot nol")
     ap.add_argument("--data", default=S.DIR_DATA)
     ap.add_argument("--keluar", default=DIR_MODEL)
     ap.add_argument("--seed", type=int, default=0)

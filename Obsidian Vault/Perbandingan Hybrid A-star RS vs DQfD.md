@@ -1,6 +1,20 @@
-# Perbandingan Hybrid A\* + Reeds-Shepp vs DQfD (model jauh + model dekat)
+	# Perbandingan Hybrid A\* + Reeds-Shepp vs DQfD (model jauh + model dekat)
 
 Tanggal: 2026-10-21 · Branch `ver-1-2` · Struktur model: [[Struktur DQfD Full]]
+
+> [!tip] Pembaruan 2026-10-22 (ver-1-3): model dekat sadar rintangan
+> Angka di catatan ini adalah **versi 4** (model dekat 9 masukan). Di ver-1-3, model dekat diberi 32 sinar + 6 ruang manuver (47 masukan) dan dilatih mulai dari bobot v4, sedangkan model jauh tetap v4. Detail: [[Struktur DQfD Full]] bagian 0.3.
+>
+> | | v4 (catatan ini) | **v5** | Hybrid A\* + RS |
+> |---|---|---|---|
+> | Tiba ID 01 / ID 02 | 96,9 / 97,8% | **99,0 / 98,4%** | 99,8 / 100% |
+> | Gagal dekat | 3,0 / 2,1% | **0,8 / 1,5%** | – |
+> | Rumah | 90,7 / 93,0% | **97,7 / 94,5%** | 100% |
+> | Biaya median / p90 | 1,04 / 1,71 · 1,04 / 1,58× | **1,02 / 1,45 · 1,02 / 1,50×** | 1 |
+> | Waktu median | 233 / 191 ms | **49 / 136 ms** | 3,4 / 4,6 ms |
+> | Tiba ≤ 2 s | 88,5 / 89,0% | **95,0 / 93,3%** | 99,8 / 100% |
+>
+> Hasil ini menjawab saran perbaikan nomor 2 di bagian 8. Rincian waktu per bagian (bagian 3, 4, dan 6) belum diukur ulang untuk v5.
 
 Perbandingan dipasangkan per bagian, sesuai yang ditiru masing-masing model:
 

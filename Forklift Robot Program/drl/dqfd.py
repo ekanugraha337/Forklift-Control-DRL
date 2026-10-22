@@ -22,7 +22,8 @@ import torch
 import torch.nn.functional as F
 
 from drl.jaringan import JaringanDQfD, bermask
-from drl.lingkungan import JENIS, VERSI_AKSI, n_aksi as jumlah_aksi, n_obs as jumlah_obs
+from drl.lingkungan import (JENIS, VERSI_AKSI, VERSI_MODEL, n_aksi as jumlah_aksi,
+                             n_obs as jumlah_obs, versi_cocok)
 
 
 def kolom(n_aksi, n_obs):
@@ -167,15 +168,20 @@ def muat_jaringan(jalur, device="cpu", jenis=None):
     # Diperiksa SEBELUM bobot dimuat: model ruang aksi lama (15 keluaran, dengan
     # SAMBUNG) akan gagal di load_state_dict dengan pesan bentuk tensor yang
     # tidak menjelaskan apa-apa.
-    versi = ck.get("versi_aksi", 1)
-    if versi != VERSI_AKSI:
-        raise SystemExit(f"[!] {jalur} memakai ruang aksi versi {versi}, program sekarang versi "
-                         f"{VERSI_AKSI} (dua model per robot: jauh meniru Hybrid A* - {jumlah_obs('jauh')} "
-                         f"masukan / {jumlah_aksi('jauh')} aksi, dekat meniru Reeds-Shepp - "
-                         f"{jumlah_obs('dekat')} masukan / {jumlah_aksi('dekat')} aksi).\n"
+    # Versi diperiksa PER JENIS (lingkungan.VERSI_MODEL): model jauh versi 4
+    # masih cocok dengan program versi 5, model dekat versi 4 tidak.
+    versi, jm = ck.get("versi_aksi", 1), ck.get("jenis")
+    if (not versi_cocok(jm, versi) or ck.get("n_obs") != jumlah_obs(jm)
+            or ck.get("n_aksi") != jumlah_aksi(jm)):
+        syarat = (f"butuh versi {VERSI_MODEL[jm]}-{VERSI_AKSI}" if jm in VERSI_MODEL
+                  else "model sebelum dua-model (versi < 4)")
+        raise SystemExit(f"[!] {jalur}: model '{jm}' ruang aksi versi {versi}, {syarat}. Program "
+                         f"sekarang versi {VERSI_AKSI} (jauh meniru Hybrid A* - {jumlah_obs('jauh')} "
+                         f"masukan / {jumlah_aksi('jauh')} aksi, dekat meniru Reeds-Shepp dan sadar "
+                         f"rintangan - {jumlah_obs('dekat')} masukan / {jumlah_aksi('dekat')} aksi).\n"
                          f"    Bangkitkan ulang demo dan latih ulang: python -m drl.skenario lalu "
                          f"python -m drl.latih")
-    if jenis is not None and ck.get("jenis") != jenis:
+    if jenis is not None and jm != jenis:
         raise SystemExit(f"[!] {jalur} adalah model '{ck.get('jenis')}', bukan '{jenis}'")
     net = JaringanDQfD(ck["n_aksi"], ck["n_obs"]).to(device)
     net.load_state_dict(ck["net"])

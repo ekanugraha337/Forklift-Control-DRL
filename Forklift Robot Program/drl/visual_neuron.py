@@ -345,17 +345,17 @@ class Dasbor:
               (x0 + 10, y0 + h - 6), 0.36, REDUP)
 
     def _sinar(self, img, P, env, obs, pose):
-        if env.jenis != "jauh":
-            return                  # model dekat (Reeds-Shepp) tidak punya sinar
+        # jauh: obs 10-41, jangkau 100 cm; dekat: obs 9-40, jangkau 40 cm
+        i0, jangkau = (10, env._jangkau) if env.jenis == "jauh" else (L.N_OBS_RS, env._jangkau_dekat)
         x, y, yaw = pose
         off = env._pusat_off
         cx = x + off * math.cos(yaw)
         cy = y + off * math.sin(yaw)
         for i, sud in enumerate(env._sudut):
-            t = env._tepi[i] + obs[10 + i] * env._jangkau
+            t = env._tepi[i] + obs[i0 + i] * jangkau
             ex = cx + t * math.cos(yaw + sud)
             ey = cy + t * math.sin(yaw + sud)
-            cv2.line(img, P(cx, cy), P(ex, ey), (150, 90, 170) if obs[10 + i] < 1 else (95, 80, 105), 1)
+            cv2.line(img, P(cx, cy), P(ex, ey), (150, 90, 170) if obs[i0 + i] < 1 else (95, 80, 105), 1)
 
     def _panel_jaringan(self, img, rect):
         x0, y0, w, h = rect
@@ -373,8 +373,8 @@ class Dasbor:
             warna = tuple(int(u) for u in _cmap(np.array([t]), cv2.COLORMAP_COOL)[0])
             cv2.rectangle(img, (xi + i * sel, yi), (xi + i * sel + sel - 2, yi + 18), warna, -1)
         kelompok = ((("tujuan", 0, 8), ("prim.", 8, 10), ("32 sinar", 10, 42), ("heur.", 42, 45),
-                     ("margin", 45, 47)) if len(o) == 47 else
-                    (("tujuan /R", 0, 2), ("arah", 2, 5), ("dekat.", 5, 7), ("gerak", 7, 9)))
+                     ("margin", 45, 47)) if self.env.jenis == "jauh" else
+                    (("RS", 0, 9), ("32 sinar 40 cm", 9, 41), ("manuver", 41, 47)))
         for nama, a, b in kelompok:
             _teks(img, nama, (xi + a * sel, yi + 32), 0.36, REDUP)
             cv2.line(img, (xi + a * sel, yi + 21), (xi + b * sel - 2, yi + 21), REDUP, 1)

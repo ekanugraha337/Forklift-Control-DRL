@@ -371,7 +371,7 @@ def uji(ids, peta, n, seed):
          setelah primitif A* terakhir, dan jalurnya IDENTIK dengan bagian A*;
       2. episode dekat lolos mask dan TIBA dalam toleransi model dekat;
       3. atau demo ditolak dengan salah satu alasan sah di TOLAK;
-      4. observasi berukuran n_obs jenisnya (47 / 9) dan berhingga.
+      4. observasi berukuran n_obs jenisnya (47 / 47) dan berhingga.
     """
     print(f"[i] uji penerimaan dua model (jauh + dekat): {n} skenario per robot per peta, seed {seed}")
     print(f"[i] serah: di dalam {konfig.PARAM_RENCANA['analytic_dist']:.0f} cm DAN tidak ada halangan "

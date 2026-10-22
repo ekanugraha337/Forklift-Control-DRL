@@ -1,24 +1,31 @@
 """
 lingkungan.py - MDP perencanaan untuk DQfD, pengganti ruang pencarian Hybrid A*.
 
-DUA MODEL PER ROBOT (versi aksi 4, branch ver-1-2). Demonstratornya Hybrid A* +
+DUA MODEL PER ROBOT (versi aksi 5, branch ver-1-3). Demonstratornya Hybrid A* +
 Reeds-Shepp; saat dipakai TIDAK ADA algoritma Reeds-Shepp maupun A* - seluruh
-jalur dipilih dua jaringan, masing-masing meniru MASUKAN dan KELUARAN algoritma
-yang ditirunya:
+jalur dipilih dua jaringan. Model jauh meniru masukan & keluaran Hybrid A*;
+model dekat meniru KELUARAN Reeds-Shepp, dengan masukan RS + rintangan:
 
     jauh   meniru HYBRID A*
            masukan  pose awal & tujuan + PETA RINTANGAN: 47 angka (tujuan
                     relatif, 32 sinar, peta Dijkstra, margin, gerak terakhir)
            keluaran 14 primitif (7 tingkat kemudi x maju/mundur), 7,3 cm
-    dekat  meniru REEDS-SHEPP
-           masukan  HANYA pose tujuan relatif terhadap robot, dibagi radius
-                    belok R (seperti reeds_shepp_paths), + arah & kemudi yang
-                    sedang berjalan (seperti _rs_cost) + target pendekatan
-                    lurus (_approach_dirs): 9 angka. TIDAK melihat rintangan -
-                    sama dengan RS, yang tabrakannya dicek terpisah oleh A*.
-                    Di sini tabrakan dicegah mask, dan pencarian mencoba aksi
-                    berikutnya menurut Q (seperti _best_free_rs mencoba
-                    kandidat dari yang termurah).
+    dekat  meniru REEDS-SHEPP, SADAR RINTANGAN (ver-1-3)
+           masukan  47 angka:
+                    0-8   masukan RS: pose tujuan relatif dibagi radius belok R
+                          (seperti reeds_shepp_paths), arah & kemudi yang sedang
+                          berjalan (seperti _rs_cost), target pendekatan lurus
+                          (_approach_dirs)
+                    9-40  32 sinar jarak bebas dari tepi badan, jangkau 40 cm
+                    41-46 ruang manuver: berapa langkah penuh (maks 4) tiap
+                          segmen R/S/L x maju/mundur bisa dijalankan tanpa
+                          tabrakan
+                    Versi 4 (ver-1-2) hanya punya 0-8 dan buta rintangan; di
+                    ruang sempit (Rumah) urutan aksi menurut Q sering menuju
+                    buntu dan separuh percobaan pendaratan gagal. Mask tetap
+                    mencegah tabrakan; pencarian tetap mencoba aksi berikutnya
+                    menurut Q (seperti _best_free_rs mencoba kandidat dari yang
+                    termurah).
            keluaran 30 = segmen RS: {kanan penuh, lurus, kiri penuh} x {maju,
                     mundur} x panjang {1, 1/2, 1/4, 1/8, 1/16 langkah}.
                     Busur RS memakai kelengkungan yang sama persis dengan
@@ -87,13 +94,27 @@ KEMUDI_DEKAT = (0, N_KEMUDI // 2, N_KEMUDI - 1)     # indeks planner.kappas: kan
 NAMA_KEMUDI_DEKAT = ("R", "S", "L")
 PECAHAN_PENDEK = PANJANG_DEKAT[1:]
 _N_AKSI = {"jauh": N_PRIMITIF, "dekat": len(PANJANG_DEKAT) * len(KEMUDI_DEKAT) * 2}
-_N_OBS = {"jauh": 47, "dekat": 9}
+_N_OBS = {"jauh": 47, "dekat": 47}
 N_SINAR = 32
+# Masukan model dekat: 9 angka RS, 32 sinar, 6 ruang manuver (lihat _obs_dekat).
+N_OBS_RS = 9
+N_MANUVER = len(KEMUDI_DEKAT) * 2
 # Dicatat di checkpoint (dqfd.meta_profil): model dengan ruang aksi lain ditolak.
 # 1 = 14 primitif + SAMBUNG; 2 = satu model, 32 aksi (ver-1-1); 3 = dua model,
 # jauh 14 / dekat 38 aksi, masukan sama (ver-1-2, awal); 4 = dua model meniru
-# masukan & keluaran A* (47 / 14) dan RS (9 / 30).
-VERSI_AKSI = 4
+# masukan & keluaran A* (47 / 14) dan RS (9 / 30); 5 = model dekat sadar
+# rintangan, 47 masukan (9 RS + 32 sinar + 6 ruang manuver) / 30 aksi (ver-1-3).
+VERSI_AKSI = 5
+# Versi terakhir saat kontrak masukan/keluaran TIAP JENIS model berubah. Model
+# jenis itu dengan VERSI_MODEL[jenis] <= versi_aksi <= VERSI_AKSI masih cocok:
+# versi 5 hanya mengubah model dekat, jadi model jauh versi 4 tetap bisa dipakai
+# (masukan 47 dan 14 aksinya identik, demo jauhnya sama persis).
+VERSI_MODEL = {"jauh": 4, "dekat": 5}
+
+
+def versi_cocok(jenis, versi):
+    """Model jenis ini dengan versi_aksi itu cocok dengan program sekarang?"""
+    return jenis in VERSI_MODEL and VERSI_MODEL[jenis] <= versi <= VERSI_AKSI
 # Aksi pendek per episode. Satu segmen RS butuh <= 4 (1/2 + 1/4 + 1/8 + 1/16),
 # ekor RS terpanjang yang terukur 6 segmen -> 24. Sisanya cadangan.
 MAKS_PENDEK = 32
@@ -110,6 +131,17 @@ RADIUS_SERAH_PAKSA_CM = 25.0
 JARAK_NORM_CM = 300.0
 SINAR_JANGKAU_CM = 100.0
 BEBAS_NORM_CM = 20.0
+# Model dekat: sinar lebih pendek (di dalam 60 cm yang penting ruang di sekitar
+# badan; dengan 100 cm di ruang sempit semua sinar mendekati 0), disampel rapat
+# sekaligus - bukan sphere tracing, karena observasi model dekat dihitung
+# ribuan kali per rute.
+SINAR_DEKAT_CM = 40.0
+SINAR_DEKAT_SAMPEL_CM = 0.5
+# Ruang manuver model dekat: langkah penuh yang diperiksa per segmen. Sampelnya
+# sub-titik perencana (n_sub per langkah, sama dengan _ekspansi), jadi langkah
+# pertama konsisten dengan mask. Petunjuk untuk jaringan; keselamatan tetap
+# tugas mask.
+MANUVER_LANGKAH = 4
 
 MAKS_LANGKAH = 300           # x 7,3 cm = 22 m, jauh di atas rute terpanjang di arena
 # Harus lebih mahal dari jalur mana pun, kalau tidak agen yang menghadapi rute
@@ -136,7 +168,7 @@ def n_aksi(jenis):
 
 
 def n_obs(jenis):
-    """Jumlah masukan jaringan: jauh 47, dekat 9."""
+    """Jumlah masukan jaringan: jauh 47, dekat 47 (9 RS + 32 sinar + 6 ruang manuver)."""
     _cek_jenis(jenis)
     return _N_OBS[jenis]
 
@@ -233,6 +265,7 @@ class LingkunganRencana:
         self.tol_yaw = math.radians(TOL_DEKAT_DEG)
         self._bebas_norm = s(BEBAS_NORM_CM)
         self._jangkau = s(SINAR_JANGKAU_CM)
+        self._jangkau_dekat = s(SINAR_DEKAT_CM)
         self.biaya_buntu = s(BIAYA_BUNTU_CM)
 
         # Sinar berpangkal di pusat badan, bukan di poros depan (titik acuan
@@ -246,6 +279,28 @@ class LingkunganRencana:
         with np.errstate(divide="ignore"):
             self._tepi = np.minimum(np.where(c > 1e-9, a / c, np.inf),
                                     np.where(sn > 1e-9, b / sn, np.inf))
+        # Sinar model dekat: jarak sampel dari tepi badan, (N_SINAR, K).
+        self._sinar_dekat_k = np.arange(0.0, self._jangkau_dekat + 1e-9, s(SINAR_DEKAT_SAMPEL_CM))
+        self._sinar_dekat_t = self._tepi[:, None] + self._sinar_dekat_k[None, :]
+        # Ruang manuver: pose relatif (maju, samping, dyaw) tiap sampel tiap
+        # segmen penuh, urutan = aksi model dekat panjang 1 (kemudi x 2 + arah).
+        ds = planner.step / planner.n_sub
+        rel, sah = [], []
+        for ik in KEMUDI_DEKAT:
+            k = planner.kappas[ik]
+            for d in (1, -1):
+                baris = []
+                for j in range(1, MANUVER_LANGKAH * planner.n_sub + 1):
+                    u = d * ds * j
+                    if k == 0.0:
+                        baris.append((u, 0.0, 0.0))
+                    else:
+                        baris.append((math.sin(k * u) / k, (1.0 - math.cos(k * u)) / k, k * u))
+                rel.append(baris)
+                sah.append(d > 0 or self.boleh_mundur)
+        self._manuver_rel = np.array(rel)                         # (6, J, 3)
+        self._manuver_sah = np.array(sah)
+        self._lingkaran = np.array(self.v.circle_offsets)          # pose_margin: lingkaran badan
 
         self.selesai = True
 
@@ -534,21 +589,25 @@ class LingkunganRencana:
 
     # ---------------------------------------------------------- observasi
     def observasi(self):
-        """Masukan jaringan: jauh 47 angka (_obs_jauh), dekat 9 angka (_obs_dekat)."""
+        """Masukan jaringan: jauh 47 angka (_obs_jauh), dekat 47 angka (_obs_dekat)."""
         return self._obs_jauh() if self.jenis == "jauh" else self._obs_dekat()
 
     def _obs_dekat(self):
-        """9 angka = masukan Reeds-Shepp. Tanpa sinar, tanpa peta.
+        """47 angka = masukan Reeds-Shepp + rintangan di sekitar badan.
 
-            0-1  tujuan relatif (maju, samping) / R   R = radius belok rencana (1/kappa_max)
-            2-3  selisih arah hadap tujuan (cos, sin)  - (1, 0) bila arah bebas
-            4    penanda arah tujuan bebas
-            5-6  pendekatan lurus muat dari depan / dari belakang (_approach_dirs)
-            7    arah gerak yang sedang berjalan       +1 / -1 / 0
-            8    kelengkungan yang sedang berjalan     kappa / kappa_max
-        Persis yang dipakai A* untuk menyusun dan menilai tembakan RS:
+            0-1   tujuan relatif (maju, samping) / R   R = radius belok rencana (1/kappa_max)
+            2-3   selisih arah hadap tujuan (cos, sin)  - (1, 0) bila arah bebas
+            4     penanda arah tujuan bebas
+            5-6   pendekatan lurus muat dari depan / dari belakang (_approach_dirs)
+            7     arah gerak yang sedang berjalan       +1 / -1 / 0
+            8     kelengkungan yang sedang berjalan     kappa / kappa_max
+            9-40  32 sinar: jarak bebas dari tepi badan, 0..1 (1 = >= 40 cm)
+            41-46 ruang manuver: langkah penuh bebas tabrakan / 4, untuk
+                  R+, R-, S+, S-, L+, L- (urutan aksi model dekat panjang 1)
+        0-8 persis yang dipakai A* untuk menyusun dan menilai tembakan RS:
         reeds_shepp_paths((x, y, yaw), target, radius), target dari
-        _approach_dirs, _rs_cost(segmen, d, k).
+        _approach_dirs, _rs_cost(segmen, d, k). 9-46 menggantikan pemeriksaan
+        tabrakan yang pada A* dikerjakan terpisah dari rumus RS.
         """
         o = np.zeros(_N_OBS["dekat"], dtype=np.float32)
         pl = self.planner
@@ -567,7 +626,56 @@ class LingkunganRencana:
         o[6] = -1.0 in pl._approach_dirs
         o[7] = self.d
         o[8] = self.k / pl.kappa_max
+        o[N_OBS_RS:N_OBS_RS + N_SINAR] = self._sinar_dekat()
+        o[N_OBS_RS + N_SINAR:] = self._ruang_manuver()
         return o
+
+    def _sinar_dekat(self):
+        """32 sinar model dekat, 0..1 (1 = >= SINAR_DEKAT_CM dari tepi badan).
+
+        Disampel rapat (SINAR_DEKAT_SAMPEL_CM) sepanjang sinar dalam satu operasi
+        larik: sampel pertama yang jaraknya ke zona < 1 sel = ujung sinar.
+        Semantik sama dengan _sinar (berhenti di distance transform < 1).
+        """
+        dist = self.omap.dist
+        h, w = dist.shape
+        off = self._pusat_off
+        cx = self.x + off * math.cos(self.yaw)
+        cy = self.y + off * math.sin(self.yaw)
+        ang = self.yaw + self._sudut
+        T = self._sinar_dekat_t
+        ix = np.floor(cx + T * np.cos(ang)[:, None]).astype(np.int64)
+        iy = np.floor(cy + T * np.sin(ang)[:, None]).astype(np.int64)
+        dalam = (ix >= 0) & (ix < w) & (iy >= 0) & (iy < h)
+        kena = ~dalam | (dist[np.clip(iy, 0, h - 1), np.clip(ix, 0, w - 1)] < 1.0)
+        k = self._sinar_dekat_k
+        ujung = np.where(kena.any(1), k[kena.argmax(1)], self._jangkau_dekat)
+        return np.minimum(ujung / self._jangkau_dekat, 1.0)
+
+    def _ruang_manuver(self):
+        """6 angka: bagian dari MANUVER_LANGKAH langkah penuh yang bebas tabrakan,
+        tiap segmen R/S/L x maju/mundur dari pose sekarang (0 = langsung menabrak).
+
+        Sama dengan memanggil omap.pose_margin(...) > 0 di tiap sub-titik dan
+        berhenti di tabrakan pertama, tapi semua sub-titik sekaligus.
+        """
+        dist = self.omap.dist
+        h, w = dist.shape
+        x, y, yaw = self.x, self.y, self.yaw
+        c, s = math.cos(yaw), math.sin(yaw)
+        rel = self._manuver_rel
+        X = x + c * rel[..., 0] - s * rel[..., 1]
+        Y = y + s * rel[..., 0] + c * rel[..., 1]
+        th = yaw + rel[..., 2]
+        off = self._lingkaran
+        ix = np.trunc(X[..., None] + off * np.cos(th)[..., None]).astype(np.int64)   # int() seperti clearance
+        iy = np.trunc(Y[..., None] + off * np.sin(th)[..., None]).astype(np.int64)
+        dalam = (ix >= 0) & (ix < w) & (iy >= 0) & (iy < h)
+        d = np.where(dalam, dist[np.clip(iy, 0, h - 1), np.clip(ix, 0, w - 1)], -1.0)
+        bebas = d.min(-1) - self.v.circle_radius > 0                                  # (6, J)
+        J = bebas.shape[1]
+        n = np.where(bebas.all(1), J, bebas.argmin(1))
+        return np.where(self._manuver_sah, n / J, 0.0).astype(np.float32)
 
     def _obs_jauh(self):
         """47 angka = masukan Hybrid A*: tujuan, peta rintangan (sinar + Dijkstra), margin."""
