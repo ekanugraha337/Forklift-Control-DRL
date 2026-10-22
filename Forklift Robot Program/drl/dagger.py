@@ -13,11 +13,11 @@ Caranya (Ross dkk. 2011, DAgger - dataset aggregation):
   2. rute dijalankan dengan perencana operasional DUA model terlatih
      (perencana_dqfd.rencanakan_dua, metode bawaan) - setiap pose tempat model
      jauh mencoba serah dicatat, berhasil atau gagal didaratkan;
-  3. DEMONSTRATOR dari tiap pose itu: tembakan Reeds-Shepp terbaik yang bebas
-     (planner._analytic - sama dengan ekor RS Hybrid A*), diurai menjadi
-     aksi model dekat (adaptor_demo.urai_ekor_rs) dan diputar ulang dengan
-     arah & kemudi yang sedang berjalan. Pose yang tembakan RS-nya terhalang
-     tidak menghasilkan demo (dihitung "rs_terhalang").
+  3. DEMONSTRATOR dari tiap pose itu: kata Reeds-Shepp terbaik yang bebas
+     (env_dekat.aksi_demonstrator = _best_free_rs, sama dengan ekor RS Hybrid
+     A*), satu aksi model dekat (versi 6), diputar ulang dengan arah & kemudi
+     yang sedang berjalan. Pose yang semua kata RS-nya terhalang tidak
+     menghasilkan demo (dihitung "rs_terhalang").
 Hasilnya demo_dekat_dagger_id0N.npz, ikut dibaca latih.py untuk model dekat
 (skenario.berkas_demo). Semua episode bukan-uji: set uji tetap set uji lama.
 Kolom tambahan ep_dekat_berhasil = model dekat (lama) berhasil mendarat dari
@@ -47,7 +47,7 @@ import konfig                                               # noqa: E402
 import rencana as R                                         # noqa: E402
 from drl import lingkungan as L                             # noqa: E402
 from drl import skenario as S                               # noqa: E402
-from drl.adaptor_demo import galat_margin, putar_ulang, urai_ekor_rs  # noqa: E402
+from drl.adaptor_demo import putar_ulang  # noqa: E402
 
 SKENARIO_PER_TUGAS = 20
 # Seed peta sintetis & skenario: jauh dari dataset utama (seed 1, --hanya-dekat 501)
@@ -88,7 +88,7 @@ def kerja(tugas):
         catat = []
         h = rencanakan_dua(net_j, net_d, env[margin], dekat[margin], awal, tujuan, omap, catat=catat)
         hasil["rute"]["tiba" if h["sukses"] else h["fase"]] += 1
-        pl, ed = env[margin].planner, ulang[margin]
+        ed = ulang[margin]
         for j, c in enumerate(catat):
             hasil["hitung"]["pose"] += 1
             hasil["hitung"]["pose_dekat_gagal"] += not c["sukses"]
@@ -97,15 +97,13 @@ def kerja(tugas):
             if obs is None:
                 hasil["hitung"]["sudah_tiba"] += 1
                 continue
-            # ed.reset sudah memasang _hcost & _approach_dirs tujuan ini di perencana
-            rs = pl._analytic(omap, (pose[0], pose[1], pose[2], d0, k0), tujuan)
-            if rs is None:
+            a = ed.aksi_demonstrator()
+            if a is None:
                 hasil["hitung"]["rs_terhalang"] += 1
                 continue
-            aksi = urai_ekor_rs(pl, pose, rs[0])
-            ep, galat = putar_ulang(ed, pose, tujuan, aksi, omap, d0=d0, k0=k0)
+            ep, galat = putar_ulang(ed, pose, tujuan, [a], omap, d0=d0, k0=k0)
             if galat:
-                hasil["hitung"]["dekat_margin" if galat_margin(galat) else "dekat_presisi"] += 1
+                hasil["hitung"]["galat_putar_ulang"] += 1
                 continue
             hasil["hitung"]["demo"] += 1
             hasil["hitung"]["demo_dari_gagal"] += not c["sukses"]
@@ -174,8 +172,7 @@ def bangkitkan(rid, n_skenario, seed, pekerja, dir_keluar, dir_model):
     print(f"=== ID {rid:02d}: {n_rute} rute - " + ", ".join(f"{k} {v}" for k, v in sorted(rute.items())))
     print(f"    pose serah dicoba {hitung['pose']} (model dekat gagal {hitung['pose_dekat_gagal']}) -> "
           f"demo RS {hitung['demo']} (dari pose gagal {hitung['demo_dari_gagal']}); "
-          f"RS terhalang {hitung['rs_terhalang']}, menyentuh margin {hitung['dekat_margin']}, "
-          f"tidak presisi {hitung['dekat_presisi']}")
+          f"semua kata RS terhalang {hitung['rs_terhalang']}, galat putar ulang {hitung['galat_putar_ulang']}")
     if episode:
         print(f"    -> {p}  ({ring['transisi']} transisi, {ring['waktu_dinding_s'] / 60:.1f} menit)")
     return ring

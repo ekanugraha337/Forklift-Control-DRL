@@ -282,8 +282,17 @@ def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, terima=None, mulai_ul
     gabungan: terbaik-dulu (PORSI_WAKTU_TERBAIK dari batas waktu), lalu mundur
     bila gagal. mulai_ulang(): me-reset env ke keadaan awal yang sama - sel
     tertutup milik pencarian pertama tidak boleh menutup pencarian kedua.
+
+    Model dekat (versi 6, kata RS) selalu memakai pencarian MUNDUR: episodenya
+    satu langkah, jadi mundur = coba kata RS menurut urutan Q, yang menabrak
+    dilewati, berhenti di kata pertama yang bebas.
     """
     t0 = time.perf_counter()
+    if env.jenis == "dekat":
+        h = rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=batas_waktu,
+                       terima=terima)
+        h["metode"] = "urutan Q"
+        return h
     if metode == "mundur":
         h = rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=batas_waktu,
                        terima=terima)
@@ -323,7 +332,14 @@ def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, terima=None, mulai_ul
 # Yang menentukan adalah BANYAKNYA pose serah yang dicoba, bukan anggaran per
 # pencarian. Rute normal tidak melambat: biasanya berhasil di percobaan 1-2.
 BATAS_DEKAT_S = 0.6
-MAKS_SERAH = 12
+# MAKS_SERAH 12 -> 1000 (ver-1-4, model dekat memilih kata RS): satu percobaan
+# pendaratan kini < 1 ms (rumus RS + cek tabrakan), bukan sampai 0,6 s, jadi
+# model jauh boleh terus mencari pose yang kata RS-nya bebas - seperti Hybrid A*
+# yang mencoba RS di setiap simpul. Yang membatasi tinggal batas waktu (2 s).
+# 207 rute uji ID 01 (model jauh ver-1-3, model dekat v6 latih singkat):
+#   12 -> tiba 94,7%; 120 -> 98,6%, median 4,1 ms; 1000 -> 10 dari 11 rute gagal
+#   (pada jatah 12) diperbaiki.
+MAKS_SERAH = 1000
 
 
 def buat_cek_pendaratan(net_dekat, metode=METODE_BAWAAN, batas_waktu=BATAS_DEKAT_S, maks_coba=None):

@@ -345,8 +345,9 @@ class Dasbor:
               (x0 + 10, y0 + h - 6), 0.36, REDUP)
 
     def _sinar(self, img, P, env, obs, pose):
-        # jauh: obs 10-41, jangkau 100 cm; dekat: obs 9-40, jangkau 40 cm
-        i0, jangkau = (10, env._jangkau) if env.jenis == "jauh" else (L.N_OBS_RS, env._jangkau_dekat)
+        if env.jenis != "jauh":
+            return                  # model dekat (kata RS) tidak punya sinar
+        i0, jangkau = 10, env._jangkau
         x, y, yaw = pose
         off = env._pusat_off
         cx = x + off * math.cos(yaw)
@@ -374,7 +375,7 @@ class Dasbor:
             cv2.rectangle(img, (xi + i * sel, yi), (xi + i * sel + sel - 2, yi + 18), warna, -1)
         kelompok = ((("tujuan", 0, 8), ("prim.", 8, 10), ("32 sinar", 10, 42), ("heur.", 42, 45),
                      ("margin", 45, 47)) if self.env.jenis == "jauh" else
-                    (("RS", 0, 9), ("32 sinar 40 cm", 9, 41), ("manuver", 41, 47)))
+                    (("tujuan /R", 0, 2), ("arah", 2, 5), ("dekat.", 5, 7), ("gerak", 7, 9)))
         for nama, a, b in kelompok:
             _teks(img, nama, (xi + a * sel, yi + 32), 0.36, REDUP)
             cv2.line(img, (xi + a * sel, yi + 21), (xi + b * sel - 2, yi + 21), REDUP, 1)
@@ -391,11 +392,13 @@ class Dasbor:
         _teks(img, "Q -> biaya-sisa (sel)", (xq, yq - 8), 0.42)
         sah = biaya[mask]
         lo, hi = (sah.min(), sah.max()) if len(sah) else (0, 1)
-        # Sampai 38 baris (model dekat) harus muat di panel atas (sampai y 580).
-        n_aksi = len(q)
+        # Model dekat punya 88 aksi: tampilkan hanya yang sah, urut Q, maks 36 baris.
+        tampil = (list(range(len(q))) if len(q) <= 40 else
+                  [int(a) for a in np.argsort(-np.where(mask, q, -np.inf)) if mask[a]][:36])
+        n_aksi = len(tampil)
         baris_px = max(12, min(21, 520 // max(1, n_aksi)))
-        for i in range(n_aksi):
-            yy = yq + i * baris_px
+        for baris, i in enumerate(tampil):
+            yy = yq + baris * baris_px
             nama = self.label_aksi[i] if self.label_aksi else str(i)
             warna_t = TEKS if mask[i] else (90, 90, 90)
             _teks(img, nama.replace("maju", "M").replace("mundur", "R"), (xq, yy + 11), 0.32, warna_t)

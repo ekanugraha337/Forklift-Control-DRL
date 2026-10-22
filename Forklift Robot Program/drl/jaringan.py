@@ -5,11 +5,12 @@ jaringan.py - Dueling DQN untuk DQfD. Susunannya di catatan Obsidian bagian 7.
                                    +-> A-hidden 128 -> A(s,a) n  +-> Q = V + A - rata(A)
 
 m, n = jumlah masukan dan aksi jenis modelnya (lingkungan.n_obs / n_aksi).
-Versi aksi 5 punya DUA model per robot:
+Versi aksi 6 punya DUA model per robot:
     jauh   meniru Hybrid A*:   m = 47, n = 14  -> 145.807 parameter
-    dekat  meniru Reeds-Shepp, sadar rintangan:
-                               m = 47, n = 30  -> 147.871 parameter
-           (9 masukan RS + 32 sinar + 6 ruang manuver; versi 4: m = 9, 138.143)
+    dekat  memilih kata Reeds-Shepp:
+                               m =  9, n = 88  -> 145.625 parameter
+           (9 masukan RS; 44 kata x 2 titik sambung. Versi 4: 9 / 30, 138.143;
+            versi 5: 47 / 30, 147.871)
 Lapis tersembunyi sama; yang meniru algoritmanya adalah masukan & keluarannya.
 Susunannya sama untuk ID 01 dan ID 02; bobotnya terpisah.
 

@@ -307,11 +307,11 @@ def kerja(tugas):
             hasil["negatif"].append(meta)
             continue
         try:
-            aksi_jauh, aksi_dekat = urai_aksi(e.planner, jalur, rek.n_ekor)
+            aksi_jauh, ekor = urai_aksi(e.planner, jalur, rek.n_ekor)
         except ValueError as ex:
             hasil["galat"].append(f"{spek} #{i}: urai: {ex}")
             continue
-        h = pisah_demo(e, dekat[margin], awal, tujuan, aksi_jauh, aksi_dekat, omap)
+        h = pisah_demo(e, dekat[margin], awal, tujuan, aksi_jauh, ekor, omap)
         if h["galat"]:
             hasil["galat"].append(f"{spek} #{i}: {h['galat']}")
             continue
@@ -616,11 +616,10 @@ def cetak_ringkasan(r):
             teks = (f"    aksi jauh  (%)  maju " + " ".join(f"{x:4.1f}" for x in p[:7]) +
                     " | mundur " + " ".join(f"{x:4.1f}" for x in p[7:14]))
         else:
-            # segmen RS: indeks = panjang x 6 + kemudi (R, S, L) x 2 + arah
-            per = p.reshape(len(L.PANJANG_DEKAT), len(L.KEMUDI_DEKAT), 2)
-            teks = ("    aksi dekat (%)  " + " ".join(
-                f"{n}{t} {per[:, i, j].sum():4.1f}" for i, n in enumerate(L.NAMA_KEMUDI_DEKAT)
-                for j, t in enumerate("+-")) + f" | pendek {per[1:].sum():.1f}")
+            # kata RS: 44 jenis x 2 titik sambung - tampilkan yang paling sering
+            urut = np.argsort(-p)[:8]
+            teks = ("    kata RS (%)     " + "  ".join(f"{L.nama_kata(a)} {p[a]:.1f}" for a in urut if p[a] > 0)
+                    + f" | masuk mundur {p[L.N_KATA_RS:].sum():.1f}")
         print(teks)
     print(f"    variasi: margin 6 cm {r['margin_cadangan']}, rintangan robot lain {r['dengan_rintangan']}, "
           f"heading bebas {r['heading_bebas']}")

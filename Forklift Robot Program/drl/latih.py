@@ -6,9 +6,11 @@ latih.py - melatih DQfD per robot: pra-latih dari demo, lalu latihan sendiri.
     python -m drl.latih --id 1 --model dekat --pra 5000 --mandiri 0   # cepat, hanya pra-latih
     python -m drl.visual_neuron --putar model_dqn/id01_dekat    # putar ulang sesudahnya
 
-DUA MODEL PER ROBOT (versi aksi 5, ver-1-3), lihat lingkungan.py - model jauh
-meniru masukan & keluaran Hybrid A* (47 / 14), model dekat meniru keluaran
-Reeds-Shepp dengan masukan RS + rintangan (47 / 30):
+DUA MODEL PER ROBOT (versi aksi 6, ver-1-4), lihat lingkungan.py - model jauh
+meniru masukan & keluaran Hybrid A* (47 / 14), model dekat MEMILIH KATA
+Reeds-Shepp (9 masukan RS / 88 = 44 kata x 2 titik sambung; panjang segmen dari
+rumus RS; kata dicek tabrakan berurutan menurut Q). Episode model dekat = satu
+aksi, imbalan = -biaya kurva (bebas) atau -biaya buntu (menabrak):
     dekat  model_dqn/id0N_dekat.pt - dari demo_dekat (+ demo_dekat_tambahan,
            + demo_dekat_dagger bila ada). Dilatih LEBIH DULU.
     jauh   model_dqn/id0N_jauh.pt - dari demo_jauh. Butuh id0N_dekat.pt.
@@ -234,9 +236,9 @@ def bobot_awal(agen, jalur, jenis, prof, device):
     lama, baru = ck["n_obs"], L.n_obs(jenis)
     sd = {k: v.clone() for k, v in ck["net"].items()}
     if lama != baru:
-        if not (jenis == "dekat" and lama == L.N_OBS_RS):
+        if not (jenis == "dekat" and lama == 9 and baru > lama):
             raise SystemExit(f"[!] --awal: {jalur} punya {lama} masukan, program {baru}; pemetaan masukannya "
-                             f"tidak dikenal (hanya model dekat {L.N_OBS_RS} masukan -> {baru})")
+                             f"tidak dikenal (hanya model dekat 9 masukan RS -> lebih banyak)")
         w = sd["fc1.weight"]
         sd["fc1.weight"] = torch.cat([w, torch.zeros((w.shape[0], baru - lama), dtype=w.dtype, device=w.device)], 1)
     agen.net.load_state_dict(sd)
