@@ -36,12 +36,15 @@ FASE B - LATIHAN SENDIRI: jaringan merencanakan sendiri (epsilon-greedy di
     model dekat: start di cincin 15-60 cm dari tujuan).
 
 EVALUASI (tiap --eval-setiap langkah gradien) pada set VALIDASI - 10% episode
-latih yang disisihkan, BUKAN set uji (python -m drl.evaluasi). Perencana mundur.
+latih yang disisihkan, BUKAN set uji (python -m drl.evaluasi).
     dekat   tiba (<= 1 cm & 2 deg), rasio biaya vs demo, galat pose akhir,
-            titik balik maju-mundur
+            titik balik maju-mundur. Pencarian urutan Q.
     jauh    rute GABUNGAN jauh + dekat: tiba, gagal jauh / dekat, rasio biaya
-            vs demo A* + RS seluruh rute, titik balik
+            vs demo A* + RS seluruh rute, titik balik. Metode pencarian
+            --metode-validasi, bawaan = metode operasional (gabungan).
     skor    tiba - 10 x (p90 rasio - 1), dua-duanya
+Kunci riwayat "tiba_mundur" / "rasio_p90_mundur" tetap bernama begitu (riwayat
+lama), isinya hasil metode validasi.
 
 KELUARAN model_dqn/id0N_<jenis>/: ckpt_<langkah>.pt tiap evaluasi, riwayat.json;
 model_dqn/id0N_<jenis>.pt = checkpoint SKOR TERBAIK, id0N_<jenis>_akhir.pt = terakhir.
@@ -252,11 +255,14 @@ class Evaluator:
     """Evaluasi pada himpunan episode yang diberikan (validasi saat latih).
 
     jenis 'dekat': pendaratan model dekat sendirian dari pose awal episode dekat.
-    jenis 'jauh': rute GABUNGAN - model jauh (yang dinilai) + net_dekat.
+    jenis 'jauh': rute GABUNGAN - model jauh (yang dinilai) + net_dekat,
+    pencarian `metode` (rencanakan_dua).
     """
 
-    def __init__(self, d, neg, pabrik, episode, n_negatif, jenis, net_dekat=None, anggaran=600):
+    def __init__(self, d, neg, pabrik, episode, n_negatif, jenis, net_dekat=None, anggaran=600,
+                 metode=METODE_BAWAAN):
         self.pabrik = pabrik
+        self.metode = metode
         self.anggaran = anggaran
         self.jenis_model = jenis
         self.net_dekat = net_dekat
@@ -343,7 +349,7 @@ class Evaluator:
             return {"sk": sk, "sukses": True, "rasio": env.biaya / sk.biaya_astar if sk.biaya_astar else None,
                     **mutu_jalur(env.jalur(), sk.tujuan, env.radius_serah, cm)}
         ej, ed = self._lingkungan(sk, "jauh"), self._lingkungan(sk, "dekat")
-        r = rencanakan_dua(net, self.net_dekat, ej, ed, sk.awal, sk.tujuan, om, metode="mundur")
+        r = rencanakan_dua(net, self.net_dekat, ej, ed, sk.awal, sk.tujuan, om, metode=self.metode)
         if not r["sukses"] or not r["jalur"]:
             return {"sk": sk, "sukses": False, "fase": r["fase"]}
         acuan = sk.biaya_astar_total or None
@@ -464,7 +470,7 @@ def latih_model(rid, jenis, args, device):
         print(f"[i] ID {rid:02d} {jenis}: bobot awal dari {sumber} (langkah {langkah}, {lama} masukan"
               + (f"; {baru - lama} masukan baru berbobot nol)" if baru != lama else ")"))
 
-    evaluator = Evaluator(d, neg, pabrik, val_ep, args.n_negatif, jenis, net_dekat)
+    evaluator = Evaluator(d, neg, pabrik, val_ep, args.n_negatif, jenis, net_dekat, metode=args.metode_validasi)
     probe_idx = pilih_probe(d, val_ep)
     das = Dasbor(prof, pabrik, [RO.dari_demo(d, e) for e in probe_idx],
                  judul=f"DQfD {jenis} ID {rid:02d}", fps=args.fps, tampil=args.tampil)
@@ -640,6 +646,13 @@ def main():
     ap.add_argument("--nilai-akhir", default="pendaratan", choices=["pendaratan", "v"],
                     help="model jauh: imbalan di pose serah = pendaratan sungguhan model dekat "
                          "(bawaan) atau perkiraan V model dekat (cara lama)")
+    # 2026-10-23: dengan validasi mundur, model jauh ID 01 yang dilatih lanjut tidak
+    # pernah mengalahkan langkah 0 (skor 85,6), padahal di mode gabungan semua
+    # checkpoint-nya lebih baik (langkah 10000: tiba 99,1 -> 99,4%, biaya p90 1,37
+    # -> 1,17x, waktu p90 175 -> 115 ms, 345 rute validasi). Model dipilih dengan
+    # metode yang dipakai saat operasi.
+    ap.add_argument("--metode-validasi", default=METODE_BAWAAN, choices=["mundur", "terbaik", "gabungan"],
+                    help="pencarian rute gabungan saat validasi model jauh (bawaan = metode operasional)")
     ap.add_argument("--metode-pendaratan", default=METODE_BAWAAN, choices=["mundur", "terbaik", "gabungan"],
                     help="pencarian model dekat untuk --nilai-akhir pendaratan (bawaan = pengujian)")
     ap.add_argument("--batas-pendaratan", type=float, default=BATAS_DEKAT_S,

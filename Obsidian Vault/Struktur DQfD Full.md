@@ -396,12 +396,37 @@ Model dekat v6 dilatih penuh (`latih --model dekat`, terbaik di langkah 5000 unt
 
 **Negatif** (150 pasangan tanpa jalur): menyerah 98,7 / 96,7%; yang ditemukan semuanya jalur sah.
 
-**Sisa masalah ada di model jauh.** Ia mencoba mendarat 10–13 kali per rute (ver-1-3: < 2), karena dilatih bersama model dekat ver-1-3 yang bisa bermanuver di tempat sempit, sehingga ia menyerahkan di pose yang semua kata RS-nya menabrak. Langkah berikutnya: latih lanjut model jauh dari bobot ver-1-3 dengan pendaratan model dekat v6 (bagian 14).
+**Sisa masalah ada di model jauh.** Ia mencoba mendarat 10–13 kali per rute (ver-1-3: < 2), karena dilatih bersama model dekat ver-1-3 yang bisa bermanuver di tempat sempit, sehingga ia menyerahkan di pose yang semua kata RS-nya menabrak. Langkah berikutnya: latih lanjut model jauh dari bobot ver-1-3 dengan pendaratan model dekat v6 (13.2).
+
+### 13.2 Model jauh dilatih lanjut dengan pendaratan model dekat v6 (2026-10-23)
+
+`latih --model jauh --awal model_dqn/arsip_v5_jauh --pra 2000 --mandiri 50000` (27.000 langkah gradien, **±6 menit per robot**; dulu 3–4 jam, karena satu pendaratan kini < 1 ms). Model jauh ver-1-3 diarsipkan di `model_dqn/arsip_v5_jauh/`, evaluasi v6 dasar di `model_dqn/arsip_v6_dasar/`.
+
+**Pemilihan checkpoint.** Skor validasi `latih` memakai mode **mundur** dan hanya tiba + biaya p90. Untuk ID 01 skornya tidak pernah melewati langkah 0 (85,6), jadi model tersimpannya bobot ver-1-3 itu sendiri. Diukur ulang di **rute validasi** (345 / 337 rute, bukan set uji) dengan mode **gabungan** (mode operasi), semua checkpoint ID 01 lebih baik dari langkah 0. Dipilih:
+- ID 01 **langkah 10000**: tiba 99,4%, p90 115 ms, biaya p90 1,17×, total waktu terendah (langkah 0: 99,1%, 175 ms, 1,37×).
+- ID 02 **langkah 25000** (pilihan `latih`): tiba 99,7%, biaya p90 1,17×, 5,7 pendaratan per rute (langkah 0: 18,2).
+
+**Set uji, rute penuh, metode gabungan** (ID 01: 379 rute, ID 02: 358 rute):
+
+| | v6 dasar ID 01 / 02 | **jauh baru ID 01 / 02** | Hybrid A\* + RS ID 01 / 02 |
+|---|---|---|---|
+| Tiba | 98,7 / 99,2% | **99,7 / 99,7%** | 99,5 / 100% |
+| Waktu median (ms) | 21 / 28 | **22 / 20** | 17 / 15 |
+| Waktu p90 (ms) | 189 / 365 | **111 / 129** | 150 / 138 |
+| Biaya vs A\*, median / p90 | 1,01 / 1,29–1,31× | **1,00 / 1,19 – 1,17×** | 1 |
+| Ganti arah, rata-rata | 1,80 / 1,96 | **1,66 / 1,67** | 1,43 / 1,43 |
+| Gagal jauh / dekat | 0,5 / 0,8% – 0 / 0,8% | **0,3 / 0 – 0 / 0,3%** | – |
+| Percobaan pendaratan, rata-rata | 10,3 / 13,2 | **5,8 / 7,7** | – |
+| Galat akhir | 0 | 0 | 0 |
+
+- **Waktu p90 kini lebih cepat dari Hybrid A\*** untuk kedua robot, dengan tingkat tiba setara. Median masih ±5 ms di atas A\*.
+- Mode mundur ID 01 sedikit turun (tiba 98,7 → 97,6%), karena checkpoint dipilih untuk mode gabungan.
+- Catatan untuk berikutnya: validasi `latih` model jauh sebaiknya memakai mode gabungan supaya pemilihan model otomatis sesuai mode operasi.
 
 ## 14. Keputusan terbuka
 
 > [!warning] Disetel setelah latih penuh
-> - **Latih ulang model jauh** dengan pendaratan model dekat versi 6, supaya ia belajar menyerahkan di pose yang kata RS-nya bebas. Bisa mengurangi kebutuhan jatah serah yang besar. Rencana: lanjut dari bobot ver-1-3 (`--awal model_dqn/arsip_v5_jauh --pra 2000 --mandiri 50000`), pembanding `model_dqn/arsip_v6_dasar/`.
+> - ~~**Latih ulang model jauh** dengan pendaratan model dekat versi 6~~: **selesai** 2026-10-23, lihat 13.2. Sisa: validasi `latih` model jauh memakai mode mundur, padahal operasi memakai gabungan.
 > - **`MAKS_SERAH`** (1000): cukup, atau dibatasi waktu saja.
 > - ~~**Masukan rintangan untuk model dekat**~~: diuji 2026-10-22 (v7), **ditolak**, lihat 14.1. Model dekat tetap 9 masukan.
 > - **`RADIUS_SERAH_PAKSA_CM`** (25 cm): tetap, atau `None` supaya saringan Dijkstra berlaku mutlak.
