@@ -1,4 +1,4 @@
-Struktur **DQfD dua model per robot**, versi aksi 6, branch `ver-1-4`, 2026-10-22. Konsep dasar DQfD ada di [[Deep Reinforcement Learning]].
+Struktur **DQfD dua model per robot**, versi aksi 6, branch `ver-1-4`, 2026-10-23. Konsep dasar DQfD ada di [[Deep Reinforcement Learning]].
 
 > [!note] Inti
 > - **Hybrid A\* + Reeds-Shepp adalah demonstrator saat latihan.**
@@ -93,7 +93,7 @@ Model jauh berhenti, lalu model dekat mengambil alih, bila **kedua** syarat terp
 | Saringan cepat | peta Dijkstra tidak memaksa memutar (biaya Dijkstra = jarak oktil grid), atau sudah < 25 cm (`RADIUS_SERAH_PAKSA_CM`) | sama | sama |
 | Ada kata bebas? | tembakan RS demonstrator bebas (syarat yang sama dengan saat Hybrid A\* beralih ke RS) | model dekat mencoba mendarat (`buat_cek_pendaratan`) | model dekat mencoba mendarat |
 
-Bila belum ada kata yang bebas, model jauh **berjalan lanjut** satu primitif lalu mencoba lagi, paling banyak **1000** percobaan per rute (`MAKS_SERAH`). Satu percobaan kurang dari 1 ms, jadi yang membatasi sebenarnya batas waktu perencanaan (2 s). Ini setara dengan Hybrid A\* yang mencoba RS di setiap simpul di dalam 60 cm.
+Bila belum ada kata yang bebas, model jauh **berjalan lanjut** satu primitif lalu mencoba lagi, paling banyak **1000** percobaan per rute (`MAKS_SERAH`). Satu percobaan kurang dari 1 ms, jadi yang membatasi sebenarnya batas waktu perencanaan (2 s). Ini setara dengan Hybrid A\* yang mencoba RS di setiap simpul di dalam 60 cm. Model jauh saat ini mencoba rata-rata 5,8 / 7,7 kali per rute (ID 01 / ID 02).
 
 Di dataset, model jauh berhenti **tepat** di titik demonstrator beralih ke Reeds-Shepp. Jadi demo jauh = primitif Hybrid A\*, dan demo dekat = satu kata, yaitu ekor RS Hybrid A\*.
 
@@ -140,7 +140,9 @@ Rumus Reeds-Shepp di perencana (`forklift_planner._rs_words`) menghitung kurva d
 4. Bebas → dipakai, robot tiba tepat di tujuan. Menabrak → kata berikutnya.
 5. Semua menabrak → pendaratan dari pose ini gagal, dan model jauh berjalan lanjut (bagian 3).
 
-**Demonstrator** (`aksi_demonstrator`) = persis `_best_free_rs` Hybrid A\*: kandidat diurutkan menurut biaya rumus, paling banyak 6 dicek tabrakan, berhenti begitu kandidat berikutnya tidak lebih murah dari yang sudah bebas, lalu ambil yang bebas termurah.
+**Demonstrator** (`aksi_demonstrator`) = persis `_best_free_rs` Hybrid A\*: kandidat diurutkan menurut biaya rumus, paling banyak 6 dicek tabrakan, berhenti begitu kandidat berikutnya tidak lebih murah dari yang sudah bebas, lalu ambil yang bebas termurah. Model dekat mencoba **semua** kata sah, jadi kadang menemukan kurva bebas di pose yang ditolak demonstrator.
+
+Contoh langkah demi langkah, dibandingkan dengan rumus Reeds-Shepp: artifact "Pendaratan Kata demi Kata".
 
 ## 5. Demo dan uji penerimaan
 
@@ -158,7 +160,7 @@ Demo yang tidak bisa dipakai dibuang dengan kode alasan (`adaptor_demo.TOLAK`):
 | `tanpa_rs` | Hybrid A\* tiba tanpa ekor RS, sehingga tidak ada bagian model dekat |
 | `jauh_margin` | bagian A\* menyentuh margin (peta dengan robot lain sebagai rintangan) |
 
-Uji penerimaan (`python -m drl.adaptor_demo --uji`, 15 rute per robot per peta, 2026-10-22):
+Uji penerimaan (`python -m drl.adaptor_demo --uji`, 15 rute per robot per peta):
 
 | | Kalibrasi | Rumah | Rumah2 |
 |---|---|---|---|
@@ -168,6 +170,8 @@ Uji penerimaan (`python -m drl.adaptor_demo --uji`, 15 rute per robot per peta, 
 | Kata dekat vs ekor RS A\* | identik | identik | identik |
 | Galat akhir, simpangan, selisih biaya | 0 / 0 / +0,0% | 0 / 0 / +0,0% | 0 / 0 / +0,0% |
 | Segmen per kata, rata-rata | 4,1 / 3,8 | 3,7 / 3,8 | 3,8 / 4,1 |
+
+Pemeriksaan lain: 44 kata berindeks tetap identik dengan `reeds_shepp_paths` (3.000/3.000 pose acak); demonstrator identik dengan `_analytic` Hybrid A\* (437/437 rute uji, kurva dan biaya).
 
 ## 6. MDP (`lingkungan.py`)
 
@@ -293,22 +297,24 @@ Episode model dekat hanya satu aksi, jadi TD 1 langkah dan n langkah sama: Q dek
 | | Fase A: pra-latih | Fase B: latihan sendiri |
 |---|---|---|
 | Data | Hanya demo (episode bukan uji) | Demo + hasil rollout jaringan sendiri |
-| Panjang | 20.000 langkah gradien | 150.000 langkah lingkungan, 0,5 langkah gradien per langkah lingkungan |
+| Panjang (bawaan) | 20.000 langkah gradien | 150.000 langkah lingkungan, 0,5 langkah gradien per langkah lingkungan |
 | Learning rate | 1e-4 | 5e-5 |
 | Eksplorasi | – | ε 0,1 → 0,01 di antara aksi sah, 16 rollout paralel |
 | Skenario | – | 70% dari demo latih, 30% acak baru (dekat: start 15–60 cm dari tujuan); 50% dari peta tersulit |
 
-Lain-lain: batch 256, sinkron jaringan target setiap 2.000 langkah, evaluasi setiap 5.000 langkah, GPU `--perangkat cuda` (NVIDIA GeForce RTX 5050 Laptop, CUDA 12.8). Peta tersulit = jenis peta asli dengan waktu Hybrid A\* rata-rata terbesar (Rumah).
+Lain-lain: batch 256, sinkron jaringan target setiap 2.000 langkah, evaluasi setiap 5.000 langkah, GPU `--perangkat cuda` (NVIDIA GeForce RTX 5050 Laptop, CUDA 12.8). Peta tersulit = jenis peta asli dengan waktu Hybrid A\* rata-rata terbesar (Rumah). `--awal <folder>` memulai latihan dari bobot model berjenis sama.
+
+Karena satu pendaratan model dekat kurang dari 1 ms, latihan model jauh cepat: 27.000 langkah gradien (`--pra 2000 --mandiri 50000`) selesai ±6 menit per robot.
 
 ### 10.3 Validasi dan pemilihan model
 
 - Set validasi: setiap episode latih ke-10 (bukan set uji). 40 rute per jenis peta, 60 untuk peta tersulit.
-- **Skor** = % tiba − 10 × (p90 rasio biaya − 1). Model terbaik disimpan sebagai `id0N_<jenis>.pt`, yang terakhir sebagai `id0N_<jenis>_akhir.pt`.
+- **Skor** = % tiba − 10 × (p90 rasio biaya − 1). Model terbaik disimpan sebagai `id0N_<jenis>.pt`, yang terakhir sebagai `id0N_<jenis>_akhir.pt`, dan setiap evaluasi sebagai `id0N_<jenis>/ckpt_<langkah>.pt`.
 
 | Model | Yang dinilai | Metrik di baris evaluasi |
 |---|---|---|
 | Dekat | pendaratan dari pose awal episode dekat | `tiba greedy` = kata pertama menurut Q sudah bebas; `mundur` = tiba dengan mencoba berurutan; rasio biaya vs demo |
-| Jauh | **rute gabungan** jauh + dekat | `TIBA gabungan`, `gagal jauh/dekat`, rasio vs demo A\* + RS, `balik` |
+| Jauh | **rute gabungan** jauh + dekat, dengan metode operasional (`--metode-validasi`, bawaan gabungan) | `TIBA gabungan`, `gagal jauh/dekat`, rasio vs demo A\* + RS, `balik` |
 
 - `gagal_jauh`: tidak pernah mencapai pose yang lolos saringan berhenti.
 - `gagal_dekat`: ada pose seperti itu, tetapi dari semuanya tidak ada kata RS yang bebas.
@@ -317,15 +323,23 @@ Lain-lain: batch 256, sinkron jaringan target setiap 2.000 langkah, evaluasi set
 
 | Berkas (`drl/data/`) | Isi | Dibuat oleh |
 |---|---|---|
-| `demo_jauh_id0N.npz` | Episode model jauh (primitif A\*), plus `ep_obs_serah` (9) / `ep_mask_serah` (88) model dekat di pose serah | `drl.skenario`; kolom serah dihitung ulang dengan `drl.hitung_ulang_obs` |
+| `demo_jauh_id0N.npz` | Episode model jauh (primitif A\*), plus `ep_obs_serah` (9) / `ep_mask_serah` (88) model dekat di pose serah | `drl.skenario`; kolom serah dapat dihitung ulang dengan `drl.hitung_ulang_obs` |
 | `demo_dekat_id0N.npz` | Episode model dekat: satu kata RS dari titik serah demo utama; `ep_awal` = pose serah, `ep_d0` / `ep_k0` | `drl.skenario` atau `drl.demo_rs` |
 | `demo_dekat_tambahan_id0N.npz` | sama, dari skenario yang start-nya 15–60 cm dari tujuan | `drl.skenario --hanya-dekat` atau `drl.demo_rs` |
 | `demo_dekat_dagger_id0N.npz` | sama, dari pose serah yang dicapai model jauh terlatih (DAgger) | `drl.dagger` atau `drl.demo_rs` |
 | `negatif_id0N.npz` | Skenario yang gagal di Hybrid A\*: DQfD harus ikut buntu | `drl.skenario` |
 
-**`drl.demo_rs`** membangun dataset model dekat dari **metadata** dataset model dekat yang sudah ada (pose serah, arah & kemudi berjalan, tujuan, peta, margin, robot lain), tanpa menjalankan Hybrid A\* lagi: satu aksi demonstrator per episode. Uji ID 01 (2026-10-22): 13.912 dari 13.912 episode terpakai, sekitar 4 s per berkas, 79 dari 88 kata pernah dipilih demonstrator. Lolos putar ulang (`skenario --periksa`).
+**`drl.demo_rs`** membangun dataset model dekat dari **metadata** dataset model dekat lain (pose serah, arah & kemudi berjalan, tujuan, peta, margin, robot lain), tanpa menjalankan Hybrid A\* lagi: satu aksi demonstrator per episode. Hasilnya lolos putar ulang (`skenario --periksa`).
 
-| | Nilai |
+| | ID 01 | ID 02 |
+|---|---|---|
+| `demo_jauh` | 3.824 episode (379 uji), 43.506 transisi | 3.728 episode (358 uji), 42.023 transisi |
+| `demo_dekat` | 4.856 episode (457 uji) | 4.848 episode (463 uji) |
+| `demo_dekat_tambahan` | 4.933 episode (449 uji) | 4.938 episode (450 uji) |
+| `demo_dekat_dagger` | 4.123 episode | 4.220 episode |
+| Kata yang pernah dipilih demonstrator | 76–79 dari 88 | 76–79 dari 88 |
+
+| Pembangkitan | Nilai |
 |---|---|
 | Demo A\* per robot | 5.000 (`--n`) |
 | Peta | Semua di `Camera/peta_constraint/` dibagi rata + sintetis 30% |
@@ -349,115 +363,52 @@ Lain-lain: batch 256, sinkron jaringan target setiap 2.000 langkah, evaluasi set
 
 Di layar `navigasi.py`, bagian model jauh berwarna hijau/oranye, bagian model dekat biru muda/ungu, dan titik pergantiannya ditandai **"serah"**.
 
-**Kompatibilitas model.** Checkpoint mencatat `max_steer_deg`, `r_plan_cm`, `versi_aksi`, `jenis`, `n_aksi`, dan `n_obs`. Versi diperiksa per jenis model (`lingkungan.VERSI_MODEL`): model jauh cocok mulai versi 4 (masukan dan keluarannya tidak berubah), model dekat harus versi 6. Model lain ditolak dengan pesan yang menyuruh latih ulang.
+**Kompatibilitas model.** Checkpoint mencatat `max_steer_deg`, `r_plan_cm`, `versi_aksi`, `jenis`, `n_aksi`, dan `n_obs`. Checkpoint yang tidak cocok dengan profil kemudi atau ruang aksi program (`lingkungan.VERSI_MODEL`) ditolak dengan pesan yang menyuruh latih ulang.
 
-## 13. Uji dan hasil awal (2026-10-22)
+## 13. Model saat ini dan hasilnya (2026-10-23)
 
-| Uji | Hasil |
-|---|---|
-| 44 kata berindeks tetap vs `reeds_shepp_paths` | himpunan kurva **identik**, 3.000/3.000 pose acak |
-| Demonstrator vs `_analytic` Hybrid A\* (rute uji, termasuk robot lain) | kurva dan biaya **identik**, 437/437 rute; 109 rute keduanya tanpa kurva bebas |
-| Latih model dekat ID 01, 3.000 langkah gradien (36 s) | validasi: kata pertama bebas 80%, tiba (urutan Q) 100%, biaya p90 1,00× demo, galat 0 |
+| | ID 01 | ID 02 |
+|---|---|---|
+| Model dekat | langkah 5.000 | langkah 5.000 |
+| Model jauh | langkah 10.000 | langkah 25.000 |
+| Profil kemudi | 55°, R rencana 25,7 cm | 55°, R rencana 25,7 cm |
 
-**Rencana lengkap**, model dekat latihan singkat di atas + model jauh dari latihan sebelumnya, 207 rute uji ID 01, metode gabungan:
+Checkpoint model jauh dipilih dengan metode gabungan di rute validasi (bukan set uji). Untuk ID 01, langkah 10.000 memberi tiba 99,4%, biaya p90 1,17×, dan waktu p90 115 ms di 345 rute validasi.
 
-| | `MAKS_SERAH` 12 | **`MAKS_SERAH` 120** | Hybrid A\* + RS |
+**Set uji, rute penuh** (`drl.evaluasi`, ID 01: 379 rute, ID 02: 358 rute):
+
+| | **Gabungan (bawaan)** ID 01 / 02 | Mundur ID 01 / 02 | Hybrid A\* + RS ID 01 / 02 |
 |---|---|---|---|
-| Tiba | 94,7% | **98,6%** | 99,8% (set uji penuh) |
-| Waktu median / p90 | 4,8 / 72 ms | **4,1 / 76 ms** | 3,4 / 63 ms (set uji penuh) |
-| Galat akhir | 0 | 0 | 0 |
-| Ganti arah, rata-rata | 1,46 | – | 1,35 |
-| Biaya vs A\* + RS, median / p90 | 1,00 / 1,16× | – | 1 |
+| Tiba | **99,7 / 99,7%** | 97,6 / 98,6% | 99,5 / 100% |
+| Waktu median (ms) | 21,6 / 20,3 | 17,7 / 16,4 | 16,8 / 14,6 |
+| Waktu p90 (ms) | **111 / 129** | 61 / 62 | 150 / 138 |
+| Biaya vs A\*, median / p90 | 1,00 / 1,19 · 1,00 / 1,17× | 1,08 / 2,35 · 1,11 / 2,29× | 1 |
+| Ganti arah, rata-rata | 1,66 / 1,67 | 3,68 / 3,53 | 1,43 / 1,43 |
+| Gagal jauh / dekat | 0,3 / 0 · 0 / 0,3% | 0,8 / 1,6 · 0 / 1,4% | – |
+| Percobaan pendaratan per rute | 5,8 / 7,7 | 7,9 / 6,6 | – |
+| Galat akhir rencana | 0 | 0 | 0 |
 
-- Dengan jatah 12, kegagalannya semua gagal dekat di rute penuh: model jauh menyerahkan di pose yang semua kata RS-nya terhalang. Jatah dinaikkan karena satu percobaan kurang dari 1 ms. Jatah 1000 memperbaiki 10 dari 11 rute yang gagal pada jatah 12.
-- Model jauh di uji ini belum dilatih bersama model dekat versi 6.
+- **Gabungan**: tiba setara Hybrid A\*, waktu p90 lebih cepat dari Hybrid A\*, median ±5 ms di atasnya.
+- **Mundur**: paling cepat (p90 ±60 ms), tetapi jalurnya lebih mahal dan lebih sering ganti arah.
 
-### 13.1 Evaluasi penuh (2026-10-23): model dekat v6 + model jauh ver-1-3
+**Hanya bagian dekat** (449 / 450 rute, start ≤ 60 cm), semua metode: tiba **100%**, waktu median 2,7 / 2,8 ms (Hybrid A\* + RS 2,8 / 2,9 ms), biaya p90 **1,00×**, galat 0. Bagian dekat setara dengan Reeds-Shepp, baik jalurnya maupun waktunya.
 
-Model dekat v6 dilatih penuh (`latih --model dekat`, terbaik di langkah 5000 untuk kedua robot). Model jauh tetap ver-1-3 (ID 01 langkah 75000, ID 02 langkah 45000). Pembanding: evaluasi ver-1-3 (model dekat 47 masukan / 30 aksi, model jauh yang sama), diarsipkan di `model_dqn/arsip_v5_dekat_sinar/`.
+**Negatif** (150 skenario yang Hybrid A\* nyatakan tanpa jalur): menyerah 99,3 / 98,0%; jalur yang ditemukan (1 / 3) semuanya sah.
 
-**Rute penuh, metode gabungan (bawaan)**, ID 01: 379 rute, ID 02: 358 rute:
+**Navigasi simulasi** (`drl.uji_pose_akhir`, 3 skenario × 2 robot, pure pursuit + jeda kemudi): 12/12 tiba, tidak ada yang masuk zona, galat ujung rencana 0. Galat pose akhir robot berasal dari pelacak, dengan besar yang sama untuk Hybrid A\* + RS.
 
-| | ver-1-3 ID 01 / 02 | **v6 ID 01 / 02** | Hybrid A\* + RS ID 01 / 02 |
-|---|---|---|---|
-| Tiba | 97,6 / 96,1% | **98,7 / 99,2%** | 99,5 / 100% |
-| Waktu median (ms) | 101 / 343 | **21 / 28** | 17 / 16 |
-| Waktu p90 (ms) | 1.732 / 2.366 | **189 / 365** | 147 / 162 |
-| Gagal dekat | 1,85 / 3,91% | **0,79 / 0,84%** | – |
-| Biaya vs A\*, median | 1,06 / 1,04× | **1,01 / 1,01×** | 1 |
-| Biaya vs A\*, p90 | 1,81 / 1,55× | **1,29 / 1,31×** | 1 |
-| Ganti arah, rata-rata | 3,85 / 2,88 | **1,80 / 1,96** | 1,43 / 1,43 |
-| Galat akhir | ±0,7 cm / 0,9° | **0 / 0** | 0 / 0 |
-| Percobaan pendaratan, rata-rata | 1,7 / 1,9 | **10,3 / 13,2** | – |
+**Rincian waktu** (tiga peta, rata-rata per rute): sinar model jauh 50–54%, primitif 20–23%, jaringan 9%, pendaratan model dekat 5–8%.
 
-**Mode mundur, rute penuh**: tiba 98,7 / 97,5%, waktu median 16,7 / 19,5 ms, **p90 52,8 / 80,5 ms** (lebih cepat dari Hybrid A\*), tetapi biaya p90 2,35 / 2,43× dan ganti arah rata-rata 3,5 / 3,8.
-
-**Hanya bagian dekat** (449 / 450 rute), semua mode: tiba **100%**, waktu median 2,6 / 2,7 ms (A\* + RS 2,7 / 2,8 ms), biaya p90 **1,00×**, galat 0. Bagian dekat v6 setara dengan Reeds-Shepp, baik jalurnya maupun waktunya.
-
-**Negatif** (150 pasangan tanpa jalur): menyerah 98,7 / 96,7%; yang ditemukan semuanya jalur sah.
-
-**Sisa masalah ada di model jauh.** Ia mencoba mendarat 10–13 kali per rute (ver-1-3: < 2), karena dilatih bersama model dekat ver-1-3 yang bisa bermanuver di tempat sempit, sehingga ia menyerahkan di pose yang semua kata RS-nya menabrak. Langkah berikutnya: latih lanjut model jauh dari bobot ver-1-3 dengan pendaratan model dekat v6 (13.2).
-
-### 13.2 Model jauh dilatih lanjut dengan pendaratan model dekat v6 (2026-10-23)
-
-`latih --model jauh --awal model_dqn/arsip_v5_jauh --pra 2000 --mandiri 50000` (27.000 langkah gradien, **±6 menit per robot**; dulu 3–4 jam, karena satu pendaratan kini < 1 ms). Model jauh ver-1-3 diarsipkan di `model_dqn/arsip_v5_jauh/`, evaluasi v6 dasar di `model_dqn/arsip_v6_dasar/`.
-
-**Pemilihan checkpoint.** Skor validasi `latih` memakai mode **mundur** dan hanya tiba + biaya p90. Untuk ID 01 skornya tidak pernah melewati langkah 0 (85,6), jadi model tersimpannya bobot ver-1-3 itu sendiri. Diukur ulang di **rute validasi** (345 / 337 rute, bukan set uji) dengan mode **gabungan** (mode operasi), semua checkpoint ID 01 lebih baik dari langkah 0. Dipilih:
-- ID 01 **langkah 10000**: tiba 99,4%, p90 115 ms, biaya p90 1,17×, total waktu terendah (langkah 0: 99,1%, 175 ms, 1,37×).
-- ID 02 **langkah 25000** (pilihan `latih`): tiba 99,7%, biaya p90 1,17×, 5,7 pendaratan per rute (langkah 0: 18,2).
-
-**Set uji, rute penuh, metode gabungan** (ID 01: 379 rute, ID 02: 358 rute):
-
-| | v6 dasar ID 01 / 02 | **jauh baru ID 01 / 02** | Hybrid A\* + RS ID 01 / 02 |
-|---|---|---|---|
-| Tiba | 98,7 / 99,2% | **99,7 / 99,7%** | 99,5 / 100% |
-| Waktu median (ms) | 21 / 28 | **22 / 20** | 17 / 15 |
-| Waktu p90 (ms) | 189 / 365 | **111 / 129** | 150 / 138 |
-| Biaya vs A\*, median / p90 | 1,01 / 1,29–1,31× | **1,00 / 1,19 – 1,17×** | 1 |
-| Ganti arah, rata-rata | 1,80 / 1,96 | **1,66 / 1,67** | 1,43 / 1,43 |
-| Gagal jauh / dekat | 0,5 / 0,8% – 0 / 0,8% | **0,3 / 0 – 0 / 0,3%** | – |
-| Percobaan pendaratan, rata-rata | 10,3 / 13,2 | **5,8 / 7,7** | – |
-| Galat akhir | 0 | 0 | 0 |
-
-- **Waktu p90 kini lebih cepat dari Hybrid A\*** untuk kedua robot, dengan tingkat tiba setara. Median masih ±5 ms di atas A\*.
-- Mode mundur ID 01 sedikit turun (tiba 98,7 → 97,6%), karena checkpoint dipilih untuk mode gabungan.
-- Validasi `latih` model jauh kini memakai mode gabungan (`--metode-validasi`, commit `75fa5d3`).
-- Perbandingan dengan branch RS-optimize, rincian waktu per bagian, dan navigasi simulasi (pose akhir robot): [[Perbandingan Hybrid A-star RS vs DQfD]] bagian 10. Ringkasnya: pendaratan 4–7× lebih murah dari RS-optimize; **sinar model jauh kini 50–54% waktu DQfD**, jadi itulah target optimasi berikutnya.
+Perbandingan dengan branch RS-optimize, tabel navigasi simulasi lengkap, dan rincian waktu per bagian: [[Perbandingan Hybrid A-star RS vs DQfD]].
 
 ## 14. Keputusan terbuka
 
-> [!warning] Disetel setelah latih penuh
-> - ~~**Latih ulang model jauh** dengan pendaratan model dekat versi 6~~: **selesai** 2026-10-23, lihat 13.2. Sisa: validasi `latih` model jauh memakai mode mundur, padahal operasi memakai gabungan.
+> [!warning] Belum diputuskan
+> - **Optimasi sinar.** 32 sinar model jauh memakan separuh waktu DQfD.
+> - **Metode operasional.** Gabungan (mutu jalur setara A\*) atau mundur (p90 ±60 ms, jalur lebih mahal).
 > - **`MAKS_SERAH`** (1000): cukup, atau dibatasi waktu saja.
-> - ~~**Masukan rintangan untuk model dekat**~~: diuji 2026-10-22 (v7), **ditolak**, lihat 14.1. Model dekat tetap 9 masukan.
 > - **`RADIUS_SERAH_PAKSA_CM`** (25 cm): tetap, atau `None` supaya saringan Dijkstra berlaku mutlak.
-
-### 14.1 Diuji dan ditolak: model dekat v7 (sadar rintangan + lewati pose buntu)
-
-Pertanyaannya: bisakah model dekat menebak kata RS yang bebas dari posisi robot terhadap rintangan, supaya kata tidak perlu dicek dari awal?
-
-**Rancangan v7** (versi aksi 7, hanya di worktree uji, tidak dipindah ke branch):
-- **Masukan 27** = 9 masukan RS + **18 jarak bebas gerak dasar**. Dari pose awal, titik sambung slot 0, dan titik sambung slot 1, diukur seberapa jauh badan bebas untuk lurus / kiri penuh / kanan penuh, maju dan mundur. Tiap gerak dicek di 16 titik sepanjang π × R (≈ 80 cm), nilainya 0..1. Setiap kata RS dimulai dengan salah satu gerak itu dari pose awal dan berakhir dengan salah satunya ke titik sambung. Fiturnya identik dengan cek `pose_margin` biasa di 3.806/3.806 pose; biayanya 44 µs per pose, 117 µs per observasi.
-- **Keluaran sama**, 88 kata, sehingga dataset cukup dihitung ulang observasinya (`hitung_ulang_obs`).
-- **Lewati pose buntu**: pose yang semua kata sahnya menabrak dikumpulkan dari percobaan pendaratan (`dagger`), satu episode per kata dengan imbalan −biaya buntu, dimuat sebagai data tetap bukan-demo. Saat dipakai, pendaratan dilewati tanpa cek kata bila −max Q × skala > 0,5 × biaya buntu.
-
-**Hasil**, 379 rute uji ID 01, model jauh ver-1-3 yang sama, semua model dekat latihan singkat 3.000 langkah:
-
-| | v6 (9 masukan) | v7 (27 masukan) | v7 + lewati buntu |
-|---|---|---|---|
-| Tiba | 98,7% | 98,7% | 97,1% |
-| Percobaan pendaratan (berhasil / gagal) | 3.909 (374 / 3.535) | sama | 14.868 (368 / 14.500) |
-| Kata pertama bebas (pendaratan berhasil) | 79,4% | **82,6%** | 82,6% |
-| Kata dicek per pendaratan berhasil | 1,53 | 1,37 | 1,39 |
-| Waktu pendaratan median, berhasil / gagal | **0,27 / 0,54 ms** | 0,49 / 0,59 ms | 0,25 / 0,25 ms |
-| Waktu per rute p90 | 179 ms | 173 ms | **451 ms** |
-| Total waktu pendaratan | **2,1 s** (4,3%) | 2,4 s (5,4%) | 4,1 s |
-
-- **v7 memilih kata sedikit lebih tepat, tapi tidak lebih cepat.** Urutan yang lebih baik hanya menghemat ~0,16 kata × 374 pendaratan (~20 ms total), lebih kecil dari biaya fitur rintangan.
-- **90% percobaan pendaratan gagal** (semua kata menabrak), dan di situlah waktunya habis. Model v7 yang dilatih dengan pose buntu memang belajar mengenalinya: 82% pose buntu validasi terdeteksi. Tapi 10% pose demo yang sebenarnya bisa mendarat ikut dilewati, sehingga model jauh berjalan lebih jauh: percobaan pendaratan ×3,8 dan waktu p90 ×2,5.
-- **Batas atasnya pun kecil.** Cek ~10 kata RS ≈ 0,5 ms; fitur + satu forward jaringan ≈ 0,25 ms. Dengan tebakan sempurna, penghematannya ≈ 1 s dari ~46 s (~2%).
-- **Kesimpulan:** cek tabrakan kata RS sudah terlalu murah untuk digantikan jaringan. Yang mahal adalah banyaknya pendaratan sia-sia, dan itu ditentukan oleh **di mana model jauh menyerahkan**. Perbaikannya ada di model jauh (latih ulang dengan pendaratan model dekat v6), bukan di model dekat.
-- Catatan untuk `dagger`: `aksi_demonstrator` (= `_best_free_rs`) hanya mengecek 6 kata termurah. 10 dari 1.115 pose yang "terhalang" menurut demonstrator ternyata punya kata bebas yang lebih mahal. Pose buntu yang sebenarnya harus dicek dengan semua kata.
+> - **Uji yang belum dijalankan:** `drl.uji_navigasi` dengan derau pose dan uji robot nyata.
 
 ## 15. Perintah
 
@@ -469,13 +420,14 @@ python -m drl.adaptor_demo --uji                           # demonstrator & pemo
 # dataset: dari awal ...
 python -m drl.skenario --id 1,2 --n 5000                   # demo jauh + dekat + negatif
 python -m drl.skenario --id 1,2 --n 5000 --hanya-dekat     # demo dekat tambahan
-# ... atau dari metadata dataset model dekat yang sudah ada (diarsipkan dulu)
-python -m drl.demo_rs --id 1,2 --sumber drl/data/<arsip> --keluar drl/data
-python -m drl.hitung_ulang_obs --id 1 --masuk drl/data/<arsip>/demo_jauh_id01.npz --keluar drl/data/demo_jauh_id01.npz
+python -m drl.dagger --id 1,2 --n 3000                     # demo dekat dari pose serah model jauh terlatih
+# ... atau model dekat dari metadata dataset model dekat lain
+python -m drl.demo_rs --id 1,2 --sumber drl/data/<folder lain> --keluar drl/data
 python -m drl.skenario --id 1,2 --periksa                  # integritas semua dataset
 
 python -m drl.latih --id 1,2 --model dekat --perangkat cuda   # beberapa menit per robot
 python -m drl.latih --id 1,2 --model jauh --perangkat cuda    # imbalan akhir = pendaratan model dekat
+python -m drl.latih --id 1,2 --model jauh --awal <folder> --pra 2000 --mandiri 50000 --perangkat cuda   # latih lanjut, ±6 menit
 python -m drl.evaluasi --id 1,2                               # nilai di set uji
 python -m drl.uji_pose_akhir --id 1                           # pose akhir robot simulasi vs Hybrid A* + RS
 python navigasi.py --simulasi --id 1 --perencana dqfd-murni
