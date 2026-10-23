@@ -2,6 +2,19 @@
 
 Tanggal: 2026-10-21 · Branch `ver-1-2` · Struktur model: [[Struktur DQfD Full]]
 
+> [!success] Pembaruan 2026-10-23 (ver-1-4): model dekat memilih kata Reeds-Shepp + model jauh dilatih lanjut
+> Model dekat versi 6 mengeluarkan Q untuk 88 kata RS; panjang segmen dari rumus RS, kata dicek tabrakan berurutan menurut Q. Model jauh dilatih lanjut dari ver-1-3 dengan pendaratan model dekat v6. Set uji, rute penuh, metode gabungan:
+>
+> | | ver-1-3 | **ver-1-4** | Hybrid A\* + RS |
+> |---|---|---|---|
+> | Tiba ID 01 / ID 02 | 97,6 / 96,1% | **99,7 / 99,7%** | 99,5 / 100% |
+> | Waktu median | 101 / 343 ms | **22 / 20 ms** | 17 / 15 ms |
+> | Waktu p90 | 1.732 / 2.366 ms | **111 / 129 ms** | 150 / 138 ms |
+> | Biaya p90 | 1,81 / 1,55× | **1,19 / 1,17×** | 1 |
+> | Galat akhir rencana | ±0,7 cm / 0,9° | **0** | 0 |
+>
+> Bagian dekat kini setara Reeds-Shepp (rute dekat saja: tiba 100%, 2,6 ms, biaya 1,00×). Perbandingan dengan branch RS-optimize, rincian waktu per bagian, dan uji navigasi simulasi: **bagian 10**. Angka bagian 1–9 di bawah adalah versi 4 (ver-1-2).
+
 > [!tip] Pembaruan 2026-10-22 (ver-1-3): model dekat sadar rintangan
 > Angka di catatan ini adalah **versi 4** (model dekat 9 masukan). Di ver-1-3, model dekat diberi 32 sinar + 6 ruang manuver (47 masukan) dan dilatih mulai dari bobot v4, sedangkan model jauh tetap v4. Detail: [[Struktur DQfD Full]] bagian 0.3.
 >
@@ -291,3 +304,96 @@ Arah perbaikan model dekat, menurut dampaknya:
 | Bagian 3, 4, porsi waktu di 5.1 | Pengukuran per bagian sekali jalan, 192 rute uji per robot (24 per peta × asal), skrip sementara di luar repo |
 | Bagian 6 | Profil waktu sekali jalan, 96 rute uji per robot (12 per peta × asal), skrip sementara di luar repo |
 | Struktur model, parameter | [[Struktur DQfD Full]] |
+| Bagian 10.1 | `model_dqn/evaluasi_id0N.json` (2026-10-23), pembanding `model_dqn/arsip_v6_dasar/`, `arsip_v5_dekat_sinar/` |
+| Bagian 10.2, 10.3 | RS-optimize: `model_dqn/rincian_komputasi.json` (2026-10-02, `drl/rincian_komputasi.py` di branch RS-optimize). ver-1-4: profil dengan kategori yang sama, semua rute uji Kalibrasi / Rumah2 / Rumah, skrip sementara di luar repo |
+| Bagian 10.4 | `model_dqn/pose_akhir/pose_akhir_id0N.json` (`python -m drl.uji_pose_akhir --id N`), ver-1-3 di `model_dqn/pose_akhir/ver-1-3/` |
+
+---
+
+## 10. ver-1-4 (2026-10-23): vs RS-optimize, rincian waktu, navigasi simulasi
+
+Model yang diuji: model dekat v6 (9 masukan, 88 kata RS, langkah 5000), model jauh dilatih lanjut (ID 01 langkah 10000, ID 02 langkah 25000). Perencana operasional `dqfd-murni` (tanpa cadangan A\*, metode gabungan, batas waktu 2 s). Detail model: [[Struktur DQfD Full]] bagian 13.
+
+### 10.1 Evaluasi penuh (set uji)
+
+| Rute penuh, gabungan | ver-1-3 ID 01 / 02 | v6 dasar ID 01 / 02 | **ver-1-4 ID 01 / 02** | Hybrid A\* + RS |
+|---|---|---|---|---|
+| Tiba | 97,6 / 96,1% | 98,7 / 99,2% | **99,7 / 99,7%** | 99,5 / 100% |
+| Waktu median / p90 (ms) | 101 / 1.732 · 343 / 2.366 | 21 / 189 · 28 / 365 | **22 / 111 · 20 / 129** | 17 / 150 · 15 / 138 |
+| Biaya p90 vs A\* | 1,81 / 1,55× | 1,29 / 1,31× | **1,19 / 1,17×** | 1 |
+| Ganti arah, rata-rata | 3,85 / 2,88 | 1,80 / 1,96 | **1,66 / 1,67** | 1,43 / 1,43 |
+| Percobaan pendaratan per rute | 1,7 / 1,9 | 10,3 / 13,2 | **5,8 / 7,7** | – |
+
+"v6 dasar" = model dekat v6 dengan model jauh ver-1-3 (sebelum dilatih lanjut).
+
+### 10.2 vs branch RS-optimize: waktu keseluruhan
+
+RS-optimize = model jauh (satu model, 14 primitif + aksi SAMBUNG) + Reeds-Shepp analitik `_analytic` yang dicoba di banyak simpul. ver-1-4 = model jauh + model dekat yang memilih kata RS.
+
+> [!warning] Profil kemudi berbeda
+> RS-optimize diukur 2026-10-02 dengan profil kemudi lama: ID 01 35°, ID 02 22° (radius belok rencana 45,6 / 76,0 cm). ver-1-4 memakai 55° untuk kedua robot (25,7 cm), setelah perbaikan mekanisme. Rutenya juga dari dataset yang berbeda. Hybrid A\* di kedua pengukuran pun berbeda jauh, jadi bandingkan terutama **rasio terhadap Hybrid A\* di pengukuran yang sama** dan **porsi waktu per bagian**.
+
+Gabungan 3 peta (Kalibrasi, Rumah2, Rumah), semua rute uji:
+
+| | RS-optimize ID 01 | **ver-1-4 ID 01** | RS-optimize ID 02 | **ver-1-4 ID 02** |
+|---|---|---|---|---|
+| Rute | 317 | 266 | 318 | 241 |
+| Hybrid A\*: tiba / median / p90 / rata (ms) | 97,8% / 8,3 / 692 / 233 | 100% / 15,8 / 137 / 59 | 98,7% / 22,2 / 741 / 243 | 99,2% / 13,5 / 132 / 82 |
+| DQfD: tiba / median / p90 / rata (ms) | 99,1% / 18,8 / 267 / 151 | **100% / 23,4 / 109 / 91** | 97,8% / 28,5 / 276 / 145 | **100% / 19,8 / 96 / 115** |
+| DQfD ÷ A\*, median | 2,27× | **1,48×** | 1,28× | 1,47× |
+| DQfD ÷ A\*, p90 | 0,39× | 0,79× | 0,37× | 0,73× |
+| DQfD ÷ A\*, rata-rata | 0,65× | 1,53× | 0,60× | 1,40× |
+
+- **Secara absolut, DQfD ver-1-4 lebih cepat dari DQfD RS-optimize**: p90 109 vs 267 ms dan 96 vs 276 ms, rata-rata 91 vs 151 ms dan 115 vs 145 ms. Tiba 100% di kedua robot.
+- **RS-optimize tampak "lebih cepat dari A\*" pada rata-rata dan p90** karena Hybrid A\*-nya sendiri sangat lambat dengan radius belok lama yang besar (p90 ~700 ms, terutama di Rumah). Dengan kemudi 55°, Hybrid A\* menjadi 5× lebih cepat di p90, jadi pembandingnya jauh lebih berat.
+- ver-1-4 tetap **lebih cepat dari Hybrid A\* di p90** (0,73–0,79×), tetapi lebih lambat di median (1,5×) dan rata-rata (1,4–1,5×). Ekor lambatnya ada di peta Rumah: rata-rata DQfD 179 / 224 ms vs A\* 96 / 104 ms.
+
+### 10.3 Rincian waktu per bagian DQfD
+
+Rata-rata ms per rute, 3 peta. ver-1-4 dipisah: bagian model jauh dan bagian model dekat (pendaratan).
+
+| Bagian | RS-optimize ID 01 | **ver-1-4 ID 01** | RS-optimize ID 02 | **ver-1-4 ID 02** |
+|---|---|---|---|---|
+| Sinar (32 sinar per simpul) | 66,0 (43%) | **47,1 (50%)** | 51,4 (35%) | **62,4 (54%)** |
+| Primitif (ekspansi + cek badan) | 24,7 (16%) | 21,5 (23%) | 21,4 (15%) | 22,9 (20%) |
+| Jaringan | 15,6 (10%) | 8,1 (jauh 6,9 + dekat 1,2) | 13,5 (9%) | 10,7 (jauh 9,7 + dekat 1,0) |
+| Pencarian lain (sisa) | 14,6 (10%) | 7,2 (8%) | 13,2 (9%) | 10,3 (9%) |
+| Heuristik Dijkstra + observasi lain | 4,4 | 4,5 | 4,1 | 4,9 |
+| **Pendaratan** | **Reeds-Shepp 26,9 (18%)** | **model dekat 7,1 (8%)** | **Reeds-Shepp 42,8 (29%)** | **model dekat 5,9 (5%)** |
+| — jumlah percobaan per rute | 66 panggilan `_analytic` | 10,2 | 81 panggilan `_analytic` | 8,8 |
+| — isinya | rumus RS + cek tabrakan, 6 kandidat termurah | cek tabrakan 3,2 · sisa 1,4 · jaringan 1,2 · rumus RS 0,8 · arah pendekatan 0,4 · observasi 0,3 | | cek tabrakan 2,5 · sisa 1,2 · jaringan 1,0 · rumus RS 0,7 · arah pendekatan 0,3 · observasi 0,2 |
+| **Total** | **152,4** | **94,2** | **146,5** | **116,1** |
+
+- **Pendaratan 4–7× lebih murah dari RS-optimize.** RS-optimize mencoba Reeds-Shepp di 66–81 simpul per rute (aksi SAMBUNG, tanpa batas jarak). ver-1-4 hanya mencoba di dalam 60 cm dan setelah saringan Dijkstra: 9–10 kali per rute, masing-masing ±0,65 ms.
+- **Jaringan setengahnya**: model jauh ver-1-4 membuka lebih sedikit simpul.
+- **Sinar sekarang memakan separuh waktu DQfD** (50–54%). Dengan model dekat yang sudah murah, inilah target optimasi berikutnya: 32 sinar sphere tracing dihitung di setiap simpul yang dibuka model jauh.
+
+### 10.4 Navigasi simulasi: pose akhir robot
+
+`python -m drl.uji_pose_akhir --id N`: `navigasi.py` sungguhan tanpa jendela. Alurnya: perencana → pelacak pure pursuit → robot simulasi dengan jeda kemudi, 20 Hz, tanpa derau. Galat pose akhir = galat ujung rencana + galat pelacakan.
+
+| Skenario | Perencana | Rencana | Panjang | Ganti arah | Galat ujung rencana | **Galat pose akhir robot** | Tempuh |
+|---|---|---|---|---|---|---|---|
+| ID 01 lapang (Kalibrasi) | Hybrid A\* + RS | 6 ms | 172 cm | 2 | 0 | 2,32 cm / 5,09° | 10,0 s |
+| | DQfD | 44 ms | 170 cm | 2 | 0 | **0,85 cm / 0,06°** | 10,1 s |
+| ID 01 balik (Rumah2) | Hybrid A\* + RS | 56 ms | 178 cm | 1 | 0 | 1,70 cm / 4,17° | 23,0 s |
+| | DQfD | 61 ms | 224 cm | 2 | 0 | 3,43 cm / 2,54° | 18,0 s |
+| ID 01 geser (Rumah) | Hybrid A\* + RS | 3 ms | 82 cm | 1 | 0 | 6,86 cm / 22,96° | 19,4 s |
+| | DQfD | 5 ms | 82 cm | 1 | 0 | 6,87 cm / 22,98° | 19,4 s |
+| ID 02 lapang (Kalibrasi) | Hybrid A\* + RS | 8 ms | 194 cm | 1 | 0 | 1,53 cm / 17,84° | 10,7 s |
+| | DQfD | 17 ms | 179 cm | 0 | 0 | 3,44 cm / 17,90° | 12,9 s |
+| ID 02 balik (Rumah2) | Hybrid A\* + RS | 12 ms | 202 cm | 1 | 0 | 3,35 cm / 1,99° | 15,2 s |
+| | DQfD | 21 ms | 198 cm | 1 | 0 | 3,39 cm / 1,98° | 14,8 s |
+| ID 02 geser (Rumah) | Hybrid A\* + RS | 3 ms | 104 cm | 1 | 0 | 3,08 cm / 18,75° | 12,7 s |
+| | DQfD | 5 ms | 104 cm | 1 | 0 | 3,14 cm / 18,94° | 12,7 s |
+
+- **12/12 jalan tiba**, tidak ada yang masuk zona. Di ver-1-3, skenario geser DQfD sempat gagal (batas waktu habis).
+- **Galat ujung rencana 0 untuk kedua perencana**: bagian dekat DQfD adalah kurva RS eksak.
+- **Skenario geser: jalur DQfD identik dengan Hybrid A\* + RS** (82 / 104 cm, galat akhir sama sampai 0,1 cm). Model dekat memilih kata RS yang sama dengan demonstrator.
+- **Galat pose akhir robot hampir seluruhnya dari pelacakan.** Contohnya geser 6,9 cm / 23° dan lapang ID 02 ~18°, dengan besar yang sama untuk kedua perencana. Perbaikannya ada di pelacak (pure pursuit, jeda kemudi), bukan di perencana.
+
+![[Pose akhir ver-1-4 ID01 balik.png]]
+![[Pose akhir ver-1-4 ID01 geser.png]]
+![[Pose akhir ver-1-4 ID02 lapang.png]]
+
+Gambar lain: `Gambar/Pose akhir ver-1-4 ID0N <skenario>.png`.

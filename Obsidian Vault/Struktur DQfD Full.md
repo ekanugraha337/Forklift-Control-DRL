@@ -421,7 +421,8 @@ Model dekat v6 dilatih penuh (`latih --model dekat`, terbaik di langkah 5000 unt
 
 - **Waktu p90 kini lebih cepat dari Hybrid A\*** untuk kedua robot, dengan tingkat tiba setara. Median masih ±5 ms di atas A\*.
 - Mode mundur ID 01 sedikit turun (tiba 98,7 → 97,6%), karena checkpoint dipilih untuk mode gabungan.
-- Catatan untuk berikutnya: validasi `latih` model jauh sebaiknya memakai mode gabungan supaya pemilihan model otomatis sesuai mode operasi.
+- Validasi `latih` model jauh kini memakai mode gabungan (`--metode-validasi`, commit `75fa5d3`).
+- Perbandingan dengan branch RS-optimize, rincian waktu per bagian, dan navigasi simulasi (pose akhir robot): [[Perbandingan Hybrid A-star RS vs DQfD]] bagian 10. Ringkasnya: pendaratan 4–7× lebih murah dari RS-optimize; **sinar model jauh kini 50–54% waktu DQfD**, jadi itulah target optimasi berikutnya.
 
 ## 14. Keputusan terbuka
 
