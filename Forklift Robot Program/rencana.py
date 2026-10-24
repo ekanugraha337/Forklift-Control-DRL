@@ -73,17 +73,27 @@ class HybridAStarBertanda(HybridAStarPlanner):
     _analytic dipanggil berkali-kali selama pencarian, tapi pencarian langsung
     berhenti begitu satu panggilan berhasil - jadi nilai dari panggilan
     terakhirlah yang benar.
+
+    last_stats["rincian_s"] = {"astar": ..., "rs": ...}: waktu di dalam SEMUA
+    panggilan _analytic (Reeds-Shepp + pemeriksaan tabrakannya, termasuk yang
+    gagal) dan sisanya (heuristik Dijkstra + ekspansi primitif).
     """
 
     def _analytic(self, omap, node, goal):
+        t = time.perf_counter()
         rs = super()._analytic(omap, node, goal)
+        self._t_rs += time.perf_counter() - t
         self._rs_titik = len(rs[0]) if rs is not None else 0
         return rs
 
     def plan(self, omap, start, goal):
         self._rs_titik = 0
+        self._t_rs = 0.0
+        t0 = time.perf_counter()
         jalur = super().plan(omap, start, goal)
+        total = time.perf_counter() - t0
         self.last_stats["rs_titik"] = self._rs_titik if jalur else 0
+        self.last_stats["rincian_s"] = {"astar": total - self._t_rs, "rs": self._t_rs}
         return jalur
 
 
@@ -142,6 +152,7 @@ class Perencana:
         self.margin_dipakai = konfig.SAFETY_MARGIN_CM
         self.kendaraan_dipakai = self.kendaraan
         self.stats = {}
+        self._rincian = {}
 
     def _untuk(self, margin_cm):
         """(VehicleModel, HybridAStarPlanner) untuk satu nilai margin, di-cache."""
@@ -242,6 +253,7 @@ class Perencana:
         dalam SEL - format asli perencana, langsung bisa dipakai pelacak.
         """
         t0 = time.time()
+        self._rincian = {}
         omap = self.peta_dengan(rintangan_cm)
         jalur = None
         for margin in self.margin_cadangan() if cadangan else [konfig.SAFETY_MARGIN_CM]:
@@ -252,6 +264,8 @@ class Perencana:
                 break
 
         dt = time.time() - t0
+        # Sisa di luar perencana (peta rintangan sementara, pemeriksaan awal).
+        rincian = dict(self._rincian, lain=max(0.0, dt - sum(self._rincian.values())))
         self.stats = dict(self.planner.last_stats or {})
         self.stats["waktu_s"] = dt
         self.stats["margin_cm"] = self.margin_dipakai
@@ -266,6 +280,7 @@ class Perencana:
                        "kendaraan": self.kendaraan_dipakai,
                        "perencana": self.stats.get("perencana", "A*"),
                        "rs_titik": self.stats.get("rs_titik", 0) if jalur else 0,
+                       "rincian_s": rincian,
                        "alasan": self.stats.get("reason", "")}
 
     def _sekali(self, awal_cm, tujuan_cm, omap=None):
@@ -277,7 +292,7 @@ class Perencana:
 
         if yaw_tujuan is not None:
             tujuan = arena.pose_ke_sel(tujuan_cm[0], tujuan_cm[1], yaw_tujuan)
-            jalur = self.planner.plan(omap, awal, tujuan)
+            jalur = self._plan(omap, awal, tujuan)
         else:
             # Arah hadap bebas: perencana selalu menuntut SATU heading tujuan,
             # jadi pilihannya dicoba di sini - bukan dibiarkan jadi tebakan diam-diam.
@@ -300,12 +315,23 @@ class Perencana:
             try:
                 for deg in urutan:
                     t = arena.pose_ke_sel(tujuan_cm[0], tujuan_cm[1], deg)
-                    jalur = self.planner.plan(omap, awal, t)
+                    jalur = self._plan(omap, awal, t)
                     if jalur:
                         break
             finally:
                 self.planner.time_limit = simpan
 
+        return jalur
+
+    def _plan(self, omap, awal, tujuan):
+        """planner.plan() yang menjumlahkan rincian waktunya ke self._rincian.
+
+        Satu rencanakan() bisa memanggil perencana berkali-kali (margin cadangan,
+        arah hadap bebas) - rincian yang dilaporkan harus mencakup semuanya.
+        """
+        jalur = self.planner.plan(omap, awal, tujuan)
+        for k, v in (self.planner.last_stats or {}).get("rincian_s", {}).items():
+            self._rincian[k] = self._rincian.get(k, 0.0) + v
         return jalur
 
     def panjang_cm(self, jalur_sel):

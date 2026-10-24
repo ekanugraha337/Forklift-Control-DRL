@@ -402,11 +402,13 @@ def rencanakan_dua(net_jauh, net_dekat, env_jauh, env_dekat, awal, tujuan, omap=
       biaya                      biaya jalur jauh + dekat (sel)
       n_jauh_titik, n_serah      titik bagian jauh; percobaan pendaratan
       metode_jauh, metode_dekat, dicoba, waktu_s
+      waktu_dekat_s              bagian waktu_s di dalam model dekat (semua percobaan
+                                 pendaratan, termasuk yang gagal); sisanya model jauh
     catat: daftar; bila diberikan, tiap percobaan pendaratan ditambahkan sebagai
     dict(pose, d, k, sukses) - bahan DAgger (drl.dagger).
     """
     t0 = time.perf_counter()
-    st = {"n_serah": 0, "dekat": None, "jalur_dekat": None, "biaya_dekat": 0.0}
+    st = {"n_serah": 0, "dekat": None, "jalur_dekat": None, "biaya_dekat": 0.0, "t_dekat": 0.0}
 
     def sisa():
         return None if batas_waktu is None else max(0.0, batas_waktu - (time.perf_counter() - t0))
@@ -431,7 +433,9 @@ def rencanakan_dua(net_jauh, net_dekat, env_jauh, env_dekat, awal, tujuan, omap=
         if st["n_serah"] >= MAKS_SERAH or (sisa() is not None and sisa() <= 0):
             return False
         st["n_serah"] += 1
+        t_d = time.perf_counter()
         ok = daratkan((e.x, e.y, e.yaw), e.d, e.k)
+        st["t_dekat"] += time.perf_counter() - t_d
         if catat is not None:
             catat.append({"pose": (e.x, e.y, e.yaw), "d": e.d, "k": e.k, "sukses": ok})
         return ok
@@ -463,7 +467,7 @@ def rencanakan_dua(net_jauh, net_dekat, env_jauh, env_dekat, awal, tujuan, omap=
         hasil["biaya"] += st["biaya_dekat"]
         hasil["metode_dekat"] = st["dekat"]["metode"]
         hasil["dicoba"] += st["dekat"].get("dicoba", 0)
-    hasil.update(n_serah=st["n_serah"], waktu_s=time.perf_counter() - t0)
+    hasil.update(n_serah=st["n_serah"], waktu_s=time.perf_counter() - t0, waktu_dekat_s=st["t_dekat"])
     return hasil
 
 
@@ -557,11 +561,16 @@ class DQfDPlanner:
     def plan(self, omap, start, goal):
         t0 = time.perf_counter()
         perkiraan = self._perkiraan(omap, start, goal) if self.gerbang_k is not None else None
+        t_gerbang = time.perf_counter() - t0
         h = rencanakan_dua(self.net_jauh, self.net_dekat, self.env_jauh, self.env_dekat,
                            start, goal, omap, metode=self.metode, batas_waktu=self.time_limit)
+        # Rincian waktu (detik) per bagian, dijumlahkan Perencana.rencanakan().
+        rincian = {"dqfd_jauh": h["waktu_s"] - h["waktu_dekat_s"], "dqfd_dekat": h["waktu_dekat_s"]}
+        if perkiraan is not None:
+            rincian["gerbang"] = t_gerbang
         if h["sukses"] and not h["jalur"]:
             self.last_stats = {"expansions": 0, "time": h["waktu_s"], "reason": "sudah di tujuan",
-                               "perencana": "dqfd"}
+                               "perencana": "dqfd", "rincian_s": rincian}
             return []
         if h["sukses"]:
             rasio = h["biaya"] / perkiraan if perkiraan else None
@@ -571,16 +580,20 @@ class DQfDPlanner:
                     "perencana": f"dqfd (jauh {h['metode_jauh']}, dekat {h['metode_dekat']}, "
                                  f"serah dicoba {h['n_serah']})",
                     "rasio_perkiraan": rasio,
-                    "rs_titik": len(h["jalur"]) - max(h["n_jauh_titik"], 1)}
+                    "rs_titik": len(h["jalur"]) - max(h["n_jauh_titik"], 1),
+                    "rincian_s": rincian}
                 return h["jalur"]
             h["alasan"] = f"ditolak gerbang mutu (biaya {rasio:.2f} x perkiraan)"
         if not self.cadangan:
             self.last_stats = {"expansions": h["dicoba"], "time": time.perf_counter() - t0,
-                               "reason": f"DQfD ({h.get('fase', '')}): {h['alasan']}", "perencana": "dqfd"}
+                               "reason": f"DQfD ({h.get('fase', '')}): {h['alasan']}", "perencana": "dqfd",
+                               "rincian_s": rincian}
             return None
         self.astar.time_limit = self.time_limit
         jalur = self.astar.plan(omap, start, goal)
         self.last_stats = dict(self.astar.last_stats or {})
+        for k, v in self.last_stats.get("rincian_s", {}).items():
+            rincian[k] = rincian.get(k, 0.0) + v
         self.last_stats.update(time=time.perf_counter() - t0, perencana="A* (cadangan)",
-                               dqfd_gagal=h["alasan"])
+                               dqfd_gagal=h["alasan"], rincian_s=rincian)
         return jalur

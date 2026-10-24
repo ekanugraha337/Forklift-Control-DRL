@@ -28,6 +28,8 @@ perencana.
     python -m drl.uji_robot_nyata --skenario uji_nyata/rumah.json --simulasi --ulang 1
     # lanjutkan uji yang terputus (percobaan yang sudah tercatat dilewati):
     python -m drl.uji_robot_nyata --skenario uji_nyata/rumah.json --ulang 5 --lanjut uji_nyata/20261024_101500_Rumah
+    # rincian waktu perencanaan untuk data lama (sebelum rincian_ms dicatat):
+    python -m drl.uji_robot_nyata --rinci uji_nyata/20261024_101500_Rumah
     # ringkasan, gambar lintasan, dan baris tabel LaTeX dari hasil:
     python -m drl.uji_robot_nyata --ringkas uji_nyata/20261024_101500_Rumah
 
@@ -52,7 +54,10 @@ Keluaran (folder uji_nyata/<tanggal>_<peta>/):
     skenario.json   salinan skenario yang dipakai
     hasil.jsonl     satu baris per percobaan (ditulis segera - aman bila terputus)
     lintasan.csv    pose setiap siklus 20 Hz, semua robot, semua fase
-    (--ringkas)     ringkasan.json, ringkasan_tabel.tex, lintasan_<skenario>.png
+    (--ringkas)     ringkasan.json, ringkasan_tabel.tex, lintasan_<skenario>.png,
+                    rincian_tabel.tex (waktu perencanaan: Hybrid A*, RS, DQfD jauh, DQfD dekat)
+    (--rinci)       rincian_ulang.json - setiap perencanaan yang tercatat diulang
+                    offline untuk mengukur rinciannya (data lama tanpa rincian_ms)
 """
 import argparse
 import csv
@@ -82,6 +87,10 @@ TENANG_S = 1.0          # robot dianggap diam sekian detik setelah SELESAI; pose
 GAGAL_RENCANA_S = 1.0   # SIAP tanpa jalur selama ini setelah tujuan diberikan = perencanaan gagal
 
 PULANG, KONFIRMASI, UJI, OPERATOR, TAMAT = "PULANG", "KONFIRMASI", "UJI", "OPERATOR", "TAMAT"
+
+# Bagian waktu perencanaan (kunci info["rincian_s"] dari rencana.Perencana).
+BAGIAN = (("astar", "Hybrid A*"), ("rs", "RS"), ("dqfd_jauh", "DQfD jauh"), ("dqfd_dekat", "DQfD dekat"),
+          ("gerbang", "gerbang mutu"), ("lain", "lain"))
 
 
 def _sudut(a):
@@ -176,6 +185,7 @@ class Sesi:
             daftar = self.catat_ke
             if daftar is not None:          # dipanggil dari thread pekerja; append atomik
                 daftar[rid].append({"t": t0, "tujuan": list(tujuan), "ms": 1000.0 * info.get("waktu_s", 0.0),
+                                    "rincian_ms": {k: 1000.0 * v for k, v in info.get("rincian_s", {}).items()},
                                     "ok": bool(jalur), "oleh": info.get("perencana", "A*") if jalur else "gagal",
                                     "margin_cm": info.get("margin_cm"),
                                     "alasan": "" if jalur else (info.get("error") or info.get("alasan") or ""),
@@ -842,6 +852,16 @@ def ringkas(dir_hasil):
                   f"{ro['estop']:>5} {_stat(ro['t_menunggu_s']):>9} {_stat(ro['galat_awal_cm']):>14}")
         print(f"{'':<15} pasangan tiba {o['pasangan_tiba']}/{o['n']}, makespan {_stat(o['makespan_s'])} s")
         out["per_perencana"][per] = o
+    panggilan = _panggilan_tercatat(semua)
+    judul = "rincian waktu perencanaan (tercatat saat uji)"
+    if not panggilan and os.path.exists(os.path.join(dir_hasil, "rincian_ulang.json")):
+        with open(os.path.join(dir_hasil, "rincian_ulang.json"), encoding="utf-8") as f:
+            panggilan = json.load(f)["panggilan"]
+        judul = "rincian waktu perencanaan (diukur ulang offline, --rinci)"
+    if panggilan:
+        out["rincian_rencana"] = _rincian_ringkas(panggilan, perencana, ids)
+        _cetak_rincian(out["rincian_rencana"], judul)
+        _tabel_rincian_latex(dir_hasil, out["rincian_rencana"])
     with open(os.path.join(dir_hasil, "ringkasan.json"), "w", encoding="utf-8") as f:
         json.dump(out, f, indent=1, default=float)
     _tabel_latex(dir_hasil, out, perencana, ids)
@@ -850,6 +870,158 @@ def ringkas(dir_hasil):
             _gambar(dir_hasil, sk, [h for h in semua if h["skenario"] == sk], perencana, ids)
         except Exception as e:                          # gambar tidak boleh menggagalkan ringkasan
             print(f"[!] gambar {sk}: {type(e).__name__}: {e}")
+
+
+def _panggilan_tercatat(semua):
+    """Setiap panggilan perencana selama UJI yang punya rincian_ms, sebagai daftar datar."""
+    out = []
+    for h in semua:
+        for rid, r in h["robot"].items():
+            calls = r.get("rencana", [])
+            i_ok = next((i for i, c in enumerate(calls) if c["ok"]), None)
+            for i, c in enumerate(calls):
+                if c.get("rincian_ms"):
+                    out.append({"perencana": h["perencana"], "robot": int(rid), "skenario": h["skenario"],
+                                "ulang": h["ulang"], "ke": i, "pertama": i == i_ok, "ok": c["ok"],
+                                "ms_tercatat": c["ms"], "rincian_ms": c["rincian_ms"]})
+    return out
+
+
+def _rincian_ringkas(panggilan, perencana, ids):
+    """Per perencana & robot: median tiap bagian pada rencana PERTAMA (sama dengan
+    kolom 'rencana ms' di tabel utama), dan jumlah semua panggilan per percobaan
+    (termasuk rencana ulang di tengah jalan)."""
+    out = {}
+    for per in perencana:
+        for rid in ids:
+            ps = [p for p in panggilan if p["perencana"] == per and p["robot"] == rid]
+            if not ps:
+                continue
+            pertama = [p["rincian_ms"] for p in ps if p["pertama"]]
+            kunci = [k for k, _ in BAGIAN if any(k in p["rincian_ms"] for p in ps)]
+            total = {}
+            for p in ps:
+                c = (p["skenario"], p["ulang"])
+                total[c] = total.get(c, 0.0) + sum(p["rincian_ms"].values())
+            out.setdefault(per, {})[rid] = {
+                "n_panggilan": len(ps), "n_pertama": len(pertama),
+                "pertama_median_ms": ({k: float(np.median([r.get(k, 0.0) for r in pertama])) for k in kunci}
+                                      if pertama else {}),
+                "semua_per_percobaan_ms": list(total.values())}
+    return out
+
+
+def _cetak_rincian(r, judul):
+    kunci = [k for k, _ in BAGIAN if any(k in ro["pertama_median_ms"] for o in r.values() for ro in o.values())]
+    print(f"\n{judul} - ms, median rencana pertama (porsi)")
+    print(f"{'perencana':<15} {'robot':>5} " + " ".join(f"{dict(BAGIAN)[k]:>14}" for k in kunci)
+          + f" {'jumlah':>8} {'semua rencana/percobaan':>24}")
+    for per, o in r.items():
+        for rid, ro in o.items():
+            m = ro["pertama_median_ms"]
+            jml = sum(m.values())
+            sel = " ".join(f"{m[k]:7.1f} ({100 * m[k] / jml:3.0f}%)" if k in m and jml > 0 else f"{'-':>14}"
+                           for k in kunci)
+            print(f"{NAMA.get(per, per):<15} {rid:>5} {sel} {jml:8.1f} "
+                  f"{_stat(ro['semua_per_percobaan_ms']):>16} (n={ro['n_panggilan']})")
+
+
+def _tabel_rincian_latex(dir_hasil, r):
+    """Baris tabel rincian waktu perencanaan: Hybrid A* | RS | DQfD jauh | DQfD dekat | jumlah (ms)."""
+    def f(v):
+        return "--" if v is None else f"{v:.1f}".replace(".", "{,}")
+    baris = ["% dibuat drl.uji_robot_nyata --ringkas " + os.path.basename(dir_hasil),
+             "% perencana & robot & Hybrid A* & RS & DQfD jauh & DQfD dekat & jumlah (ms, median rencana pertama)"]
+    for per, o in r.items():
+        nama = NAMA.get(per, per).replace("*", "\\textsuperscript{*}")
+        for rid, ro in o.items():
+            m = ro["pertama_median_ms"]
+            sel = " & ".join(f(m.get(k)) for k in ("astar", "rs", "dqfd_jauh", "dqfd_dekat"))
+            baris.append(f"{nama} & ID {rid:02d} & {sel} & {f(sum(m.values()))} \\\\")
+    p = os.path.join(dir_hasil, "rincian_tabel.tex")
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(baris) + "\n")
+    print(f"[OK] {p}")
+
+
+def ukur_ulang_rincian(dir_hasil, n_ulang=5):
+    """Rincian waktu perencanaan untuk hasil uji LAMA (hasil.jsonl tanpa rincian_ms).
+
+    Setiap panggilan perencana yang tercatat diulang offline dengan awal (titik
+    pertama jalurnya), tujuan, perencana, dan robot yang sama. Rintangan saat
+    itu tidak tercatat: badan robot lain bisa ikut atau tidak (tergantung ia
+    diam atau tidak). Keduanya dicoba, dan yang dipakai adalah yang menghasilkan
+    jalur dengan jumlah titik sama seperti rekaman ("cocok"). Pose robot lain
+    diambil dari lintasan.csv pada saat panggilan itu.
+
+    Waktu offline biasanya lebih kecil dari yang tercatat (tidak ada loop
+    kamera & kendali 20 Hz yang berebut CPU) - yang dibandingkan adalah PORSI
+    tiap bagian, bukan angka mutlaknya.
+    """
+    import bisect
+    import arena as A
+    import rencana as R
+    with open(os.path.join(dir_hasil, "skenario.json"), encoding="utf-8") as f:
+        peta = json.load(f)["peta"]
+    semua = [h for h in _muat_hasil(dir_hasil) if h.get("status") != "dilewati"]
+    ar = A.Arena(A.pilih(peta))
+    lin = {}
+    with open(os.path.join(dir_hasil, "lintasan.csv"), newline="") as f:
+        for b in csv.DictReader(f):
+            if b["terlihat"] == "1":
+                lin.setdefault(int(b["robot"]), []).append(
+                    (float(b["t"]), float(b["x_cm"]), float(b["y_cm"]), float(b["yaw_deg"])))
+    waktu = {rid: [p[0] for p in v] for rid, v in lin.items()}
+
+    def pose_pada(rid, t):
+        if rid not in lin:
+            return None
+        i = bisect.bisect_left(waktu[rid], t)
+        j = min((j for j in (i - 1, i) if 0 <= j < len(lin[rid])), key=lambda j: abs(waktu[rid][j] - t))
+        return lin[rid][j][1:] if abs(waktu[rid][j] - t) < 1.0 else None
+
+    per = {}
+    panggilan = []
+    print(f"[i] mengulang perencanaan dari {dir_hasil} ({n_ulang}x tiap panggilan) ...")
+    for h in semua:
+        for rid_s, r in h["robot"].items():
+            rid = int(rid_s)
+            if (rid, h["perencana"]) not in per:
+                per[(rid, h["perencana"])] = R.Perencana(ar, konfig.profil(rid), jenis=h["perencana"])
+            P = per[(rid, h["perencana"])]
+            calls = r.get("rencana", [])
+            i_ok = next((i for i, c in enumerate(calls) if c["ok"]), None)
+            for i, c in enumerate(calls):
+                if not c.get("jalur_cm"):
+                    print(f"[!] {h['skenario']} u{h['ulang'] + 1} {h['perencana']} {rid:02d} #{i}: "
+                          "panggilan gagal (awal tidak tercatat) - dilewati")
+                    continue
+                awal, tujuan = tuple(c["jalur_cm"][0][:3]), tuple(c["tujuan"])
+                lain = [A.jejak_badan(*q) for q in (pose_pada(int(j), c["t"]) for j in h["robot"] if int(j) != rid)
+                        if q is not None]
+                terbaik = None
+                for rint in ([None, lain] if lain else [None]):
+                    jalur, _ = P.rencanakan(awal, tujuan, rint)
+                    beda = abs((len(jalur) if jalur else 0) - len(c["jalur_cm"]))
+                    if terbaik is None or beda < terbaik[0]:
+                        terbaik = (beda, rint)
+                beda, rint = terbaik
+                ukur = [P.rencanakan(awal, tujuan, rint)[1] for _ in range(n_ulang)]
+                kunci = [k for k, _ in BAGIAN if any(k in u["rincian_s"] for u in ukur)]
+                rinc = {k: float(np.median([1000.0 * u["rincian_s"].get(k, 0.0) for u in ukur])) for k in kunci}
+                p = {"perencana": h["perencana"], "robot": rid, "skenario": h["skenario"], "ulang": h["ulang"],
+                     "ke": i, "pertama": i == i_ok, "ok": c["ok"], "ms_tercatat": c["ms"],
+                     "ms_ulang": float(np.median([1000.0 * u["waktu_s"] for u in ukur])),
+                     "cocok": beda == 0, "rintangan_robot_lain": rint is not None, "rincian_ms": rinc}
+                panggilan.append(p)
+                print(f"    {h['skenario']} u{h['ulang'] + 1} {NAMA.get(h['perencana'], h['perencana']):<15} "
+                      f"{rid:02d} #{i}: tercatat {c['ms']:6.1f} ms, ulang {p['ms_ulang']:6.1f} ms "
+                      f"[{'cocok' if p['cocok'] else f'beda {beda} titik'}"
+                      f"{', robot lain = rintangan' if p['rintangan_robot_lain'] else ''}]  "
+                      + "  ".join(f"{dict(BAGIAN)[k]} {v:.1f}" for k, v in rinc.items()))
+    with open(os.path.join(dir_hasil, "rincian_ulang.json"), "w", encoding="utf-8") as f:
+        json.dump({"dir": dir_hasil, "n_ulang": n_ulang, "panggilan": panggilan}, f, indent=1)
+    print(f"[OK] {os.path.join(dir_hasil, 'rincian_ulang.json')}")
 
 
 def _tabel_latex(dir_hasil, out, perencana, ids):
@@ -946,6 +1118,8 @@ def main():
     ap.add_argument("--buat", metavar="JSON", help="tetapkan skenario dan simpan ke berkas ini")
     ap.add_argument("--skenario", metavar="JSON", help="jalankan uji dengan skenario ini")
     ap.add_argument("--ringkas", metavar="DIR", help="hanya ringkas hasil uji di folder ini")
+    ap.add_argument("--rinci", metavar="DIR",
+                    help="ulangi offline setiap perencanaan di folder ini untuk rincian waktunya, lalu ringkas")
     ap.add_argument("--lanjut", metavar="DIR", help="lanjutkan uji di folder ini (yang sudah tercatat dilewati)")
     ap.add_argument("--perencana", default=",".join(PERENCANA_UJI),
                     help=f"perencana yang diuji, dipisah koma (bawaan {','.join(PERENCANA_UJI)})")
@@ -966,6 +1140,10 @@ def main():
 
     if args.ringkas:
         ringkas(args.ringkas)
+        return
+    if args.rinci:
+        ukur_ulang_rincian(args.rinci)
+        ringkas(args.rinci)
         return
     args.perencana = [p.strip() for p in args.perencana.split(",") if p.strip()]
     if args.simulasi:
