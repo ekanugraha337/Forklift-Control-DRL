@@ -1,0 +1,201 @@
+{
+ "dir": "C:\\Users\\Eka Nugraha\\Documents\\GitHub\\Forklift Control - DRL\\Forklift Robot Program\\uji_nyata\\20261024_081318_Gudang2",
+ "per_perencana": {
+  "astar": {
+   "n": 1,
+   "pasangan_tiba": 1,
+   "makespan_s": [
+    32.120877742767334
+   ],
+   "robot": {
+    "1": {
+     "n": 1,
+     "tiba": 1,
+     "rencana_ms_median": 246.72222137451172,
+     "rencana_ms_p90": 246.72222137451172,
+     "panjang_cm": [
+      238.2814221267792
+     ],
+     "ganti_arah": [
+      3
+     ],
+     "t_tempuh_s": [
+      31.48579692840576
+     ],
+     "galat_cm": [
+      1.7312683118332737
+     ],
+     "galat_deg": [
+      2.1764804255714125
+     ],
+     "estop": 0,
+     "t_menunggu_s": [
+      0.0
+     ],
+     "galat_awal_cm": [
+      1.3287801774266073
+     ],
+     "galat_awal_deg": [
+      2.795312669383577
+     ]
+    },
+    "2": {
+     "n": 1,
+     "tiba": 1,
+     "rencana_ms_median": 291.5177345275879,
+     "rencana_ms_p90": 291.5177345275879,
+     "panjang_cm": [
+      246.9309814057108
+     ],
+     "ganti_arah": [
+      3
+     ],
+     "t_tempuh_s": [
+      32.120877742767334
+     ],
+     "galat_cm": [
+      2.3316777235334216
+     ],
+     "galat_deg": [
+      4.725146530054673
+     ],
+     "estop": 0,
+     "t_menunggu_s": [
+      0.0
+     ],
+     "galat_awal_cm": [
+      0.6615665378283738
+     ],
+     "galat_awal_deg": [
+      5.5874048942623915
+     ]
+    }
+   }
+  },
+  "dqfd-murni": {
+   "n": 1,
+   "pasangan_tiba": 1,
+   "makespan_s": [
+    31.32126545906067
+   ],
+   "robot": {
+    "1": {
+     "n": 1,
+     "tiba": 1,
+     "rencana_ms_median": 61.61689758300781,
+     "rencana_ms_p90": 61.61689758300781,
+     "panjang_cm": [
+      238.26411584202
+     ],
+     "ganti_arah": [
+      3
+     ],
+     "t_tempuh_s": [
+      29.98465609550476
+     ],
+     "galat_cm": [
+      1.9980554592570146
+     ],
+     "galat_deg": [
+      2.5130662056336632
+     ],
+     "estop": 0,
+     "t_menunggu_s": [
+      0.0
+     ],
+     "galat_awal_cm": [
+      2.3103300234560056
+     ],
+     "galat_awal_deg": [
+      2.9229726446343136
+     ]
+    },
+    "2": {
+     "n": 1,
+     "tiba": 1,
+     "rencana_ms_median": 65.83094596862793,
+     "rencana_ms_p90": 65.83094596862793,
+     "panjang_cm": [
+      245.44696145677523
+     ],
+     "ganti_arah": [
+      3
+     ],
+     "t_tempuh_s": [
+      31.32126545906067
+     ],
+     "galat_cm": [
+      3.060541519428553
+     ],
+     "galat_deg": [
+      8.021040514543557
+     ],
+     "estop": 0,
+     "t_menunggu_s": [
+      0.0
+     ],
+     "galat_awal_cm": [
+      2.01107782568182
+     ],
+     "galat_awal_deg": [
+      2.5751450609365065
+     ]
+    }
+   }
+  }
+ },
+ "rincian_rencana": {
+  "astar": {
+   "1": {
+    "n_panggilan": 1,
+    "n_pertama": 1,
+    "pertama_median_ms": {
+     "astar": 217.41279994603246,
+     "rs": 3.101500100456178,
+     "lain": 26.207921328023076
+    },
+    "semua_per_percobaan_ms": [
+     246.72222137451172
+    ]
+   },
+   "2": {
+    "n_panggilan": 1,
+    "n_pertama": 1,
+    "pertama_median_ms": {
+     "astar": 282.9386998200789,
+     "rs": 8.556100190617144,
+     "lain": 0.02293451689183712
+    },
+    "semua_per_percobaan_ms": [
+     291.5177345275879
+    ]
+   }
+  },
+  "dqfd-murni": {
+   "1": {
+    "n_panggilan": 1,
+    "n_pertama": 1,
+    "pertama_median_ms": {
+     "dqfd_jauh": 51.523099886253476,
+     "dqfd_dekat": 4.624900058843195,
+     "lain": 5.468897637911141
+    },
+    "semua_per_percobaan_ms": [
+     61.61689758300781
+    ]
+   },
+   "2": {
+    "n_panggilan": 1,
+    "n_pertama": 1,
+    "pertama_median_ms": {
+     "dqfd_jauh": 58.345000026747584,
+     "dqfd_dekat": 7.448700023815036,
+     "lain": 0.037245918065309525
+    },
+    "semua_per_percobaan_ms": [
+     65.83094596862793
+    ]
+   }
+  }
+ }
+}

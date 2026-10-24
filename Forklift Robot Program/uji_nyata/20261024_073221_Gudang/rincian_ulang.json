@@ -1,0 +1,492 @@
+{
+ "dir": ".\\uji_nyata\\20261024_073221_Gudang\\",
+ "n_ulang": 5,
+ "panggilan": [
+  {
+   "perencana": "astar",
+   "robot": 1,
+   "skenario": "S1",
+   "ulang": 0,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 29.363632202148438,
+   "ms_ulang": 13.505935668945312,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 13.182299910113215,
+    "rs": 0.2973000518977642,
+    "lain": 0.025661312974989414
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 2,
+   "skenario": "S1",
+   "ulang": 0,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 91.87626838684082,
+   "ms_ulang": 89.32876586914062,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 88.92090001609176,
+    "rs": 0.2234999556094408,
+    "lain": 0.040480983443558216
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 2,
+   "skenario": "S1",
+   "ulang": 0,
+   "ke": 1,
+   "pertama": false,
+   "ok": true,
+   "ms_tercatat": 63.56406211853027,
+   "ms_ulang": 39.930105209350586,
+   "cocok": true,
+   "rintangan_robot_lain": true,
+   "rincian_ms": {
+    "astar": 38.73790008947253,
+    "rs": 0.6183999357745051,
+    "lain": 0.5341417854651809
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 2,
+   "skenario": "S1",
+   "ulang": 0,
+   "ke": 2,
+   "pertama": false,
+   "ok": true,
+   "ms_tercatat": 27.98318862915039,
+   "ms_ulang": 26.72553062438965,
+   "cocok": true,
+   "rintangan_robot_lain": true,
+   "rincian_ms": {
+    "astar": 25.967800058424473,
+    "rs": 0.22359995637089014,
+    "lain": 0.5305501399561763
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 2,
+   "skenario": "S1",
+   "ulang": 0,
+   "ke": 3,
+   "pertama": false,
+   "ok": true,
+   "ms_tercatat": 29.5865535736084,
+   "ms_ulang": 30.466079711914062,
+   "cocok": true,
+   "rintangan_robot_lain": true,
+   "rincian_ms": {
+    "astar": 29.394299956038594,
+    "rs": 0.5042999982833862,
+    "lain": 0.5192711250856519
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 2,
+   "skenario": "S1",
+   "ulang": 0,
+   "ke": 4,
+   "pertama": false,
+   "ok": true,
+   "ms_tercatat": 36.39841079711914,
+   "ms_ulang": 33.188819885253906,
+   "cocok": true,
+   "rintangan_robot_lain": true,
+   "rincian_ms": {
+    "astar": 32.28849987499416,
+    "rs": 0.2728999825194478,
+    "lain": 0.5165861221030354
+   }
+  },
+  {
+   "perencana": "dqfd-murni",
+   "robot": 1,
+   "skenario": "S1",
+   "ulang": 0,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 151.63135528564453,
+   "ms_ulang": 90.34132957458496,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "dqfd_jauh": 89.83830001670867,
+    "dqfd_dekat": 0.4768000217154622,
+    "lain": 0.02364430110901594
+   }
+  },
+  {
+   "perencana": "dqfd-murni",
+   "robot": 1,
+   "skenario": "S1",
+   "ulang": 0,
+   "ke": 1,
+   "pertama": false,
+   "ok": true,
+   "ms_tercatat": 204.73527908325195,
+   "ms_ulang": 136.34467124938965,
+   "cocok": true,
+   "rintangan_robot_lain": true,
+   "rincian_ms": {
+    "dqfd_jauh": 135.30940003693104,
+    "dqfd_dekat": 0.5136999534443021,
+    "lain": 0.48747065011411905
+   }
+  },
+  {
+   "perencana": "dqfd-murni",
+   "robot": 2,
+   "skenario": "S1",
+   "ulang": 0,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 190.65284729003906,
+   "ms_ulang": 64.7268295288086,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "dqfd_jauh": 64.16680011898279,
+    "dqfd_dekat": 0.5173999816179276,
+    "lain": 0.01860025804489851
+   }
+  },
+  {
+   "perencana": "dqfd-murni",
+   "robot": 1,
+   "skenario": "S1",
+   "ulang": 1,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 152.1759033203125,
+   "ms_ulang": 46.08464241027832,
+   "cocok": true,
+   "rintangan_robot_lain": true,
+   "rincian_ms": {
+    "dqfd_jauh": 45.19530001562089,
+    "dqfd_dekat": 0.47560001257807016,
+    "lain": 0.4251035861670971
+   }
+  },
+  {
+   "perencana": "dqfd-murni",
+   "robot": 2,
+   "skenario": "S1",
+   "ulang": 1,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 235.34798622131348,
+   "ms_ulang": 93.16277503967285,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "dqfd_jauh": 92.6132999593392,
+    "dqfd_dekat": 0.5368000129237771,
+    "lain": 0.022668857127428055
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 1,
+   "skenario": "S1",
+   "ulang": 1,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 70.41549682617188,
+   "ms_ulang": 12.933492660522461,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 12.678600032813847,
+    "rs": 0.24709990248084068,
+    "lain": 0.009332317858934402
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 2,
+   "skenario": "S1",
+   "ulang": 1,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 68.32385063171387,
+   "ms_ulang": 46.96464538574219,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 46.5400000102818,
+    "rs": 0.4112999886274338,
+    "lain": 0.02186733763664961
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 1,
+   "skenario": "S1",
+   "ulang": 2,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 51.154375076293945,
+   "ms_ulang": 25.378704071044922,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 25.180800002999604,
+    "rs": 0.18450000789016485,
+    "lain": 0.013404060155153275
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 2,
+   "skenario": "S1",
+   "ulang": 2,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 34.94119644165039,
+   "ms_ulang": 17.743825912475586,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 17.544199945405126,
+    "rs": 0.17450004816055298,
+    "lain": 0.009078183211386204
+   }
+  },
+  {
+   "perencana": "dqfd-murni",
+   "robot": 1,
+   "skenario": "S1",
+   "ulang": 2,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 173.6466884613037,
+   "ms_ulang": 57.47652053833008,
+   "cocok": true,
+   "rintangan_robot_lain": true,
+   "rincian_ms": {
+    "dqfd_jauh": 56.54880008660257,
+    "dqfd_dekat": 0.45000005047768354,
+    "lain": 0.40889682713896036
+   }
+  },
+  {
+   "perencana": "dqfd-murni",
+   "robot": 2,
+   "skenario": "S1",
+   "ulang": 2,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 146.51083946228027,
+   "ms_ulang": 40.51041603088379,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "dqfd_jauh": 39.95740006212145,
+    "dqfd_dekat": 0.48379995860159397,
+    "lain": 0.024100765585899353
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 1,
+   "skenario": "S2",
+   "ulang": 0,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 32.27066993713379,
+   "ms_ulang": 16.171932220458984,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 15.976299997419119,
+    "rs": 0.18780003301799297,
+    "lain": 0.00913033727556467
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 2,
+   "skenario": "S2",
+   "ulang": 0,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 12.096166610717773,
+   "ms_ulang": 12.325286865234375,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 12.081399909220636,
+    "rs": 0.22140005603432655,
+    "lain": 0.02070970367640257
+   }
+  },
+  {
+   "perencana": "dqfd-murni",
+   "robot": 1,
+   "skenario": "S2",
+   "ulang": 0,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 76.06244087219238,
+   "ms_ulang": 20.94578742980957,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "dqfd_jauh": 20.282300072722137,
+    "dqfd_dekat": 0.5565000465139747,
+    "lain": 0.027187401428818703
+   }
+  },
+  {
+   "perencana": "dqfd-murni",
+   "robot": 2,
+   "skenario": "S2",
+   "ulang": 0,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 77.56662368774414,
+   "ms_ulang": 26.566028594970703,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "dqfd_jauh": 25.757000083103776,
+    "dqfd_dekat": 0.5497999954968691,
+    "lain": 0.02743594814091921
+   }
+  },
+  {
+   "perencana": "dqfd-murni",
+   "robot": 1,
+   "skenario": "S2",
+   "ulang": 1,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 49.101829528808594,
+   "ms_ulang": 19.540071487426758,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "dqfd_jauh": 18.95129994954914,
+    "dqfd_dekat": 0.5964000010862947,
+    "lain": 0.027256552129983902
+   }
+  },
+  {
+   "perencana": "dqfd-murni",
+   "robot": 2,
+   "skenario": "S2",
+   "ulang": 1,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 47.60122299194336,
+   "ms_ulang": 15.610933303833008,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "dqfd_jauh": 15.022799954749644,
+    "dqfd_dekat": 0.5582000594586134,
+    "lain": 0.02824678085744381
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 1,
+   "skenario": "S2",
+   "ulang": 1,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 29.404163360595703,
+   "ms_ulang": 26.55816078186035,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 26.30869997665286,
+    "rs": 0.21119997836649418,
+    "lain": 0.025241519324481487
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 2,
+   "skenario": "S2",
+   "ulang": 1,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 26.92580223083496,
+   "ms_ulang": 14.96434211730957,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 14.690299867652357,
+    "rs": 0.24319998919963837,
+    "lain": 0.025157234631478786
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 1,
+   "skenario": "S2",
+   "ulang": 2,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 20.96247673034668,
+   "ms_ulang": 18.218994140625,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 17.75850006379187,
+    "rs": 0.40479993913322687,
+    "lain": 0.023042550310492516
+   }
+  },
+  {
+   "perencana": "astar",
+   "robot": 2,
+   "skenario": "S2",
+   "ulang": 2,
+   "ke": 0,
+   "pertama": true,
+   "ok": true,
+   "ms_tercatat": 29.137134552001953,
+   "ms_ulang": 14.261960983276367,
+   "cocok": true,
+   "rintangan_robot_lain": false,
+   "rincian_ms": {
+    "astar": 14.020899892784655,
+    "rs": 0.2218999434262514,
+    "lain": 0.02096104435622692
+   }
+  }
+ ]
+}
