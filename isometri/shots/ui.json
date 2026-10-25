@@ -1,0 +1,12 @@
+[["wait",800],
+ ["click",".fk-seg button[data-v=\"S2\"]"],["click",".fk-seg button[data-v=\"astar\"]"],["wait",600],
+ ["eval","[...document.querySelectorAll('.fk-seg button')].map(b=>b.textContent+(b.disabled?'(x)':'')+(b.getAttribute('aria-pressed')==='true'?'*':'')).join(' ')"],
+ ["eval","document.querySelector('[data-corner=\"title\"]').textContent + ' | ' + document.querySelector('.fk-result').textContent"],
+ ["shot","shots/s2plan.png",".iso-figure:nth-of-type(1) .iso-stage",1],
+ ["click",".fk-btn[data-act=\"start\"]"],["wait",3000],
+ ["eval","(()=>{const i=document.querySelector('input[name=lookahead]');i.value=12;i.dispatchEvent(new Event('input'));return 'set'})()"],["wait",400],
+ ["eval","document.querySelector('.fk-result').textContent"],
+ ["move",".fk-ch[data-ch=\"0\"] svg",0.5,0.5],
+ ["shot","shots/s2drive.png",".iso-figure:nth-of-type(1)",1],
+ ["click",".fk-seg button[data-v=\"2\"]"],["click",".fk-seg button[data-v=\"dqfd-murni\"]"],
+ ["eval","document.querySelector('[data-corner=\"title\"]').textContent + ' | dqfd S2 u3 disabled? ' + document.querySelector('.fk-seg button[data-v=\"dqfd-murni\"]').disabled"]]

@@ -1,0 +1,1 @@
+[["wait",1000],["eval","(()=>{const b=document.querySelector('.fk-btn[data-act=\"start\"]');b.click();return new Promise(r=>{let n=0,t0=performance.now();function f(){n++; if(performance.now()-t0<3000) requestAnimationFrame(f); else r((n/3).toFixed(1)+' fps');} requestAnimationFrame(f);});})()"],["shot","shots/run3.png",".iso-figure:nth-of-type(1) .iso-plate",1.3]]

@@ -1,0 +1,1 @@
+[["wait",800],["click",".fk-btn[data-act=\"start\"]"],["wait",4200],["click",".fk-btn[data-act=\"start\"]"],["shot","shots/runZoom.png",".iso-figure:nth-of-type(1) .iso-plate",4,[330,230,320,220]]]

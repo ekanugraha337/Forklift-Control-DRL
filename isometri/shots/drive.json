@@ -1,0 +1,9 @@
+[["wait",1200],
+ ["click",".fk-btn[data-act=\"start\"]"],
+ ["wait",5000],
+ ["shot","shots/run5.png",".iso-figure:nth-of-type(1) .iso-plate",1.3],
+ ["eval","(()=>{const t=performance.now();for(let i=0;i<20;i++){document.querySelector('.fk-btn[data-act=\"start\"]').click();document.querySelector('.fk-btn[data-act=\"start\"]').click();}return 'ok'})()"],
+ ["click",".fk-btn[data-act=\"speed\"]"],["click",".fk-btn[data-act=\"speed\"]"],
+ ["wait",6000],
+ ["shot","shots/run29.png",".iso-figure:nth-of-type(1) .iso-plate",1.3],
+ ["eval","document.querySelector('[data-readout]').textContent"]]
