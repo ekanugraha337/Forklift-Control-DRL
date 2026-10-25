@@ -1,5 +1,12 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:system",
     "code-runner.runInTerminal": true,
-    "code-runner.fileDirectoryAsCwd": true
+    "code-runner.fileDirectoryAsCwd": true,
+    "python-envs.pythonProjects": [
+        {
+            "path": ".",
+            "envManager": "ms-python.python:system",
+            "packageManager": "ms-python.python:pip"
+        }
+    ]
 }
