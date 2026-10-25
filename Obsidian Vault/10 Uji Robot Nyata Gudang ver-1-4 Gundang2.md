@@ -1,6 +1,6 @@
 # Uji robot nyata ver-1-4: Hybrid A\* + RS vs DQfD murni (peta Gudang2)
 
-Tanggal: 2026-10-24 · Branch `ver-1-4` · Dua robot (ID 01, ID 02) bergerak bersamaan · Hasil: `uji_nyata/20261024_082405_Gudang2` · Uji sebelumnya: [[Uji Robot Nyata Gudang ver-1-4 Gundang1]] · Perbandingan model: [[Perbandingan Hybrid A-star RS vs DQfD]]
+Tanggal: 2026-10-24 · Branch `ver-1-4` · Dua robot (ID 01, ID 02) bergerak bersamaan · Hasil: `uji_nyata/20261024_082405_Gudang2` · Uji sebelumnya: [[09 Uji Robot Nyata Gudang ver-1-4 Gundang1|Uji Robot Nyata Gudang ver-1-4 Gundang1]] · Perbandingan model: [[08 Perbandingan Hybrid A-star RS vs DQfD|Perbandingan Hybrid A-star RS vs DQfD]]
 
 Gudang2 adalah peta dan skenario yang **sengaja dirancang** supaya DQfD murni merencanakan lebih cepat daripada Hybrid A\*. Di peta Gudang (uji sebelumnya) yang terjadi sebaliknya: Hybrid A\* sekitar 30 ms, DQfD sekitar 148 ms. Uji ini memeriksa apakah rancangan itu berlaku di robot nyata.
 

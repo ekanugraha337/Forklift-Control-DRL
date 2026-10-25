@@ -1,8 +1,8 @@
 # Uji robot nyata ver-1-4: Hybrid A\* + RS vs DQfD murni (peta Gudang)
 
-Tanggal: 2026-10-24 · Branch `ver-1-4` · Dua robot (ID 01, ID 02) bergerak bersamaan · Hasil: `uji_nyata/20261024_073221_Gudang` · Perbandingan model: [[Perbandingan Hybrid A-star RS vs DQfD]] · Latar: [[Deep Reinforcement Learning]]
+Tanggal: 2026-10-24 · Branch `ver-1-4` · Dua robot (ID 01, ID 02) bergerak bersamaan · Hasil: `uji_nyata/20261024_073221_Gudang` · Perbandingan model: [[08 Perbandingan Hybrid A-star RS vs DQfD|Perbandingan Hybrid A-star RS vs DQfD]] · Latar: [[06 Deep Reinforcement Learning|Deep Reinforcement Learning]]
 
-Uji robot nyata pertama untuk ver-1-4. Uji ini menjawab butir 2 "Langkah berikutnya" di [[Perbandingan Hybrid A-star RS vs DQfD]].
+Uji robot nyata pertama untuk ver-1-4. Uji ini menjawab butir 2 "Langkah berikutnya" di [[08 Perbandingan Hybrid A-star RS vs DQfD|Perbandingan Hybrid A-star RS vs DQfD]].
 
 > [!summary] Ringkasan
 > - **Keandalan setara**: 11/11 percobaan, pasangan robot tiba semua, 0 estop.

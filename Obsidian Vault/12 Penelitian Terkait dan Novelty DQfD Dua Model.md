@@ -1,6 +1,6 @@
 # Penelitian terkait dan novelty DQfD dua model
 
-Tanggal: 2026-10-25 · Branch `ver-1-4` · Terkait: [[Struktur DQfD Full]], [[Perbandingan Hybrid A-star RS vs DQfD]], [[Perbandingan Uji Robot Nyata Gudang1 vs Gudang2]]
+Tanggal: 2026-10-25 · Branch `ver-1-4` · Terkait: [[07 Struktur DQfD Full|Struktur DQfD Full]], [[08 Perbandingan Hybrid A-star RS vs DQfD|Perbandingan Hybrid A-star RS vs DQfD]], [[11 Perbandingan Uji Robot Nyata Gudang1 vs Gudang2|Perbandingan Uji Robot Nyata Gudang1 vs Gudang2]]
 
 Pertanyaan yang dijawab: apakah sudah ada riset yang membuat model DQfD dari Hybrid A\* (model jauh) dan model DQfD dari RS (model dekat)? Apa novelty kita dibanding riset yang ada?
 

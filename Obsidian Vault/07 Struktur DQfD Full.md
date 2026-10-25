@@ -1,4 +1,4 @@
-Struktur **DQfD dua model per robot**, versi aksi 6, branch `ver-1-4`, 2026-10-23. Konsep dasar DQfD ada di [[Deep Reinforcement Learning]].
+Struktur **DQfD dua model per robot**, versi aksi 6, branch `ver-1-4`, 2026-10-23. Konsep dasar DQfD ada di [[06 Deep Reinforcement Learning|Deep Reinforcement Learning]].
 
 > [!note] Inti
 > - **Hybrid A\* + Reeds-Shepp adalah demonstrator saat latihan.**
@@ -399,7 +399,7 @@ Checkpoint model jauh dipilih dengan metode gabungan di rute validasi (bukan set
 
 **Rincian waktu** (tiga peta, rata-rata per rute): sinar model jauh 50–54%, primitif 20–23%, jaringan 9%, pendaratan model dekat 5–8%.
 
-Perbandingan dengan branch RS-optimize, tabel navigasi simulasi lengkap, dan rincian waktu per bagian: [[Perbandingan Hybrid A-star RS vs DQfD]].
+Perbandingan dengan branch RS-optimize, tabel navigasi simulasi lengkap, dan rincian waktu per bagian: [[08 Perbandingan Hybrid A-star RS vs DQfD|Perbandingan Hybrid A-star RS vs DQfD]].
 
 ## 14. Keputusan terbuka
 

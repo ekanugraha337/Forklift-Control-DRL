@@ -1,6 +1,6 @@
 # Perbandingan uji robot nyata ver-1-4: Gudang (1) vs Gudang2
 
-Tanggal: 2026-10-24 · Branch `ver-1-4` · Uji: [[Uji Robot Nyata Gudang ver-1-4 Gundang1]] (`uji_nyata/20261024_073221_Gudang`) dan [[Uji Robot Nyata Gudang ver-1-4 Gundang2]] (`uji_nyata/20261024_082405_Gudang2`) · Model: [[Perbandingan Hybrid A-star RS vs DQfD]]
+Tanggal: 2026-10-24 · Branch `ver-1-4` · Uji: [[09 Uji Robot Nyata Gudang ver-1-4 Gundang1|Uji Robot Nyata Gudang ver-1-4 Gundang1]] (`uji_nyata/20261024_073221_Gudang`) dan [[10 Uji Robot Nyata Gudang ver-1-4 Gundang2|Uji Robot Nyata Gudang ver-1-4 Gundang2]] (`uji_nyata/20261024_082405_Gudang2`) · Model: [[08 Perbandingan Hybrid A-star RS vs DQfD|Perbandingan Hybrid A-star RS vs DQfD]]
 
 Dua uji, dua robot, perencana dan pengaturan yang sama (`astar` vs `dqfd-murni`, margin 8 cm, pure pursuit 20 Hz, pulang dengan Hybrid A\*). Yang berbeda hanya peta dan skenario. Hasilnya berbalik:
 - di **Gudang**, Hybrid A\* + RS merencanakan sekitar 5× lebih cepat;
@@ -62,7 +62,7 @@ Rencana pertama dari kedua uji diulang offline (jalur cocok dengan rekaman: 22/2
 | Gudang2 S3 | 680 (613–871) | 0,14 | 18 (18–25) | 0,91 | 98 ms | 17 ms |
 
 - **Satu ekspansi Hybrid A\* murah** (sekitar 0,15 ms): 14 primitif gerak, cek badan, dan nilai heuristik dari tabel Dijkstra.
-- **Satu langkah DQfD sekitar 7× lebih mahal** (0,9–1,3 ms). Isinya: observasi dengan 32 sinar jarak, cek badan 14 primitif untuk mask, dan satu forward jaringan. Sinar adalah porsi terbesar (sekitar 50% waktu DQfD, lihat [[Perbandingan Hybrid A-star RS vs DQfD]] bagian 5).
+- **Satu langkah DQfD sekitar 7× lebih mahal** (0,9–1,3 ms). Isinya: observasi dengan 32 sinar jarak, cek badan 14 primitif untuk mask, dan satu forward jaringan. Sinar adalah porsi terbesar (sekitar 50% waktu DQfD, lihat [[08 Perbandingan Hybrid A-star RS vs DQfD|Perbandingan Hybrid A-star RS vs DQfD]] bagian 5).
 - Karena itu, yang menentukan pemenang adalah **jumlahnya**:
   - waktu A\* ≈ 0,15 ms × ekspansi;
   - waktu DQfD ≈ 1 ms × langkah.

@@ -1,6 +1,6 @@
 # Perbandingan DQfD: branch RS-optimize vs ver-1-4
 
-Tanggal: 2026-10-23 · Branch `RS-optimize` (diukur 2026-10-02/03) dan `ver-1-4` (diukur 2026-10-23) · Struktur model ver-1-4: [[Struktur DQfD Full]]
+Tanggal: 2026-10-23 · Branch `RS-optimize` (diukur 2026-10-02/03) dan `ver-1-4` (diukur 2026-10-23) · Struktur model ver-1-4: [[07 Struktur DQfD Full|Struktur DQfD Full]]
 
 Catatan ini hanya membandingkan perencana DQfD dari kedua branch. Hybrid A\* + Reeds-Shepp muncul sebagai pembanding yang **diukur di branch yang sama**, karena kedua branch memakainya sebagai demonstrator dan acuan.
 
@@ -157,9 +157,9 @@ Pembagian dua model di ver-1-4 membuat pendaratan murah dan eksak. Sisa waktu DQ
 
 | Angka | Sumber |
 |---|---|
-| RS-optimize: set uji, uji jalan tertutup, robot nyata, skenario negatif | Branch `RS-optimize`, `Obsidian Vault/Deep Reinforcement Learning.md`, bagian "Branch RS-optimize" dan "Kesimpulan umum" (2026-10-02/03) |
+| RS-optimize: set uji, uji jalan tertutup, robot nyata, skenario negatif | Branch `RS-optimize`, `Obsidian Vault/06 Deep Reinforcement Learning.md`, bagian "Branch RS-optimize" dan "Kesimpulan umum" (2026-10-02/03) |
 | RS-optimize: waktu per peta dan per bagian | `model_dqn/rincian_komputasi.json` (2026-10-02, `drl/rincian_komputasi.py` di branch RS-optimize) |
 | ver-1-4: set uji | `model_dqn/evaluasi_id0N.json` (2026-10-23) |
 | ver-1-4: waktu per peta dan per bagian | profil dengan kategori yang sama dengan `rincian_komputasi.py`, skrip sementara di luar repo (2026-10-23) |
 | ver-1-4: navigasi simulasi | `model_dqn/pose_akhir/pose_akhir_id0N.json` (`python -m drl.uji_pose_akhir --id N`) |
-| Struktur model ver-1-4 | [[Struktur DQfD Full]] |
+| Struktur model ver-1-4 | [[07 Struktur DQfD Full|Struktur DQfD Full]] |

@@ -892,4 +892,4 @@ Kegagalan satu robot dialami **kedua** perencana: ID 02 Rumah2 #2719 (berhenti "
 
 Polanya sama dengan model lama. Hybrid A\* lebih cepat secara total, sedangkan DQfD unggul di median Rumah (118 vs 140 ms) dan p90 Rumah2. Selisih total di Rumah terutama berasal dari rute yang gagal, karena setiap kegagalan menghabiskan batas waktu pada kedua margin.
 
-Terkait: [[Model Robot ID 01]], [[Model Robot ID 02]], [[Multi Robot Navigation and Control]].
+Terkait: [[03 Model Robot ID 01|Model Robot ID 01]], [[04 Model Robot ID 02|Model Robot ID 02]], [[05 Multi Robot Navigation and Control|Multi Robot Navigation and Control]].

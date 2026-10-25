@@ -2,7 +2,7 @@
 // perencana dqfd-murni. Semua angka dibaca dari data uji nyata:
 //   Forklift Robot Program/uji_nyata/20261024_073221_Gudang/hasil.jsonl
 //   Camera/peta_constraint/Gudang.json
-// Geometri robot dari "Obsidian Vault/Model Robot ID 01.md" (sama dengan konfig.py).
+// Geometri robot dari "Obsidian Vault/03 Model Robot ID 01.md" (sama dengan konfig.py).
 //
 //   node isometri/build.mjs           -> isometri/s1_gudang_dqfd.html (gelap)
 //   node isometri/build.mjs --light   -> isometri/s1_gudang_dqfd-light.html

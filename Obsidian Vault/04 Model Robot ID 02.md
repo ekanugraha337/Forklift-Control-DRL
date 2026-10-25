@@ -30,7 +30,7 @@ Tinggi AprilTag wajib diisi ke kalibrasi kamera, kalau tidak setiap posisi cm
 meleset makin jauh dari titik tepat di bawah kamera :
 	python cctv_lurus.py tag --tinggi-tag 16.5
 
-Geometri di atas **sama persis** dengan [[Model Robot ID 01]]. Tabel `ROBOT` di
+Geometri di atas **sama persis** dengan [[03 Model Robot ID 01|Model Robot ID 01]]. Tabel `ROBOT` di
 `konfig.py` menyimpan lima angka per robot: ID AprilTag, titik lurus kemudi,
 skala langkah, akselerasi, dan sudut kemudi maksimum. Setelah diukur, **yang
 benar-benar berbeda ada tiga**:
@@ -473,7 +473,7 @@ ke sepertiganya), dengan telemetri firmware direkam:
 
 ### 6a. Terhadap robot nyata: **belum diuji**
 
-Belum ada rekaman navigasi ID 02. Validasi ramalan di [[Model Robot ID 01]]
+Belum ada rekaman navigasi ID 02. Validasi ramalan di [[03 Model Robot ID 01|Model Robot ID 01]]
 bagian 6a-6c (horizon 0.4 s, p95 0.41 cm) dilakukan di ID 01. Parameter model
 linear kedua robot kini sama, jadi untuk belokan di bawah 20° hasilnya
 **kemungkinan** berlaku juga di sini. Tapi itu belum dibuktikan, dan pada
