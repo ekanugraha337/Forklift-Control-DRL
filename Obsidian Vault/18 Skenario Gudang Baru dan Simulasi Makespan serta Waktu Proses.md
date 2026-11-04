@@ -21,7 +21,7 @@ Semua angka diukur dengan metode di bagian 2: tujuan kedua robot diberikan bersa
 >   - di simulasi: S1 (robot 01 dua kali, robot 02 sekali) dan S4 (robot 02 dua kali);
 >   - di robot nyata: S1 dan S3 (robot 02, masing-masing sekali).
 >
->   DQfD tidak pernah membuat mundur-maju di tengah jalan. DQfD kalah sekali, di S3 simulasi, karena busurnya mengitari Z8 terlalu lebar. **Di robot nyata DQfD lebih cepat di keempat skenario.** Kapan A\* membuat mundur-maju berubah antar-percobaan, mengikuti pose awal hasil pulang (bagian 7.4).
+>   DQfD tidak pernah membuat mundur-maju di tengah jalan. DQfD kalah sekali, di S3 simulasi, karena busurnya mengitari Z8 terlalu lebar. **Di robot nyata DQfD lebih cepat di keempat skenario.** Kapan A\* membuat mundur-maju berubah antar-percobaan, mengikuti pose awal hasil pulang (bagian 7.5).
 > - **Waktu proses per rencana** (16 rencana per perencana; jam dinding = CPU, selisih ≤ 0,4 ms):
 >
 >   | | Simulasi: Hybrid A\* + RS / DQfD | Robot nyata: Hybrid A\* + RS / DQfD |
@@ -32,6 +32,14 @@ Semua angka diukur dengan metode di bagian 2: tujuan kedua robot diberikan bersa
 >   | Penyelesaian dekat: RS / model dekat | **0,40** / 0,49 ms | **0,34** / 0,64 ms |
 >
 > - **Waktu proses di robot nyata setara dengan simulasi** (selisih ≤ 15%), karena perencana berjalan di proses sendiri. Waktu proses ≤ 0,8% dari makespan, jadi makespan ditentukan oleh jalur, bukan oleh komputasi.
+> - **Galat pose akhir** (16 pose per perencana; posisi / arah, rata-rata):
+>
+>   | | Hybrid A\* + RS | DQfD murni |
+>   |---|---|---|
+>   | Simulasi | 2,73 cm / 4,42° (maks 4,25 cm / 8,96°) | 2,53 cm / 4,51° (maks 4,98 cm / 9,85°) |
+>   | Robot nyata | 2,51 cm / 5,07° (maks 3,84 cm / 9,28°) | 2,12 cm / 4,64° (maks 3,61 cm / 10,47°) |
+>
+>   Kedua perencana setara presisinya. Galat arah terbesar di S3–S4 (tujuan sesaat setelah putaran di ujung dinding). Di robot nyata, robot 02 miring ±5° dan bergeser ±2 cm secara sistematis, sedangkan robot 01 hampir tepat (bagian 7.3).
 > - **Tanpa interaksi antar-robot** di kedua uji: waktu menunggu 0 s, minggir 0 kali. Jarak badan terdekat kedua robot 30,5–71,3 cm di simulasi dan 18,5–51,6 cm di robot nyata.
 > - **n = 2 per sel.** Belum cukup untuk uji statistik.
 
@@ -182,6 +190,39 @@ Run `20261105_002833_Gudang_sim`. 16/16 percobaan selesai, semua robot tiba. Tid
 - **S4:** robot 01 (mengitari Z7) setara. A\* robot 02 membuat **manuver mundur-maju** di sekitar (160, 70) sebelum mengitari Z5 (190–199 cm, 17,6 s). DQfD menempuh busur mulus (159–165 cm, 10,2–11,3 s).
 - **Galat arah akhir di S3–S4 lebih besar** (sampai 9–10°, di S1–S2 ≤ 4,1°) untuk kedua perencana. Dugaan penyebabnya: di S3 dan S4 tujuan tercapai sesaat setelah putaran mengitari ujung dinding, sehingga bagian lurus terakhir pendek (10–15 cm di lorong atas, dari ujung dinding y 50,5–55 ke tujuan y 40; 25–36 cm di lorong bawah) dan pelacak tidak sempat meluruskan arah sepenuhnya. Hubungan ini belum diukur tersendiri.
 
+### 3.1 Galat pose akhir (simulasi)
+
+Pose akhir diukur sebagai rata-rata 1 s setelah robot berhenti. Galatnya dihitung terhadap pose tujuan dan diuraikan menjadi:
+- **posisi**: jarak titik acuan ke tujuan;
+- **arah**: selisih yaw mutlak;
+- **maju**: komponen searah arah hadap tujuan. Nilai **+** berarti melewati tujuan, **−** berarti berhenti sebelum tujuan;
+- **samping**: komponen tegak lurus. Tandanya bergantung pada arah belokan skenario, jadi yang dibandingkan magnitudonya.
+
+| Skenario | Robot | Hybrid A\* + RS: posisi (ulangan 1 / 2) | Hybrid A\* + RS: arah | DQfD murni: posisi | DQfD murni: arah |
+|---|---|---:|---:|---:|---:|
+| S1 | 01 | 2,96 / 2,96 cm | 3,21 / 3,05° | 2,76 / 2,58 cm | 1,73 / 1,76° |
+| S1 | 02 | 2,44 / 1,59 cm | 3,18 / 4,11° | 1,31 / 1,46 cm | 3,94 / 4,13° |
+| S2 | 01 | 2,40 / 2,71 cm | 2,70 / 2,85° | 2,72 / 2,60 cm | 2,74 / 2,71° |
+| S2 | 02 | 2,84 / 2,86 cm | 3,14 / 3,12° | 2,93 / 2,67 cm | 3,20 / 3,12° |
+| S3 | 01 | 3,76 / 4,25 cm | 8,67 / 8,96° | 3,90 / 1,99 cm | 8,53 / 4,82° |
+| S3 | 02 | 1,55 / 1,87 cm | 3,90 / 4,58° | 2,17 / 1,89 cm | 4,32 / 4,41° |
+| S4 | 01 | 2,72 / 3,19 cm | 6,60 / 7,39° | 2,32 / 2,25 cm | 6,38 / 6,12° |
+| S4 | 02 | 2,74 / 2,83 cm | 2,52 / 2,67° | 4,98 / 1,96 cm | 9,85 / 4,37° |
+
+| Ringkasan (16 pose per perencana) | Hybrid A\* + RS | DQfD murni |
+|---|---:|---:|
+| Galat posisi: rata-rata / median / maks | 2,73 / 2,79 / 4,25 cm | **2,53** / 2,45 / 4,98 cm |
+| Galat arah: rata-rata / median / maks | **4,42** / 3,20 / 8,96° | 4,51 / 4,23 / 9,85° |
+| Komponen maju: rata-rata \|maju\| (rata-rata bertanda) | 1,92 (−1,11) cm | 1,46 (−0,65) cm |
+| Komponen samping: rata-rata \|samping\| / maks | 1,67 / 3,40 cm | 1,75 / 3,65 cm |
+| Galat posisi per skenario, rata-rata S1 / S2 / S3 / S4 | 2,48 / 2,70 / 2,86 / 2,87 cm | 2,03 / 2,73 / 2,49 / 2,88 cm |
+| Galat arah per skenario, rata-rata S1 / S2 / S3 / S4 | 3,39 / 2,95 / 6,53 / 4,80° | 2,89 / 2,94 / 5,52 / 6,68° |
+
+- **Kedua perencana setara**: posisi rata-rata 2,5–2,7 cm, arah 4,4–4,5°. Semua pose akhir ≤ 5 cm dari tujuan.
+- **Di S1–S2 robot berhenti sedikit sebelum tujuan.** Komponen maju negatif di semua 16 pose S1–S2 (−0,3 sampai −2,8 cm); di S2 selalu −2,2 sampai −2,8 cm, untuk kedua perencana. Di S3–S4 robot 01 justru sering melewati tujuan (maju sampai +2,7 cm).
+- **Galat arah terbesar di S3–S4 robot 01** (rata-rata 7,2°, sampai 9,0°), yaitu tujuan yang dicapai sesaat setelah putaran di ujung dinding.
+- Di simulasi kedua robot berperilaku mirip. Di S1–S2, galat arah robot 01 rata-rata 2,6° dan robot 02 3,5°.
+
 ## 4. Waktu proses per rencana
 
 Setiap robot merencanakan **satu kali** per percobaan, jadi ada 16 rencana per perencana.
@@ -306,7 +347,42 @@ Ganti arah sama untuk kedua perencana: 2 di S1, S3, dan S4, dan 3 di S2. Satu-sa
 
 - **S4:** jalur A\* robot 02 kali ini **mulus** (154–158 cm; di simulasi 190–199 cm dengan mundur-maju), setara DQfD (159–160 cm). Selisih makespan hanya 5%.
 
-### 7.3 Waktu proses per rencana
+### 7.3 Galat pose akhir (robot nyata)
+
+Cara ukur dan uraiannya sama dengan bagian 3.1. Pose akhir adalah rata-rata 1 s pose kamera setelah robot berhenti.
+
+| Skenario | Robot | Hybrid A\* + RS: posisi (ulangan 1 / 2) | Hybrid A\* + RS: arah | DQfD murni: posisi | DQfD murni: arah |
+|---|---|---:|---:|---:|---:|
+| S1 | 01 | 0,58 / 2,61 cm | 1,48 / 6,43° | 1,17 / 0,08 cm | 0,05 / 0,25° |
+| S1 | 02 | 3,84 / 2,36 cm | 6,50 / 4,99° | 2,96 / 0,57 cm | 8,42 / 0,09° |
+| S2 | 01 | 1,69 / 2,41 cm | 0,64 / 0,51° | 2,35 / 1,61 cm | 0,12 / 0,14° |
+| S2 | 02 | 3,15 / 2,90 cm | 4,90 / 5,86° | 2,74 / 2,22 cm | 5,15 / 5,27° |
+| S3 | 01 | 3,62 / 2,96 cm | 9,28 / 8,49° | 3,14 / 3,61 cm | 10,47 / 9,99° |
+| S3 | 02 | 2,66 / 2,82 cm | 7,08 / 5,17° | 2,16 / 1,95 cm | 4,56 / 4,50° |
+| S4 | 01 | 2,01 / 2,53 cm | 4,23 / 6,90° | 1,22 / 3,21 cm | 5,09 / 9,12° |
+| S4 | 02 | 1,95 / 2,04 cm | 4,62 / 4,06° | 2,25 / 2,70 cm | 4,81 / 6,25° |
+
+| Ringkasan (16 pose per perencana) | Hybrid A\* + RS | DQfD murni |
+|---|---:|---:|
+| Galat posisi: rata-rata / median / maks | 2,51 / 2,57 / 3,84 cm | **2,12** / 2,23 / 3,61 cm |
+| Galat arah: rata-rata / median / maks | 5,07 / 5,08 / 9,28° | **4,64** / 4,95 / 10,47° |
+| Komponen maju: rata-rata \|maju\| (rata-rata bertanda) | 1,49 (−0,18) cm | 1,29 (+0,05) cm |
+| Komponen samping: rata-rata \|samping\| / maks | 1,86 / 2,78 cm | 1,43 / 2,96 cm |
+| Galat posisi per skenario, rata-rata S1 / S2 / S3 / S4 | 2,35 / 2,54 / 3,02 / 2,13 cm | 1,19 / 2,23 / 2,72 / 2,34 cm |
+| Galat arah per skenario, rata-rata S1 / S2 / S3 / S4 | 4,85 / 2,98 / 7,50 / 4,96° | 2,20 / 2,67 / 7,38 / 6,32° |
+
+| S1–S2 (8 pose per robot, kedua perencana) | Robot 01 | Robot 02 |
+|---|---:|---:|
+| Galat arah: rata-rata / median | 1,20 / 0,38° | 5,15 / 5,21° |
+| Komponen samping: rata-rata \|samping\| | 0,41 cm | 2,13 cm |
+| Galat posisi: rata-rata | 1,56 cm | 2,59 cm |
+
+- **DQfD sedikit lebih presisi** (posisi 2,12 vs 2,51 cm, arah 4,64 vs 5,07° rata-rata), tetapi selisihnya kecil dibanding sebaran antar-percobaan. Semua pose akhir ≤ 3,9 cm dari tujuan.
+- **Robot 02 punya galat sistematis.** Di S1–S2, robot 01 tiba hampir tepat (arah median 0,4°, samping 0,4 cm), sedangkan robot 02 miring ±5° dan bergeser ±2 cm ke samping. Ini terjadi dengan kedua perencana, kecuali satu percobaan DQfD (0,09°). Di simulasi kedua robot mirip (bagian 3.1), jadi selisih ini sifat robot 02 sendiri. Hasil ini sejalan dengan catatan 09 (ID 02 meleset 5–8° arah hadap).
+- **S2 berhenti sebelum tujuan** di robot nyata juga: komponen maju −1,5 sampai −2,4 cm di 8 pose, mirip simulasi (−2,2 sampai −2,8 cm).
+- **Galat arah terbesar tetap di S3–S4 robot 01** (rata-rata 8,0°, sampai 10,5°), sama polanya dengan simulasi.
+
+### 7.4 Waktu proses per rencana
 
 | Bagian | Hybrid A\* + RS | DQfD murni | Rasio |
 |---|---:|---:|---:|
@@ -328,7 +404,7 @@ Ganti arah sama untuk kedua perencana: 2 di S1, S3, dan S4, dan 3 di S2. Satu-sa
 - **Rencana terlama tetap A\* robot 02 di S3** (mengitari Z8): 47,9 dan 58,8 ms. DQfD untuk kasus yang sama 10,0–10,7 ms. Rencana terlama itu ≤ 0,6% dari makespan.
 - Robot 01 mulai merencana +0,8–2,2 ms setelah permintaan, robot 02 +1,4–3,0 ms.
 
-### 7.4 Simulasi vs robot nyata
+### 7.5 Simulasi vs robot nyata
 
 | | Simulasi: Hybrid A\* + RS / DQfD | Robot nyata: Hybrid A\* + RS / DQfD |
 |---|---|---|
@@ -340,6 +416,9 @@ Ganti arah sama untuk kedua perencana: 2 di S1, S3, dan S4, dan 3 di S2. Satu-sa
 | Waktu proses, rata-rata | 26,25 / **10,52 ms** | 24,47 / **9,24 ms** |
 | Pencarian jauh: Hybrid A\* / model jauh | 25,78 / **9,94 ms** | 24,06 / **8,51 ms** |
 | Penyelesaian dekat: RS / model dekat | **0,40** / 0,49 ms | **0,34** / 0,64 ms |
+| Galat pose akhir, posisi: rata-rata (maks) | 2,73 (4,25) / **2,53** (4,98) cm | 2,51 (3,84) / **2,12** (3,61) cm |
+| Galat pose akhir, arah: rata-rata (maks) | **4,42** (8,96) / 4,51 (9,85)° | 5,07 (9,28) / **4,64** (10,47)° |
+| Galat arah S1–S2, robot 01 / robot 02 (rata-rata) | 2,6 / 3,5° | 1,2 / 5,2° |
 | Galat awal | 0–3,9 cm | 0,9–3,9 cm |
 | Jarak badan terdekat kedua robot | 30,5–71,3 cm | 18,5–51,6 cm |
 
@@ -357,8 +436,9 @@ Ganti arah sama untuk kedua perencana: 2 di S1, S3, dan S4, dan 3 di S2. Satu-sa
    Jalur DQfD lebih konsisten. Contohnya S1 robot 01 157,8 cm (simulasi 156,5 cm), S4 robot 02 159–160 cm (simulasi 159–165 cm), dan S3 robot 02 181–193 cm di kedua uji.
 3. **S3 berbalik.** Di simulasi A\* lebih cepat (10,82 vs 11,88 s), sedangkan di robot nyata DQfD lebih cepat (11,60 vs 15,22 s), karena satu mundur-maju A\* di ulangan 2. Dengan n = 2, satu percobaan seperti itu menggeser rata-rata sampai 3,7 s.
 4. **S2 lebih lambat di robot nyata** (A\* +4,0 s, DQfD +1,1 s) karena robot 02 lebih lambat daripada robot 01 untuk jalur yang hampir sama panjang. Jalur yang sama di simulasi tidak menunjukkan perbedaan antar-robot, jadi ini kemungkinan sifat robot 02. Ini sejalan dengan galat arah akhir robot 02 di S1–S2, yaitu 4,9–8,4° dengan kedua perencana (kecuali satu percobaan 0,1°). Galat robot 01 umumnya ≤ 1,5°. Catatan 09 juga mencatat ID 02 meleset 5–8° arah hadap.
+5. **Galat pose akhir di robot nyata setara dengan simulasi** (bagian 3.1 dan 7.3): posisi 2,1–2,5 vs 2,5–2,7 cm, arah 4,6–5,1 vs 4,4–4,5° rata-rata. Polanya juga sama: arah terbesar di S3–S4 robot 01, dan S2 berhenti ±2 cm sebelum tujuan. Bedanya, robot 01 nyata lebih presisi daripada di simulasi (S1–S2: 1,2 vs 2,6°), sedangkan robot 02 nyata kurang presisi (5,2 vs 3,5°).
 
-### 7.5 Kesimpulan uji nyata
+### 7.6 Kesimpulan uji nyata
 
 1. **DQfD murni lebih cepat di keempat skenario di robot nyata**: S1 −26%, S2 −10%, S3 −24%, S4 −5%, total **−16%**.
 2. **Waktu proses DQfD 2,6× lebih cepat rata-rata** (2,1× median), terutama di model jauh vs Hybrid A\* (2,8×). RS tetap lebih cepat daripada model dekat, tetapi keduanya < 1 ms.
@@ -367,12 +447,13 @@ Ganti arah sama untuk kedua perencana: 2 di S1, S3, dan S4, dan 3 di S2. Satu-sa
 > [!warning] Batasan uji nyata
 > - **n = 2 per sel, satu sesi.** Satu manuver mundur-maju A\* menggeser rata-rata skenario sampai 3,7 s. Untuk klaim per skenario dibutuhkan lebih banyak ulangan.
 > - **Galat awal 0,9–3,9 cm**, berbeda di setiap percobaan, dan pilihan jalur A\* peka terhadap selisih ini.
-> - **Robot 02 lebih lambat dan galat arahnya lebih besar** daripada robot 01 (bagian 7.4), terlepas dari perencananya.
+> - **Robot 02 lebih lambat dan galat arahnya lebih besar** daripada robot 01 (bagian 7.5), terlepas dari perencananya.
 > - **Jarak ke zona sampai 5,4 cm** (A\* S2 robot 02), di bawah margin rencana 8 cm, akibat simpangan pelacakan di robot nyata.
 
-### 7.6 Sumber angka
+### 7.7 Sumber angka
 
 | Angka | Sumber |
 |---|---|
 | Semua angka bagian 7 | `Forklift Robot Program/uji_nyata/20261105_010053_Gudang/` (`hasil.jsonl`, `lintasan.csv`, `ringkasan.json`, `lintasan_S1.png` – `lintasan_S4.png`), direkap dengan skrip sementara `analisis_u2.py` |
 | Pulang, keterlihatan tag, celah loop | `hasil.jsonl` (kolom `pulang`) dan `lintasan.csv` (kolom `terlihat`, `diramalkan`, `t`), dihitung dengan skrip sementara |
+| Galat pose akhir (bagian 3.1 dan 7.3) | kolom `galat_cm`, `galat_deg`, `galat_maju_cm`, `galat_samping_cm` di `hasil.jsonl` kedua run (pose akhir = rata-rata 1 s setelah berhenti, `_galat` di `drl/uji_robot_nyata.py`), direkap dengan skrip sementara |
