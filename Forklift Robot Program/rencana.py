@@ -43,6 +43,40 @@ import area_constraint as AC          # noqa: E402
 JENIS_PERENCANA = ("astar", "dqfd", "dqfd-murni")
 
 
+def _buat_jam_cpu_thread():
+    """Fungsi -> detik CPU yang sudah dipakai thread PEMANGGIL.
+
+    time.thread_time() di Windows memakai GetThreadTimes, yang hanya naik per
+    detak penjadwal (15,625 ms) - lebih kasar daripada satu rencana (5-30 ms).
+    Di Windows dipakai QueryThreadCycleTime (siklus CPU thread, resolusi tinggi),
+    dikonversi ke detik dengan frekuensi yang dikalibrasi sekali terhadap
+    perf_counter (20 ms, saat modul dimuat). Di sistem lain thread_time sudah
+    berresolusi nanodetik.
+    """
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentThread.restype = ctypes.c_void_p
+        nilai = ctypes.c_ulonglong()
+
+        def siklus():
+            k32.QueryThreadCycleTime(ctypes.c_void_p(k32.GetCurrentThread()), ctypes.byref(nilai))
+            return nilai.value
+
+        c0, t0 = siklus(), time.perf_counter()
+        while time.perf_counter() - t0 < 0.02:
+            pass
+        hz = (siklus() - c0) / (time.perf_counter() - t0)
+        if hz <= 0:
+            raise OSError("frekuensi siklus tidak valid")
+        return lambda: siklus() / hz
+    except (AttributeError, OSError):
+        return time.thread_time
+
+
+jam_cpu_thread = _buat_jam_cpu_thread()
+
+
 def buat_kendaraan(arena, margin_cm=None, max_steer_rad=None):
     """VehicleModel dengan seluruh panjang dinyatakan dalam SEL grid.
 
@@ -259,6 +293,9 @@ class Perencana:
         dalam SEL - format asli perencana, langsung bisa dipakai pelacak.
         """
         t0 = time.time()
+        # Waktu CPU thread ini saja: tidak memuat thread lain (loop kendali,
+        # perencana robot lain) yang berebut GIL selama rencana berjalan.
+        c0 = jam_cpu_thread()
         self._rincian = {}
         omap = self.peta_dengan(rintangan_cm)
         jalur = None
@@ -270,6 +307,7 @@ class Perencana:
                 break
 
         dt = time.time() - t0
+        cpu = jam_cpu_thread() - c0
         # Sisa di luar perencana (peta rintangan sementara, pemeriksaan awal).
         rincian = dict(self._rincian, lain=max(0.0, dt - sum(self._rincian.values())))
         self.stats = dict(self.planner.last_stats or {})
@@ -279,7 +317,7 @@ class Perencana:
         # kali lalu memilih salah satu (navigasi.py, pencarian minggir) harus
         # memakai kendaraan milik jalur yang dipilih, bukan kendaraan_dipakai
         # dari percobaan TERAKHIR.
-        return jalur, {"waktu_s": dt, "titik": len(jalur) if jalur else 0,
+        return jalur, {"waktu_s": dt, "cpu_s": cpu,"titik": len(jalur) if jalur else 0,
                        "panjang_cm": self.panjang_cm(jalur) if jalur else 0.0,
                        "margin_cm": self.margin_dipakai,
                        "margin_turun": bool(jalur) and self.margin_dipakai < konfig.SAFETY_MARGIN_CM - 0.01,

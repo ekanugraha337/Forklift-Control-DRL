@@ -76,6 +76,9 @@ WARNA = {SIAP: (200, 200, 200), MERENCANA: (0, 255, 255), MELACAK: (0, 255, 0),
 # Warna penanda tiap robot (BGR) di tampilan dua robot.
 WARNA_ID = {1: (255, 170, 0), 2: (255, 0, 200)}
 
+# Satu perencanaan pada satu waktu, untuk semua robot (lihat Unit.minta_rencana).
+KUNCI_RENCANA = threading.Lock()
+
 # Kolom "diramalkan" ditambahkan 2026-09-27. Tanpanya validasi_nyata.py tidak
 # bisa membedakan pose UKUR dari pose RAMALAN: "terlihat" bernilai 1 untuk
 # keduanya, jadi sebagian baris acuan bisa saja keluaran model itu sendiri - dan
@@ -214,12 +217,18 @@ class Unit:
         if pakai:
             self.robot.estop(alasan)
 
-    def terima_tujuan(self, baru):
+    def terima_tujuan(self, baru, tunda=False):
         """Terima atau tolak tujuan yang baru diklik.
 
         Ditolak DI SINI, sebelum robot berangkat. Sebelumnya tujuan yang hanya
         muat dengan jarak aman tipis tetap diterima: robot menempuh dua meter
         untuk sampai ke sana, lalu berdiri di dalam zona - dan barulah ketahuan.
+
+        tunda=True: tujuan diterima tetapi perencanaan belum dimulai
+        (perlu_rencana). Dipakai saat beberapa robot diberi tujuan bersamaan:
+        tetapkan semua tujuan dulu, lalu panggil minta_rencana() masing-masing.
+        Tanpa itu robot pertama merencana dengan robot berikutnya - yang belum
+        menerima tujuan - sebagai rintangan diam, robot berikutnya tidak.
         """
         if not self.arena.di_dalam(baru[0], baru[1]):
             self.alasan = "tujuan di luar arena"
@@ -262,10 +271,14 @@ class Unit:
             f" - hanya muat dengan jarak aman {margin:.0f} cm"
         self.alasan = ""
         print(f"[i] {self.id:02d}: tujuan X={baru[0]:.0f} Y={baru[1]:.0f} arah {arah}{catatan}")
-        self.minta_rencana()
+        if tunda:
+            self.perlu_rencana = True
+        else:
+            self.minta_rencana()
 
     def batalkan(self):
         self.tujuan, self.jalur, self.tracker = None, None, None
+        self.perlu_rencana = False
         self._minggir = None
         self.state = SIAP
         self.alasan = ""
@@ -297,8 +310,14 @@ class Unit:
         bersamaan menolak tujuan di dekat posisi AWAL-nya, yang toh akan kosong.
         Robot yang MINGGIR justru dihitung diam: ia sengaja berdiri di situ
         sampai lawannya lewat, dan lawan itu harus merencanakan di sekitarnya.
+
+        Robot yang punya tujuan dengan perencanaan TERTUNDA (perlu_rencana,
+        lihat terima_tujuan(tunda=True)) juga bukan robot diam: ia akan
+        merencana pada saat yang sama dengan robot lain.
         """
-        return self.tujuan is None or self.state not in (MERENCANA, MELACAK, MENUNGGU)
+        if self.tujuan is None:
+            return True
+        return self.state not in (MERENCANA, MELACAK, MENUNGGU) and not self.perlu_rencana
 
     # ---------------------------------------------------------- perencanaan
     def minta_rencana(self, hindari_semua=False, lawan=None, pertahankan=False):
@@ -384,12 +403,18 @@ class Unit:
 
         def kerja():
             try:
-                jalur, info = self.per.rencanakan(awal, tujuan, rintangan, cadangan)
-                if not jalur and jalur_lawan:
-                    terbaik = self._cari_minggir(awal, tujuan, rintangan, rintangan_lanjut,
-                                                 jalur_lawan, lawan.id)
-                    if terbaik:
-                        jalur, info = terbaik
+                # Perencanaan robot-robot BERGILIRAN (KUNCI_RENCANA). Thread
+                # Python berbagi GIL: dua perencana yang berjalan bersamaan
+                # saling memperlambat, dan waktu jam dinding masing-masing ikut
+                # memuat pekerjaan robot lain. Daftar rintangan sudah diambil di
+                # atas, jadi bergiliran tidak mengubah apa yang dihindari.
+                with KUNCI_RENCANA:
+                    jalur, info = self.per.rencanakan(awal, tujuan, rintangan, cadangan)
+                    if not jalur and jalur_lawan:
+                        terbaik = self._cari_minggir(awal, tujuan, rintangan, rintangan_lanjut,
+                                                     jalur_lawan, lawan.id)
+                        if terbaik:
+                            jalur, info = terbaik
             except Exception as e:                       # pekerja tidak boleh mematikan program
                 jalur, info = None, {"error": f"{type(e).__name__}: {e}"}
             with self._kunci:

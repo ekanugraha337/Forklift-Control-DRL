@@ -171,6 +171,8 @@ class Sesi:
                     for u in self.nav.units}
         # Panggilan perencana dicatat ke daftar ini selama fase UJI (None = tidak dicatat).
         self.catat_ke = None
+        # time.time() saat _mulai_uji meminta rencana semua robot (acuan mulai_ms).
+        self.t_minta = None
         for u in self.nav.units:
             for per in self.per[u.id].values():
                 self._pasang_catat(u.id, per)
@@ -185,6 +187,12 @@ class Sesi:
             daftar = self.catat_ke
             if daftar is not None:          # dipanggil dari thread pekerja; append atomik
                 daftar[rid].append({"t": t0, "tujuan": list(tujuan), "ms": 1000.0 * info.get("waktu_s", 0.0),
+                                    "cpu_ms": 1000.0 * info.get("cpu_s", 0.0),
+                                    # jeda dari permintaan rencana pertama percobaan ini
+                                    # (_mulai_uji) sampai rencana ini mulai: giliran
+                                    # KUNCI_RENCANA + thread yang belum sempat berjalan
+                                    "mulai_ms": (1000.0 * (t0 - self.t_minta) if self.t_minta is not None
+                                                 else None),
                                     "rincian_ms": {k: 1000.0 * v for k, v in info.get("rincian_s", {}).items()},
                                     "ok": bool(jalur), "oleh": info.get("perencana", "A*") if jalur else "gagal",
                                     "margin_cm": info.get("margin_cm"),
@@ -578,13 +586,22 @@ class Protokol:
         for rid in self.ids:
             u = self.sesi.unit(rid)
             u.batalkan()
+        # Semua tujuan ditetapkan DULU, baru semua robot merencana. Tanpa ini
+        # robot pertama merencana saat robot berikutnya belum punya tujuan
+        # (jadi dianggap diam): hanya robot pertama yang menghindari pose awal
+        # robot lain dan menanggung biaya peta rintangan sementara.
         for rid in self.ids:
             u = self.sesi.unit(rid)
             tj = tuple(self.sk["robot"][rid]["tujuan"])
-            u.terima_tujuan(tj)
+            u.terima_tujuan(tj, tunda=True)
             if u.tujuan is None or tuple(u.tujuan) != tj:
                 self.ukur[rid]["ditolak"] = u.alasan or "tujuan ditolak"
                 print(f"[!] {rid:02d}: tujuan ditolak - {u.alasan}")
+        self.sesi.t_minta = time.time()
+        for rid in self.ids:
+            u = self.sesi.unit(rid)
+            if u.tujuan is not None:
+                u.minta_rencana()
         self.pesan = f"UJI {p['skenario']} ulangan {p['ulang'] + 1}: {NAMA.get(p['perencana'], p['perencana'])}"
         print(f"[i] {self.pesan}")
 
