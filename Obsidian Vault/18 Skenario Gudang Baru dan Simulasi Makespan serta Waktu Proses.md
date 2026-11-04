@@ -57,22 +57,24 @@ Setiap pose diperiksa **sebagai tujuan** untuk kedua perencana, dan semuanya mua
 
 Panel kiri menampilkan pose awal (titik-titik) dan tujuan (garis putus) dengan panah arah hadap. Biru adalah robot 01, merah robot 02. Panel tengah dan kanan adalah **heuristik Dijkstra** ke tujuan setiap robot, yaitu biaya-sisa holonomik dalam cm. Peta ini dihitung oleh `_holonomic_heuristic` (Dijkstra 8-tetangga, sel 5 cm, sel diblokir bila jarak bebasnya < setengah lebar badan). Fungsi yang sama dipakai Hybrid A\* sebagai heuristik dan lingkungan DQfD sebagai peta Dijkstra observasi (`drl/lingkungan.py:430`), jadi satu peta per robot berlaku untuk **kedua** perencana.
 
-Kondisinya disamakan dengan saat uji: robot 01 merencana dengan badan robot 02 di pose awalnya sebagai rintangan (kotak abu-abu), sedangkan robot 02 tanpa rintangan robot lain. Lihat bagian 3.3.
+Kondisinya disamakan dengan uji sesudah perbaikan di bagian 5 (tujuan simetris, commit `8c2d1fd`): **kedua robot merencana tanpa badan robot lain sebagai rintangan**. Pada versi gambar sebelumnya, peta robot 01 masih memuat badan robot 02 di pose awalnya sebagai rintangan. Itu kondisi run asimetris (bagian 3.3), dan gambarnya bisa dibuat ulang dengan `gambar_peta.py --asimetris`. Biaya Dijkstra di titik awal tidak berubah karena badan itu tidak berada di rute terpendek. Yang berubah hanya sel di sekitar A2 yang sebelumnya tertutup.
 
 ![[Skenario Gudang 2026-11-04 S1.png]]
 
 ![[Skenario Gudang 2026-11-04 S2.png]]
 
+Panjang jalur dari run final (`20261104_232645_Gudang_sim`):
+
 | Skenario | Robot | Biaya Dijkstra di titik awal | Jalur Hybrid A\* | Jalur DQfD murni |
 |---|---|---:|---:|---:|
-| S1 | 01 | 156 cm | 223 cm | 159 cm |
-| S1 | 02 | 162 cm | 221 cm | 171 cm |
-| S2 | 01 | 140 cm | 192 cm | 192 cm |
-| S2 | 02 | 135 cm | 195 cm | 195 cm |
+| S1 | 01 | 156 cm | 223,0 cm | 156,4 cm |
+| S1 | 02 | 162 cm | 221,4 cm | 170,6 cm |
+| S2 | 01 | 140 cm | 192,0 cm | 192,0 cm |
+| S2 | 02 | 135 cm | 194,7 cm | 194,7 cm |
 
 - **Dijkstra mengabaikan arah hadap dan jari-jari belok**, jadi nilainya batas bawah kasar untuk panjang jalur.
-- Di **S1**, jalur DQfD hanya 2–6% di atas biaya Dijkstra. Jalur Hybrid A\* 36–43% di atasnya, karena manuver mundur-maju di ruang tengah.
-- Di **S2**, Dijkstra hanya "melihat" garis lurus ke bawah (135–140 cm). Putar balik 180° menambah ±55 cm, dan biaya itu sama untuk kedua perencana. Karena itu S2 tidak membedakan perencana.
+- Di **S1**, jalur DQfD hanya 0–5% di atas biaya Dijkstra. Jalur robot 01 praktis sama dengan batas bawahnya. Jalur Hybrid A\* 37–43% di atasnya, karena manuver mundur-maju di ruang tengah.
+- Di **S2**, Dijkstra hanya "melihat" garis lurus ke bawah (135–140 cm). Putar balik 180° menambah 52–60 cm, dan biaya itu sama untuk kedua perencana. Karena itu S2 tidak membedakan perencana.
 
 ### 1.3 Temuan: pose awal yang tidak bisa dipakai pulang
 - Pose awal S1 yang pertama, y = 34,5 dan 31,1 dengan yaw 90°, menaruh buntut badan (23 cm di belakang poros depan) 8–12 cm dari dinding Z1.
@@ -277,7 +279,7 @@ Diukur offline (Python 3.14.3, Windows): loop utama berdetak 20 Hz seperti `navi
 |---|---|
 | Skenario | `Forklift Robot Program/uji_nyata/Gudang.json`, salinannya di folder hasil (`skenario.json`) |
 | Bagian 1.2–1.3 | skrip sementara di luar repo: `lurus_tengah.py` (yaw dan tengah lorong), `ubah_y.py` dan `cari_y.py` (batas y awal), `cek_pulang.py` (jalur pulang), `balik_s2.py` (arah tujuan S2) |
-| Bagian 1.2.1 (gambar peta, skenario, Dijkstra) | skrip sementara `gambar_peta.py`: `HybridAStarPlanner._holonomic_heuristic` pada `Perencana.peta_dengan()` |
+| Bagian 1.2.1 (gambar peta, skenario, Dijkstra) | skrip sementara `gambar_peta.py` (tanpa opsi = kondisi simetris; `--asimetris` = kondisi lama): `HybridAStarPlanner._holonomic_heuristic` pada `Perencana.peta_dengan()`; panjang jalur dari `20261104_232645_Gudang_sim` |
 | Bagian 2–3.2 | `Forklift Robot Program/uji_nyata/20261104_224635_Gudang_sim/` (`hasil.jsonl`, `ringkasan.json`, `rincian_tabel.tex`, `lintasan_S1.png`, `lintasan_S2.png`), direkap dengan skrip sementara `rekap.py` |
 | Bagian 3.3 | skrip sementara `ukur_peta.py` (`peta_dengan`, 50 ulangan) dan `ukur_lain.py` (`rencanakan` robot 01 dengan/tanpa rintangan, 7 ulangan), Windows, offline |
 | Bagian 5.1 | run asimetris `20261104_224635_Gudang_sim`, run simetris tanpa kunci `20261104_230522_Gudang_sim`, offline `offline_simetris.py` (median 9 ulangan) |
