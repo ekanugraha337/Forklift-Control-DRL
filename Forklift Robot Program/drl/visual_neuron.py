@@ -142,6 +142,7 @@ class Probe:
                 for yaw in arah:
                     if om.pose_free(v, x, y, yaw):
                         env.x, env.y, env.yaw, env.d, env.k = x, y, yaw, 0, 0.0
+                        env._obs_c = None      # pose diubah langsung: cache observasi basi
                         obs.append(env.observasi())
                         sel.append(iy * len(xs) + ix)
                         ada = True

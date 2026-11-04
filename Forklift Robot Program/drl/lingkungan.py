@@ -315,6 +315,7 @@ class LingkunganRencana:
                                     np.where(sn > 1e-9, b / sn, np.inf))
         self.pose_tabrak = None
         self.selesai = True
+        self._obs_c = None          # cache observasi(), lihat di sana
 
     # ------------------------------------------------------------ episode
     def reset(self, awal, tujuan, omap=None, d0=0, k0=0.0):
@@ -328,6 +329,7 @@ class LingkunganRencana:
         pemeriksaan yang sama dengan awal plan(). Jenis jauh yang sudah boleh
         serah di pose awal: alasan "sudah di radius dekat".
         """
+        self._obs_c = None
         self.omap = self.arena.omap if omap is None else omap
         pl, v = self.planner, self.v
         sx, sy, syaw = awal
@@ -394,6 +396,7 @@ class LingkunganRencana:
         a = int(a)
         if not self._mask[a]:
             raise ValueError(f"aksi {a} ter-mask")
+        self._obs_c = None
         if self.jenis == "dekat":
             return self._step_rs(a)
 
@@ -446,6 +449,7 @@ class LingkunganRencana:
                 len(self._pose), self.biaya, self.langkah_ke)
 
     def pulihkan_keadaan(self, s):
+        self._obs_c = None
         (self.x, self.y, self.yaw, self.d, self.k, self.in_col,
          n, self.biaya, self.langkah_ke) = s
         del self._pose[n:]
@@ -677,8 +681,21 @@ class LingkunganRencana:
 
     # ---------------------------------------------------------- observasi
     def observasi(self):
-        """Masukan jaringan: jauh 47 angka (_obs_jauh), dekat 9 angka (_obs_dekat)."""
-        return self._obs_jauh() if self.jenis == "jauh" else self._obs_dekat()
+        """Masukan jaringan: jauh 47 angka (_obs_jauh), dekat 9 angka (_obs_dekat).
+
+        Dihitung SEKALI per keadaan (2026-11-04). Pencarian perencana_dqfd
+        memanggilnya dua kali untuk keadaan yang sama: step() mengembalikannya
+        (dibuang pemanggil), lalu buka()/_urutan() memintanya lagi untuk forward
+        jaringan. Model jauh menghabiskan ~62% waktunya di 32 sinar, jadi
+        hitungan kedua itu ~1/3 waktu DQfD (Gudang: 27,3 -> 18,2 ms median,
+        jalur identik). Cache dikosongkan oleh reset(), step(), dan
+        pulihkan_keadaan(). Kode yang MENGUBAH x/y/yaw/d/k langsung (mis.
+        drl/visual_neuron.py) harus mengosongkan self._obs_c sendiri.
+        Yang dikembalikan salinan: pemanggil boleh menyimpan larik itu (buffer latih).
+        """
+        if self._obs_c is None:
+            self._obs_c = self._obs_jauh() if self.jenis == "jauh" else self._obs_dekat()
+        return self._obs_c.copy()
 
     def _obs_dekat(self):
         """9 angka = masukan rumus Reeds-Shepp. Tanpa sinar, tanpa peta.
