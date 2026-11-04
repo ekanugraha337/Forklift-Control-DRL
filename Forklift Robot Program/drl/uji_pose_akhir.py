@@ -327,9 +327,12 @@ def main():
              for sk in daftar for per in PERENCANA for u in range(args.ulang)]
     t0 = time.time()
     import multiprocessing as mp
-    with mp.get_context("spawn").Pool(max(1, min(args.pekerja, len(tugas)))) as pool:
+    # ProcessPoolExecutor, bukan Pool: pekerja Pool adalah proses daemon dan
+    # tidak boleh membuat proses anak - padahal Navigasi membuat proses perencana.
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    with ProcessPoolExecutor(max(1, min(args.pekerja, len(tugas))), mp_context=mp.get_context("spawn")) as pool:
         semua = []
-        for k, h in enumerate(pool.imap_unordered(jalankan, tugas)):
+        for k, h in enumerate(f.result() for f in as_completed([pool.submit(jalankan, t) for t in tugas])):
             semua.append(h)
             print(f"\r[{time.time() - t0:5.0f} s] {k + 1}/{len(tugas)} jalan selesai", end="", flush=True)
     print()

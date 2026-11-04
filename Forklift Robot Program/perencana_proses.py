@@ -10,8 +10,9 @@ Thread berbagi GIL, jadi
 Menambah thread tidak menolong. Proses terpisah punya interpreter dan GIL
 sendiri, jadi perencana benar-benar paralel dan loop kendali tidak terganggu.
 
-Dipakai navigasi.py dan drl/uji_robot_nyata.py dengan --perencana-proses
-(bawaan tetap thread). Isinya:
+Satu-satunya cara navigasi.py (dan semua alat di atasnya: drl/uji_robot_nyata,
+drl/uji_navigasi, drl/uji_pose_akhir) merencana - perencanaan di thread sudah
+dihapus. Mode thread di --banding hanya pembanding pengukuran. Isinya:
 
     PerencanaProses(rid, peta, jenis=("astar", "dqfd-murni"))
         .kirim(jenis, awal, tujuan, rintangan=None, cadangan=True) -> nomor
@@ -74,6 +75,7 @@ def _pekerja(pipa, rid, peta, jenis, cm_per_cell):
             jalur, info = per[j].rencanakan(awal, tujuan, rintangan, cadangan)
         except Exception as e:
             jalur, info = None, {"error": f"{type(e).__name__}: {e}"}
+        info["pid"] = os.getpid()               # bukti: rencana dikerjakan proses ini
         pipa.send(("hasil", (nomor, jalur, info)))
 
 
@@ -179,12 +181,10 @@ class PerencanaDiProses:
     proses anak robot ini, semua yang lain (margin_untuk_pose, peta_dengan,
     pose_bebas, _untuk, ...) oleh Perencana LOKAL yang identik.
 
-    navigasi.py tetap memanggil rencanakan() dari thread pekerjanya; thread itu
-    hanya menunggu pipa, jadi tidak memegang GIL dan tidak mengganggu loop
-    kendali. di_proses=True memberi tahu navigasi bahwa KUNCI_RENCANA (giliran
-    antar-thread) tidak diperlukan.
+    navigasi.py memanggil rencanakan() dari thread penunggu; thread itu hanya
+    menunggu pipa, jadi tidak memegang GIL dan tidak mengganggu loop kendali.
+    navigasi.Unit.minta_rencana menolak perencana yang bukan kelas ini.
     """
-    di_proses = True
 
     def __init__(self, lokal, proses, jenis):
         if jenis not in proses.jenis:

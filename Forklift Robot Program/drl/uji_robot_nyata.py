@@ -157,25 +157,23 @@ class Sesi:
         import rencana as R
         self.A, self.N, self.R = A, N, R
         self.args = args
-        nav_args = SimpleNamespace(peta=peta, sel=None, tracker=konfig.PELACAK_BAWAAN, perencana="astar",
+        # Proses perencana setiap robot (navigasi.py) memuat SEMUA jenis yang
+        # diuji sekaligus - model DQfD yang hilang atau tidak cocok dengan profil
+        # kemudi ketahuan sebelum robot pertama bergerak, bukan di tengah uji.
+        jenis = tuple(sorted(set(args.perencana) | {args.perencana_pulang}))
+        nav_args = SimpleNamespace(peta=peta, sel=None, tracker=konfig.PELACAK_BAWAAN, perencana=args.perencana_pulang,
+                                   jenis_proses=jenis,
                                    simulasi=args.simulasi, derau=args.derau, derau_deg=0.0, margin=10.0,
                                    url=args.url, host=args.host, log=None)
         self.nav = N.Navigasi(nav_args, ids)
         self.arena = self.nav.arena
         self.nav.tunjuk = A.PenunjukPose(self.arena.ctx)
-        # Satu objek perencana per (robot, jenis). Semua dibuat SEKARANG, supaya
-        # model DQfD yang hilang atau tidak cocok dengan profil kemudi ketahuan
-        # sebelum robot pertama bergerak, bukan di tengah uji.
-        jenis = set(args.perencana) | {args.perencana_pulang}
-        self.per = {u.id: {j: R.Perencana(self.arena, u.p, jenis=j) for j in sorted(jenis)}
+        # Satu objek perencana per (robot, jenis): rencanakan() dikerjakan proses
+        # robot itu, kueri lain (margin_untuk_pose, ...) oleh Perencana lokal.
+        import perencana_proses as PP
+        self.per = {u.id: {j: PP.PerencanaDiProses(R.Perencana(self.arena, u.p, jenis=j), self.nav.proses[u.id], j)
+                           for j in jenis}
                     for u in self.nav.units}
-        if getattr(args, "perencana_proses", False):
-            # Satu proses per robot memuat SEMUA jenis yang diuji; rencanakan()
-            # dikerjakan di sana, kueri lain oleh Perencana lokal di atas.
-            import perencana_proses as PP
-            proses = self.nav.pasang_perencana_proses({u.id: tuple(sorted(jenis)) for u in self.nav.units})
-            self.per = {rid: {j: PP.PerencanaDiProses(per, proses[rid], j) for j, per in d.items()}
-                        for rid, d in self.per.items()}
         # Panggilan perencana dicatat ke daftar ini selama fase UJI (None = tidak dicatat).
         self.catat_ke = None
         # time.time() saat _mulai_uji meminta rencana semua robot (acuan mulai_ms).
@@ -195,11 +193,12 @@ class Sesi:
             if daftar is not None:          # dipanggil dari thread pekerja; append atomik
                 daftar[rid].append({"t": t0, "tujuan": list(tujuan), "ms": 1000.0 * info.get("waktu_s", 0.0),
                                     "cpu_ms": 1000.0 * info.get("cpu_s", 0.0),
-                                    # --perencana-proses: biaya antar-proses (kirim -> hasil - rencana)
+                                    # biaya antar-proses (kirim -> hasil - rencana)
                                     "ipc_ms": (1000.0 * info["ipc_s"] if "ipc_s" in info else None),
+                                    # pid proses yang benar-benar merencana (bukti multi-proses)
+                                    "pid": info.get("pid"),
                                     # jeda dari permintaan rencana pertama percobaan ini
-                                    # (_mulai_uji) sampai rencana ini mulai: giliran
-                                    # KUNCI_RENCANA + thread yang belum sempat berjalan
+                                    # (_mulai_uji) sampai rencana ini mulai
                                     "mulai_ms": (1000.0 * (t0 - self.t_minta) if self.t_minta is not None
                                                  else None),
                                     "rincian_ms": {k: 1000.0 * v for k, v in info.get("rincian_s", {}).items()},
@@ -1150,8 +1149,6 @@ def main():
     ap.add_argument("--perencana", default=",".join(PERENCANA_UJI),
                     help=f"perencana yang diuji, dipisah koma (bawaan {','.join(PERENCANA_UJI)})")
     ap.add_argument("--perencana-pulang", default="astar", help="perencana untuk kembali ke titik awal")
-    ap.add_argument("--perencana-proses", action="store_true",
-                    help="setiap robot merencana di proses sendiri (perencana_proses.py), bukan di thread")
     ap.add_argument("--ulang", type=int, default=3, help="ulangan per perencana per skenario")
     ap.add_argument("--toleransi-cm", type=float, default=5.0, help="robot dianggap di titik awal dalam jarak ini")
     ap.add_argument("--toleransi-deg", type=float, default=10.0, help="... dan selisih arah hadap ini")

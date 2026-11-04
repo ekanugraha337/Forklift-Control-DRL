@@ -21,11 +21,16 @@ TOMBOL
     spasi  berhenti / lanjut (semua)   e  estop (semua)   r  hitung ulang jalur robot aktif
     g  grid     z  zona     b  bayangan     s  screenshot     q  keluar
 
-PERENCANAAN DI THREAD TERPISAH. Firmware menghentikan motor bila aliran "rc"
+PERENCANAAN DI PROSES TERPISAH. Firmware menghentikan motor bila aliran "rc"
 putus lebih lama dari RC_TIMEOUT_S (0,5 detik), sedangkan Hybrid A* di peta
 nyata terukur sampai 1,3 detik. Kalau perencanaan ikut di loop kendali, robot
 akan tersendat persis saat paling butuh jalur baru. Jadi loop kendali berjalan
-terus pada 20 Hz, dan perencanaan dikerjakan pekerja di belakang.
+terus pada 20 Hz, dan setiap robot merencana di proses perencananya sendiri
+(perencana_proses.py). Dulu perencanaan dikerjakan thread; thread berbagi GIL,
+sehingga loop terlambat 7-28 ms per detak selama rencana A* yang panjang dan
+waktu rencana yang tercatat ikut memuat loop dan robot lain (catatan Obsidian
+18, bagian 5). Sesi dimulai +-1 s lebih lama karena setiap proses memuat peta
+dan model sendiri.
 
 DUA ROBOT. Satu proses memegang semua robot: satu aliran kamera (pose semua
 robot dari frame yang sama) dan satu wasit anti-tabrakan (wasit.py). Setiap
@@ -46,7 +51,6 @@ State tambahan untuk dua robot:
 Garis tipis di sekitar robot yang berjalan adalah bayangannya (tombol b).
 """
 import argparse
-import contextlib
 import math
 import os
 import threading
@@ -58,6 +62,7 @@ import numpy as np
 import arena as A
 import jejak
 import konfig
+import perencana_proses as PP
 import pose as P
 import rencana as R
 import robot as RB
@@ -76,9 +81,6 @@ WARNA = {SIAP: (200, 200, 200), MERENCANA: (0, 255, 255), MELACAK: (0, 255, 0),
          MINGGIR: (255, 120, 120)}
 # Warna penanda tiap robot (BGR) di tampilan dua robot.
 WARNA_ID = {1: (255, 170, 0), 2: (255, 0, 200)}
-
-# Satu perencanaan pada satu waktu, untuk semua robot (lihat Unit.minta_rencana).
-KUNCI_RENCANA = threading.Lock()
 
 # Kolom "diramalkan" ditambahkan 2026-09-27. Tanpanya validasi_nyata.py tidak
 # bisa membedakan pose UKUR dari pose RAMALAN: "terlihat" bernilai 1 untuk
@@ -337,6 +339,12 @@ class Unit:
         dipakai (robot kembali MENUNGGU) alih-alih dibuang. Selalu berlaku
         untuk hindari_semua.
         """
+        # Hanya perencana di PROSES yang boleh merencana (lihat docstring
+        # modul). Perencana lokal di thread ini akan berbagi GIL dengan loop
+        # kendali - ditolak keras, bukan diam-diam dipakai.
+        if not isinstance(self.per, PP.PerencanaDiProses):
+            raise RuntimeError(f"robot {self.id:02d}: perencana {type(self.per).__name__} bukan "
+                               "PerencanaDiProses - perencanaan di thread sudah dihapus")
         if self.tujuan is None or self._sedang_merencana:
             return
         if self.pose is None:
@@ -403,21 +411,18 @@ class Unit:
         cadangan = not self._pertahankan
 
         def kerja():
+            # Perencanaannya sendiri dikerjakan PROSES perencana robot ini
+            # (self.per = PerencanaDiProses, lihat Navigasi.__init__). Thread
+            # ini hanya menunggu jawaban di pipa - tanpa memegang GIL - jadi loop
+            # kendali dan perencana robot lain tidak saling memperlambat, dan
+            # waktu rencana yang tercatat adalah waktu perencana itu saja.
             try:
-                # Perencanaan robot-robot BERGILIRAN (KUNCI_RENCANA). Thread
-                # Python berbagi GIL: dua perencana yang berjalan bersamaan
-                # saling memperlambat, dan waktu jam dinding masing-masing ikut
-                # memuat pekerjaan robot lain. Daftar rintangan sudah diambil di
-                # atas, jadi bergiliran tidak mengubah apa yang dihindari.
-                # Dengan --perencana-proses setiap robot punya proses (dan GIL)
-                # sendiri: thread ini hanya menunggu pipa, tidak perlu giliran.
-                with (contextlib.nullcontext() if getattr(self.per, "di_proses", False) else KUNCI_RENCANA):
-                    jalur, info = self.per.rencanakan(awal, tujuan, rintangan, cadangan)
-                    if not jalur and jalur_lawan:
-                        terbaik = self._cari_minggir(awal, tujuan, rintangan, rintangan_lanjut,
-                                                     jalur_lawan, lawan.id)
-                        if terbaik:
-                            jalur, info = terbaik
+                jalur, info = self.per.rencanakan(awal, tujuan, rintangan, cadangan)
+                if not jalur and jalur_lawan:
+                    terbaik = self._cari_minggir(awal, tujuan, rintangan, rintangan_lanjut,
+                                                 jalur_lawan, lawan.id)
+                    if terbaik:
+                        jalur, info = terbaik
             except Exception as e:                       # pekerja tidak boleh mematikan program
                 jalur, info = None, {"error": f"{type(e).__name__}: {e}"}
             with self._kunci:
@@ -933,8 +938,14 @@ class Navigasi:
                 sumber.mulai()
                 self.units.append(Unit(self, p, sumber, None, path_log(args.log, rid, multi)))
         self.aktif = self.units[0]
-        if getattr(args, "perencana_proses", False):
-            self.pasang_perencana_proses({u.id: (args.perencana,) for u in self.units})
+        # Setiap robot merencana di PROSES sendiri (perencana_proses.py). Thread
+        # tidak dipakai lagi: thread berbagi GIL dengan loop kendali dan dengan
+        # perencana robot lain, sehingga loop terlambat dan waktu rencana yang
+        # tercatat ikut memuat pekerjaan lain (catatan Obsidian 18, bagian 5).
+        # args.jenis_proses: jenis yang dimuat proses (bawaan: args.perencana);
+        # uji_robot_nyata memuat semua perencana uji sekaligus.
+        jenis = tuple(getattr(args, "jenis_proses", None) or (args.perencana,))
+        self.proses = self.pasang_perencana_proses({u.id: jenis for u in self.units})
 
         # --- tampilan ---
         self.show_grid, self.show_zona, self.show_bayangan = True, True, True
@@ -981,14 +992,13 @@ class Navigasi:
         return hasil
 
     def pasang_perencana_proses(self, jenis_per_robot):
-        """--perencana-proses: satu proses perencana per robot (perencana_proses.py).
+        """Satu proses perencana per robot (perencana_proses.py).
 
         jenis_per_robot: {rid: (jenis, ...)} yang dimuat proses itu. Semua proses
         dimulai dulu lalu ditunggu bersama, jadi memuat peta dan model berjalan
         paralel. Unit.per diganti PerencanaDiProses untuk jenis navigasi ini
         (bila dimuat). Kembalian: {rid: PerencanaProses}.
         """
-        import perencana_proses as PP
         t0 = time.perf_counter()
         proses = {u.id: PP.PerencanaProses(u.id, self.arena.nama, jenis_per_robot[u.id],
                                            cm_per_cell=self.arena.cm_per_cell, tunggu=False)
@@ -1191,8 +1201,6 @@ def main():
     ap.add_argument("--tracker", default=konfig.PELACAK_BAWAAN, choices=jejak.tersedia())
     ap.add_argument("--perencana", default="astar", choices=R.JENIS_PERENCANA,
                     help="astar (bawaan) | dqfd: DQfD dengan A* sebagai cadangan | dqfd-murni")
-    ap.add_argument("--perencana-proses", action="store_true",
-                    help="setiap robot merencana di proses sendiri (tanpa berbagi GIL dengan loop kendali)")
     ap.add_argument("--simulasi", action="store_true", help="tanpa kamera & tanpa robot")
     ap.add_argument("--derau", type=float, default=0.0, help="simulasi: derau posisi (cm)")
     ap.add_argument("--derau-deg", type=float, default=0.0, help="simulasi: derau sudut (derajat)")

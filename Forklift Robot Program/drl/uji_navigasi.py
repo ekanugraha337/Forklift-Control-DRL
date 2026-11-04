@@ -241,8 +241,12 @@ def main():
           f"{args.perencana} = {len(daftar)} jalan, {args.pekerja} pekerja, derau {args.derau} cm")
     t0 = time.time()
     hasil = []
-    with mp.get_context("spawn").Pool(args.pekerja) as pool:
-        for h in pool.imap_unordered(jalankan, daftar):
+    # ProcessPoolExecutor, bukan Pool: pekerja Pool adalah proses daemon dan
+    # tidak boleh membuat proses anak - padahal setiap Navigasi membuat proses
+    # perencana per robot.
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    with ProcessPoolExecutor(args.pekerja, mp_context=mp.get_context("spawn")) as pool:
+        for h in (f.result() for f in as_completed([pool.submit(jalankan, d) for d in daftar])):
             hasil.append(h)
             r = " ".join(f"ID{rb['id']:02d}:{'tiba' if rb['tiba'] else rb['state']}"
                          f"{'!ZONA' if rb['masuk_zona'] else ''}" for rb in h["robot"])
