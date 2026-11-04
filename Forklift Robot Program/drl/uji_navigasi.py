@@ -68,7 +68,7 @@ def pilih_skenario(n_per_peta, seed=0):
     peta_asli = daftar_peta(data)
     satu, kandidat = [], {}
     for rid, d in data.items():
-        pab = RO.PabrikEnv(konfig.profil(rid))
+        pab = RO.PabrikEnv(konfig.profil(rid), "jauh")   # demo_jauh: aksi jenis jauh
         for peta in peta_asli:
             ar = A.Arena(peta)
             idx = [e for e in np.flatnonzero(d["ep_uji"])

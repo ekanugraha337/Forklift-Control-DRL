@@ -79,6 +79,12 @@ class HybridAStarBertanda(HybridAStarPlanner):
     gagal) dan sisanya (heuristik Dijkstra + ekspansi primitif).
     """
 
+    # Nilai awal: _analytic juga dipanggil LANGSUNG di luar plan() (mis.
+    # lingkungan.rs_bebas() saat memutar ulang demo), sebelum plan() sempat
+    # mengisi penghitung ini.
+    _t_rs = 0.0
+    _rs_titik = 0
+
     def _analytic(self, omap, node, goal):
         t = time.perf_counter()
         rs = super()._analytic(omap, node, goal)
