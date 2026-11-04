@@ -57,9 +57,12 @@ def _buat_jam_cpu_thread():
         import ctypes
         k32 = ctypes.windll.kernel32
         k32.GetCurrentThread.restype = ctypes.c_void_p
-        nilai = ctypes.c_ulonglong()
 
         def siklus():
+            # Penampung BARU setiap panggilan: satu penampung bersama dibaca-tulis
+            # oleh beberapa thread sekaligus, dan thread bisa membaca siklus
+            # milik thread lain (terukur: CPU 11 ms untuk rencana 26 ms).
+            nilai = ctypes.c_ulonglong()
             k32.QueryThreadCycleTime(ctypes.c_void_p(k32.GetCurrentThread()), ctypes.byref(nilai))
             return nilai.value
 

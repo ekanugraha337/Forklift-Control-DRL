@@ -46,6 +46,7 @@ State tambahan untuk dua robot:
 Garis tipis di sekitar robot yang berjalan adalah bayangannya (tombol b).
 """
 import argparse
+import contextlib
 import math
 import os
 import threading
@@ -408,7 +409,9 @@ class Unit:
                 # saling memperlambat, dan waktu jam dinding masing-masing ikut
                 # memuat pekerjaan robot lain. Daftar rintangan sudah diambil di
                 # atas, jadi bergiliran tidak mengubah apa yang dihindari.
-                with KUNCI_RENCANA:
+                # Dengan --perencana-proses setiap robot punya proses (dan GIL)
+                # sendiri: thread ini hanya menunggu pipa, tidak perlu giliran.
+                with (contextlib.nullcontext() if getattr(self.per, "di_proses", False) else KUNCI_RENCANA):
                     jalur, info = self.per.rencanakan(awal, tujuan, rintangan, cadangan)
                     if not jalur and jalur_lawan:
                         terbaik = self._cari_minggir(awal, tujuan, rintangan, rintangan_lanjut,
@@ -828,6 +831,9 @@ class Unit:
 
     def tutup(self):
         self.robot.berhenti()
+        proses = getattr(self.per, "proses", None)
+        if proses is not None:
+            proses.tutup()
 
     # --------------------------------------------------------------- gambar
     def gambar(self, img, multi, aktif):
@@ -927,6 +933,8 @@ class Navigasi:
                 sumber.mulai()
                 self.units.append(Unit(self, p, sumber, None, path_log(args.log, rid, multi)))
         self.aktif = self.units[0]
+        if getattr(args, "perencana_proses", False):
+            self.pasang_perencana_proses({u.id: (args.perencana,) for u in self.units})
 
         # --- tampilan ---
         self.show_grid, self.show_zona, self.show_bayangan = True, True, True
@@ -971,6 +979,33 @@ class Navigasi:
             else:
                 raise SystemExit("[!] Arena terlalu sempit untuk menaruh semua robot simulasi.")
         return hasil
+
+    def pasang_perencana_proses(self, jenis_per_robot):
+        """--perencana-proses: satu proses perencana per robot (perencana_proses.py).
+
+        jenis_per_robot: {rid: (jenis, ...)} yang dimuat proses itu. Semua proses
+        dimulai dulu lalu ditunggu bersama, jadi memuat peta dan model berjalan
+        paralel. Unit.per diganti PerencanaDiProses untuk jenis navigasi ini
+        (bila dimuat). Kembalian: {rid: PerencanaProses}.
+        """
+        import perencana_proses as PP
+        t0 = time.perf_counter()
+        proses = {u.id: PP.PerencanaProses(u.id, self.arena.nama, jenis_per_robot[u.id],
+                                           cm_per_cell=self.arena.cm_per_cell, tunggu=False)
+                  for u in self.units}
+        try:
+            for p in proses.values():
+                p.tunggu_siap()
+        except Exception:
+            for p in proses.values():
+                p.tutup()
+            raise
+        for u in self.units:
+            if self.args.perencana in proses[u.id].jenis:
+                u.per = PP.PerencanaDiProses(u.per, proses[u.id], self.args.perencana)
+        print(f"[OK] perencana di proses terpisah: {len(proses)} proses siap dalam "
+              f"{time.perf_counter() - t0:.2f} s")
+        return proses
 
     def rintangan_untuk(self, unit, semua=False, kecuali=None):
         """Badan robot LAIN yang harus dihindari saat merencanakan unit ini.
@@ -1156,6 +1191,8 @@ def main():
     ap.add_argument("--tracker", default=konfig.PELACAK_BAWAAN, choices=jejak.tersedia())
     ap.add_argument("--perencana", default="astar", choices=R.JENIS_PERENCANA,
                     help="astar (bawaan) | dqfd: DQfD dengan A* sebagai cadangan | dqfd-murni")
+    ap.add_argument("--perencana-proses", action="store_true",
+                    help="setiap robot merencana di proses sendiri (tanpa berbagi GIL dengan loop kendali)")
     ap.add_argument("--simulasi", action="store_true", help="tanpa kamera & tanpa robot")
     ap.add_argument("--derau", type=float, default=0.0, help="simulasi: derau posisi (cm)")
     ap.add_argument("--derau-deg", type=float, default=0.0, help="simulasi: derau sudut (derajat)")
