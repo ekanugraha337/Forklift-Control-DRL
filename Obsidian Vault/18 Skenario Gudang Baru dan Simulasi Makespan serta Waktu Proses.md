@@ -11,6 +11,7 @@ Homografi kamera diulang, lalu skenario uji Gudang dibuat dari awal dengan `drl.
 >   - Pencarian jauh: model jauh **10,34 ms** vs Hybrid A\* **29,75 ms** (2,9×).
 >   - Penyelesaian dekat: model dekat **0,64 ms** vs RS **0,33 ms** (RS 2× lebih cepat, tetapi keduanya < 1 ms).
 > - **Waktu proses ≤ 0,2% dari makespan.** Makespan ditentukan oleh jalur, bukan oleh komputasi.
+> - **Tambahan 1,3–2,6 ms di robot 01** berasal dari peta rintangan sementara (badan robot 02), karena robot 01 selalu diberi tujuan lebih dulu (bagian 3.3). Biayanya sama untuk kedua perencana.
 > - **n = 1 per sel, simulasi.** Belum bisa dipakai sebagai klaim statistik.
 
 ---
@@ -20,6 +21,10 @@ Homografi kamera diulang, lalu skenario uji Gudang dibuat dari awal dengan `drl.
 ### 1.1 Homografi dan peta
 - Homografi diulang dengan `python cctv_lurus.py homografi`. Kotaknya tetap 8 × 7 ubin (240 × 210 cm) dengan titik asal yang sama, jadi koordinat zona di `Camera/peta_constraint/Gudang.json` tetap berlaku. Hasilnya ada di `Camera/kalibrasi_lensa.json`.
 - Zona peta Gudang **belum** ditempelkan ke garis ubin. Sisi zona masih meleset 0,5–3 cm dari garis ubin 30 cm (Z3, Z2, Z4, Z6, Z7). Lihat bagian 4.
+
+![[Peta Gudang 2026-11-04.png]]
+
+Gambar di atas menampilkan zona larangan (merah), grid ubin 30 cm (cyan), dan lebar lorong. Lorong atas dibatasi Z6 dan Z5 (ujung y = 55 dan 50,5). Lorong bawah dibatasi Z7 dan Z8 (ujung y = 144,5 dan 134). Ruang tengah, y ≈ 55–134, terbuka selebar arena.
 
 ### 1.2 Skenario akhir (`Forklift Robot Program/uji_nyata/Gudang.json`)
 
@@ -39,6 +44,27 @@ Penyesuaian setelah skenario dibuat dengan klik:
 4. **Arah tujuan S2 dibalik** dari −90° ke 90°, supaya skenario lebih menantang (robot harus putar balik di lorong). Panjang jalur naik dari ±140 cm ke ±195 cm.
 
 Setiap pose diperiksa **sebagai tujuan** untuk kedua perencana, dan semuanya muat dengan margin 8 cm. Jalur setiap robot juga direncanakan ulang dengan kedua perencana.
+
+### 1.2.1 Skenario dan heatmap Dijkstra
+
+Panel kiri menampilkan pose awal (titik-titik) dan tujuan (garis putus) dengan panah arah hadap. Biru adalah robot 01, merah robot 02. Panel tengah dan kanan adalah **heuristik Dijkstra** ke tujuan setiap robot, yaitu biaya-sisa holonomik dalam cm. Peta ini dihitung oleh `_holonomic_heuristic` (Dijkstra 8-tetangga, sel 5 cm, sel diblokir bila jarak bebasnya < setengah lebar badan). Fungsi yang sama dipakai Hybrid A\* sebagai heuristik dan lingkungan DQfD sebagai peta Dijkstra observasi (`drl/lingkungan.py:430`), jadi satu peta per robot berlaku untuk **kedua** perencana.
+
+Kondisinya disamakan dengan saat uji: robot 01 merencana dengan badan robot 02 di pose awalnya sebagai rintangan (kotak abu-abu), sedangkan robot 02 tanpa rintangan robot lain. Lihat bagian 3.3.
+
+![[Skenario Gudang 2026-11-04 S1.png]]
+
+![[Skenario Gudang 2026-11-04 S2.png]]
+
+| Skenario | Robot | Biaya Dijkstra di titik awal | Jalur Hybrid A\* | Jalur DQfD murni |
+|---|---|---:|---:|---:|
+| S1 | 01 | 156 cm | 223 cm | 159 cm |
+| S1 | 02 | 162 cm | 221 cm | 171 cm |
+| S2 | 01 | 140 cm | 192 cm | 192 cm |
+| S2 | 02 | 135 cm | 195 cm | 195 cm |
+
+- **Dijkstra mengabaikan arah hadap dan jari-jari belok**, jadi nilainya batas bawah kasar untuk panjang jalur.
+- Di **S1**, jalur DQfD hanya 2–6% di atas biaya Dijkstra. Jalur Hybrid A\* 36–43% di atasnya, karena manuver mundur-maju di ruang tengah.
+- Di **S2**, Dijkstra hanya "melihat" garis lurus ke bawah (135–140 cm). Putar balik 180° menambah ±55 cm, dan biaya itu sama untuk kedua perencana. Karena itu S2 tidak membedakan perencana.
 
 ### 1.3 Temuan: pose awal yang tidak bisa dipakai pulang
 - Pose awal S1 yang pertama, y = 34,5 dan 31,1 dengan yaw 90°, menaruh buntut badan (23 cm di belakang poros depan) 8–12 cm dari dinding Z1.
@@ -108,8 +134,32 @@ Setiap robot merencanakan **satu kali** per percobaan, jadi ada 4 rencana per pe
 Pengamatan:
 - **Hybrid A\* naik di S2** (33–42 ms) dibanding S1 (20–24 ms), karena putar balik memperluas pencarian. **Model jauh tidak naik** (6,7–9,3 ms di S2 vs 9,6–15,8 ms di S1).
 - **RS vs model dekat:** RS konstan ±0,3 ms. Model dekat 0,4–1,0 ms. Keduanya kurang dari 3% dari total A\*, jadi selisihnya tidak berarti.
-- **"Lain" 1,3–2,6 ms selalu muncul pada robot 01**, yaitu robot yang merencanakan lebih dulu di setiap percobaan, untuk kedua perencana. Pada robot 02 hanya ≤ 0,06 ms. Penyebabnya belum ditelusuri.
+- **"Lain" 1,3–2,6 ms selalu muncul pada robot 01**, untuk kedua perencana. Pada robot 02 hanya ≤ 0,06 ms. Penyebabnya ada di bagian 3.3.
 - **Dampak ke makespan bisa diabaikan.** Rencana terlama 42 ms, < 0,2% dari makespan 11–24 s.
+
+### 3.3 Mengapa robot 01 punya tambahan "lain" 1,3–2,6 ms
+
+**Penyebab: robot 01 merencana dengan badan robot 02 sebagai rintangan, robot 02 tidak.** Peta rintangan sementara itu dibangun di dalam `rencanakan()`, di luar perencana, sehingga waktunya masuk ke "lain".
+
+Urutan kejadian di awal setiap percobaan (`drl/uji_robot_nyata.py`, `_mulai_uji`):
+1. Semua robot di-`batalkan()`: `tujuan = None`, state SIAP.
+2. Robot 01 menerima tujuan, dan `terima_tujuan()` langsung memanggil `minta_rencana()` (`navigasi.py:265`). Saat itu robot 02 belum punya tujuan, jadi `diam = True` (`navigasi.py:301`). `rintangan_untuk()` pun memasukkan badan robot 02.
+3. Di `Perencana.rencanakan()` (`rencana.py:263`), `peta_dengan(rintangan)` menyalin occupancy grid, menggambar poligon badan robot 02, lalu membangun `ObstacleMap` baru (distance transform 270 × 300 sel). Langkah ini tidak dihitung sebagai bagian perencana, jadi masuk ke `lain = total − Σ rincian`.
+4. Robot 02 menerima tujuan. Robot 01 sudah MERENCANA, jadi tidak diam dan tidak dijadikan rintangan. `peta_dengan(None)` langsung mengembalikan peta arena tanpa biaya, sehingga "lain" ≈ 0.
+
+Pengukuran offline (Windows, median 7 ulangan, rencana robot 01):
+
+| Perencana | Skenario | "lain" dengan badan robot 02 | "lain" tanpa rintangan |
+|---|---|---:|---:|
+| Hybrid A\* + RS | S1 | 0,56 ms | 0,01 ms |
+| Hybrid A\* + RS | S2 | 0,62 ms | 0,02 ms |
+| DQfD murni | S1 | 0,39 ms | 0,01 ms |
+| DQfD murni | S2 | 0,43 ms | 0,02 ms |
+
+- `peta_dengan()` sendiri: median **0,57–0,62 ms** offline, dan **0,0001 ms** tanpa rintangan.
+- Di simulasi angkanya 1,3–2,6 ms, sekitar 2–4× angka offline. Rasionya serupa dengan bagian perencana (A\* S1 robot 01: 24,4 ms di simulasi vs 10,8 ms offline), karena perencana berjalan di thread belakang dan berbagi CPU dengan loop simulasi 20 Hz.
+- Biaya ini **sama untuk kedua perencana**, jadi tidak membuat perbandingan berat sebelah. Tetapi ada **asimetri antar-robot**: hanya jalur robot 01 yang menghindari pose awal robot 02, sedangkan jalur robot 02 tidak menghindari robot 01. Yang mencegah tabrakan adalah wasit, sesuai rancangan di [[05 Multi Robot Navigation and Control|Multi Robot Navigation and Control]].
+- Rintangan itu juga sedikit menambah waktu **di dalam** perencana. Offline, DQfD S1 robot 01 butuh 11,4 ms dengan rintangan vs 8,4 ms tanpa rintangan. A\* hanya bertambah 0,4–0,5 ms.
 
 ## 4. Kesimpulan dan langkah berikutnya
 
@@ -119,7 +169,7 @@ Pengamatan:
    - Ulangi dengan **`--ulang 5`**, di simulasi dengan derau dan di robot nyata, untuk mendapat sebaran dan uji signifikansi.
    - Tambah skenario yang **memaksa pilihan rute**, misalnya pindah lorong lewat celah di ujung Z5–Z8. Ini lebih mungkin membedakan makespan daripada putar balik di tempat.
    - Rapikan zona peta Gudang ke garis ubin (bagian 1.1), lalu periksa ulang tengah lorong dan semua pose skenario.
-   - Telusuri biaya "lain" pada rencana pertama setiap percobaan.
+   - Pertimbangkan apakah urutan pemberian tujuan (robot 01 selalu lebih dulu, sehingga hanya robot 01 yang menghindari robot lain) perlu disimetriskan, misalnya dengan menetapkan semua tujuan dulu baru memanggil `minta_rencana()`. Lihat bagian 3.3.
 
 > [!warning] Batasan
 > - **n = 1 per sel (skenario × perencana), simulasi tanpa derau.** Tidak ada sebaran, jadi belum ada uji statistik.
@@ -133,4 +183,6 @@ Pengamatan:
 |---|---|
 | Skenario | `Forklift Robot Program/uji_nyata/Gudang.json`, salinannya di folder hasil (`skenario.json`) |
 | Bagian 1.2–1.3 | skrip sementara di luar repo: `lurus_tengah.py` (yaw dan tengah lorong), `ubah_y.py` dan `cari_y.py` (batas y awal), `cek_pulang.py` (jalur pulang), `balik_s2.py` (arah tujuan S2) |
-| Bagian 2–3 | `Forklift Robot Program/uji_nyata/20261104_224635_Gudang_sim/` (`hasil.jsonl`, `ringkasan.json`, `rincian_tabel.tex`, `lintasan_S1.png`, `lintasan_S2.png`), direkap dengan skrip sementara `rekap.py` |
+| Bagian 1.2.1 (gambar peta, skenario, Dijkstra) | skrip sementara `gambar_peta.py`: `HybridAStarPlanner._holonomic_heuristic` pada `Perencana.peta_dengan()` |
+| Bagian 2–3.2 | `Forklift Robot Program/uji_nyata/20261104_224635_Gudang_sim/` (`hasil.jsonl`, `ringkasan.json`, `rincian_tabel.tex`, `lintasan_S1.png`, `lintasan_S2.png`), direkap dengan skrip sementara `rekap.py` |
+| Bagian 3.3 | skrip sementara `ukur_peta.py` (`peta_dengan`, 50 ulangan) dan `ukur_lain.py` (`rencanakan` robot 01 dengan/tanpa rintangan, 7 ulangan), Windows, offline |
