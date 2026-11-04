@@ -22,9 +22,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# Reward = -biaya / SKALA_REWARD. Biaya per langkah median 17 (primitif penuh;
-# primitif pendek lebih murah), jadi Q ada di kisaran satuan sampai puluhan.
-SKALA_REWARD = 100.0
+# Reward = -biaya / SKALA_REWARD (100). Didefinisikan di jaringan_numpy (tanpa
+# torch) supaya perencana operasional bisa memakainya tanpa mengimpor torch.
+from drl.jaringan_numpy import SKALA_REWARD  # noqa: E402,F401
 
 Q_TERLARANG = -1e9
 

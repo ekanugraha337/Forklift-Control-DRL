@@ -64,12 +64,12 @@ Cara mengukurnya sama dengan catatan 14:
 
 ### 3.1 Total (tanpa pencatat waktu)
 
-| | Windows ver-1-4 | **Windows ver-1-5** | Mac ver-1-4 | **Mac ver-1-5** |
-|---|---:|---:|---:|---:|
-| DQfD rata-rata / median (ms) | 32,6 / 31,6 | **17,4 / 17,2** | 18,1 / 18,0 | **8,6 / 8,5** |
-| Hybrid A\* + RS rata-rata / median (ms), sesi yang sama | 24,8 / 24,2 | **25,0 / 24,9** | 15,5 / 15,4 | **15,1 / 15,1** |
-| **DQfD ÷ A\*** (rata-rata) | 1,31× | **0,70×** | 1,17× | **0,57×** |
-| Sinar per kasus (dengan pencatat waktu) | 16,65 ms | **0,80 ms** | 9,64 ms | **0,27 ms** |
+|                                                         | Windows ver-1-4 | **Windows ver-1-5** | Mac ver-1-4 | **Mac ver-1-5** |
+| ------------------------------------------------------- | --------------: | ------------------: | ----------: | --------------: |
+| DQfD rata-rata / median (ms)                            |     32,6 / 31,6 |     **17,4 / 17,2** | 18,1 / 18,0 |   **8,6 / 8,5** |
+| Hybrid A\* + RS rata-rata / median (ms), sesi yang sama |     24,8 / 24,2 |     **25,0 / 24,9** | 15,5 / 15,4 | **15,1 / 15,1** |
+| **DQfD ÷ A\*** (rata-rata)                              |           1,31× |           **0,70×** |       1,17× |       **0,57×** |
+| Sinar per kasus (dengan pencatat waktu)                 |        16,65 ms |         **0,80 ms** |     9,64 ms |     **0,27 ms** |
 
 Per kasus, rata-rata (ms):
 

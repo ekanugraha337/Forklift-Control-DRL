@@ -48,14 +48,37 @@ import os
 import time
 
 import numpy as np
-import torch
 
 import konfig
 from drl import lingkungan as L
-from drl.jaringan import SKALA_REWARD
+from drl.jaringan_numpy import SKALA_REWARD, JaringanNumpy, muat_dari_pt, periksa_profil
 from drl.lingkungan import MAKS_LANGKAH
 
+# torch TIDAK diimpor di tingkat modul (ver-1-5, perubahan 2): perencana
+# operasional (DQfDPlanner) memakai JaringanNumpy, jadi navigasi.py tidak perlu
+# torch. Fungsi pencarian di bawah tetap menerima jaringan PyTorch (latih.py,
+# dagger.py, evaluasi.py) - torch diimpor di _q/_qv hanya untuk jaringan itu.
+
 DIR_MODEL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "model_dqn")
+
+
+def _q(net, obs):
+    """Q semua aksi untuk satu observasi: JaringanNumpy atau jaringan PyTorch."""
+    if isinstance(net, JaringanNumpy):
+        return net.q(obs)
+    import torch
+    with torch.no_grad():
+        return net(torch.as_tensor(obs[None]))[0].numpy()
+
+
+def _qv(net, obs):
+    """(Q, V) untuk satu observasi - V dipakai gerbang mutu."""
+    if isinstance(net, JaringanNumpy):
+        return net.qv(obs)
+    import torch
+    with torch.no_grad():
+        q, akt = net(torch.as_tensor(obs[None]), aktivasi=True)
+    return q[0].numpy(), float(akt["v"][0, 0])
 ANGGARAN_BAWAAN = 600
 
 # Metode operasional DQfDPlanner. Dipilih pada SET VALIDASI (160 rute, 60 Rumah),
@@ -129,8 +152,7 @@ def _urutan(net, env):
     sah = np.flatnonzero(m)
     if not len(sah):
         return []
-    with torch.no_grad():
-        q = net(torch.as_tensor(env.observasi()[None]))[0].numpy()
+    q = _q(net, env.observasi())
     return list(sah[np.argsort(-q[sah], kind="stable")])
 
 
@@ -211,8 +233,7 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
         sah = np.flatnonzero(m)
         if not len(sah):
             return
-        with torch.no_grad():
-            q = net(torch.as_tensor(env.observasi()[None]))[0].numpy()
+        q = _q(net, env.observasi())
         g = env.biaya
         for a in sah:
             a = int(a)
@@ -479,25 +500,50 @@ def jalur_model(robot_id, jenis, dir_model=None):
     return os.path.join(dir_model or DIR_MODEL, f"id{robot_id:02d}_{jenis}.pt")
 
 
-def muat_model(robot_id, jenis, dir_model=None):
-    """Jaringan model 'jauh' / 'dekat' robot ini dari model_dqn/id0N_<jenis>.pt, di-cache, di CPU.
+def _periksa_milik(meta, robot_id, jalur):
+    if meta.get("robot") not in (None, robot_id):
+        raise SystemExit(f"[!] {jalur} milik robot {meta['robot']:02d}, bukan {robot_id:02d}")
+    periksa_profil(meta, konfig.profil(robot_id), jalur)
 
-    torch dibatasi SATU thread: forward satu keadaan hanya 0,03 ms, dan thread
-    tambahan justru berebut inti dengan loop kendali 20 Hz di navigasi.py.
-    """
+
+def _jalur_ada(robot_id, jenis, dir_model):
     jalur = jalur_model(robot_id, jenis, dir_model)
-    if jalur not in _MODEL:
-        if not os.path.exists(jalur):
-            raise SystemExit(f"[!] Model DQfD {jenis} robot {robot_id:02d} belum ada: {jalur}\n"
-                             f"    Latih dulu: python -m drl.latih --id {robot_id} --model dekat,jauh")
-        from drl.dqfd import muat_jaringan, periksa_profil
+    if not os.path.exists(jalur):
+        raise SystemExit(f"[!] Model DQfD {jenis} robot {robot_id:02d} belum ada: {jalur}\n"
+                         f"    Latih dulu: python -m drl.latih --id {robot_id} --model dekat,jauh")
+    return jalur
+
+
+def muat_model(robot_id, jenis, dir_model=None):
+    """Jaringan PyTorch model 'jauh' / 'dekat' robot ini (model_dqn/id0N_<jenis>.pt), di-cache, CPU.
+
+    Untuk alat latih & analisis (dagger, visual, banding). Perencana operasional
+    memakai muat_model_numpy. torch dibatasi SATU thread: thread tambahan justru
+    berebut inti dengan loop kendali 20 Hz di navigasi.py.
+    """
+    jalur = _jalur_ada(robot_id, jenis, dir_model)
+    if ("torch", jalur) not in _MODEL:
+        import torch
+        from drl.dqfd import muat_jaringan
         torch.set_num_threads(1)
         net, meta = muat_jaringan(jalur, jenis=jenis)
-        if meta.get("robot") not in (None, robot_id):
-            raise SystemExit(f"[!] {jalur} milik robot {meta['robot']:02d}, bukan {robot_id:02d}")
-        periksa_profil(meta, konfig.profil(robot_id), jalur)
-        _MODEL[jalur] = net
-    return _MODEL[jalur]
+        _periksa_milik(meta, robot_id, jalur)
+        _MODEL[("torch", jalur)] = net
+    return _MODEL[("torch", jalur)]
+
+
+def muat_model_numpy(robot_id, jenis, dir_model=None):
+    """JaringanNumpy model 'jauh' / 'dekat' robot ini - bobot .pt yang sama, forward numpy.
+
+    Dipakai DQfDPlanner (ver-1-5, perubahan 2). Lewat cache <model>.npz
+    (jaringan_numpy.muat_dari_pt): tanpa torch selama .pt tidak berubah.
+    """
+    jalur = _jalur_ada(robot_id, jenis, dir_model)
+    if ("numpy", jalur) not in _MODEL:
+        net, meta = muat_dari_pt(jalur, jenis=jenis)
+        _periksa_milik(meta, robot_id, jalur)
+        _MODEL[("numpy", jalur)] = net
+    return _MODEL[("numpy", jalur)]
 
 
 class DQfDPlanner:
@@ -531,8 +577,8 @@ class DQfDPlanner:
         self.v = astar.v
         self.time_limit = astar.time_limit
         self.cadangan = cadangan
-        self.net_jauh = muat_model(profil.id, "jauh", dir_model)
-        self.net_dekat = muat_model(profil.id, "dekat", dir_model)
+        self.net_jauh = muat_model_numpy(profil.id, "jauh", dir_model)
+        self.net_dekat = muat_model_numpy(profil.id, "dekat", dir_model)
         pustaka = copy.copy(astar)
         self.env_jauh = L.LingkunganRencana(arena, profil, margin_cm=margin_cm, planner=pustaka,
                                             jenis="jauh")
@@ -554,9 +600,8 @@ class DQfDPlanner:
             net = self.net_dekat
         if obs is None:
             return None
-        with torch.no_grad():
-            _, akt = net(torch.as_tensor(obs[None]), aktivasi=True)
-        return max(1.0, -float(akt["v"][0, 0]) * SKALA_REWARD)
+        _, v = _qv(net, obs)
+        return max(1.0, -v * SKALA_REWARD)
 
     def plan(self, omap, start, goal):
         t0 = time.perf_counter()

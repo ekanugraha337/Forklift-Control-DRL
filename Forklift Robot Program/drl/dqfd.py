@@ -22,8 +22,10 @@ import torch
 import torch.nn.functional as F
 
 from drl.jaringan import JaringanDQfD, bermask
-from drl.lingkungan import (JENIS, VERSI_AKSI, VERSI_MODEL, n_aksi as jumlah_aksi,
-                             n_obs as jumlah_obs, versi_cocok)
+# periksa_profil tetap bisa diimpor dari sini seperti sebelumnya; definisinya
+# dipindah ke jaringan_numpy supaya perencana bisa memeriksa model tanpa torch.
+from drl.jaringan_numpy import periksa_kontrak, periksa_profil  # noqa: F401
+from drl.lingkungan import JENIS, VERSI_AKSI, n_aksi as jumlah_aksi, n_obs as jumlah_obs
 
 
 def kolom(n_aksi, n_obs):
@@ -165,24 +167,7 @@ def muat_jaringan(jalur, device="cpu", jenis=None):
     """Jaringan dari checkpoint, siap dipakai (eval). jenis: 'jauh'/'dekat' yang
     diharapkan pemanggil; None = tidak diperiksa."""
     ck = torch.load(jalur, map_location=device, weights_only=False)
-    # Diperiksa SEBELUM bobot dimuat: model ruang aksi lama (15 keluaran, dengan
-    # SAMBUNG) akan gagal di load_state_dict dengan pesan bentuk tensor yang
-    # tidak menjelaskan apa-apa.
-    # Versi diperiksa PER JENIS (lingkungan.VERSI_MODEL): model jauh versi 4
-    # masih cocok dengan program versi 5, model dekat versi 4 tidak.
-    versi, jm = ck.get("versi_aksi", 1), ck.get("jenis")
-    if (not versi_cocok(jm, versi) or ck.get("n_obs") != jumlah_obs(jm)
-            or ck.get("n_aksi") != jumlah_aksi(jm)):
-        syarat = (f"butuh versi {VERSI_MODEL[jm]}-{VERSI_AKSI}" if jm in VERSI_MODEL
-                  else "model sebelum dua-model (versi < 4)")
-        raise SystemExit(f"[!] {jalur}: model '{jm}' ruang aksi versi {versi}, {syarat}. Program "
-                         f"sekarang versi {VERSI_AKSI} (jauh meniru Hybrid A* - {jumlah_obs('jauh')} "
-                         f"masukan / {jumlah_aksi('jauh')} aksi, dekat meniru Reeds-Shepp dan sadar "
-                         f"rintangan - {jumlah_obs('dekat')} masukan / {jumlah_aksi('dekat')} aksi).\n"
-                         f"    Bangkitkan ulang demo dan latih ulang: python -m drl.skenario lalu "
-                         f"python -m drl.latih")
-    if jenis is not None and jm != jenis:
-        raise SystemExit(f"[!] {jalur} adalah model '{ck.get('jenis')}', bukan '{jenis}'")
+    periksa_kontrak(ck, jalur, jenis)     # versi & bentuk, SEBELUM bobot dimuat
     net = JaringanDQfD(ck["n_aksi"], ck["n_obs"]).to(device)
     net.load_state_dict(ck["net"])
     net.eval()
@@ -202,21 +187,3 @@ def meta_model(prof, jenis):
     return {**meta_profil(prof), "jenis": jenis, "n_aksi": jumlah_aksi(jenis), "n_obs": jumlah_obs(jenis)}
 
 
-def periksa_profil(meta, prof, jalur):
-    """Tolak model yang dilatih untuk kemudi lain.
-
-    Ketujuh tingkat kelengkungan aksi diturunkan dari R_PLAN robot. Kalau
-    max_steer_deg di konfig berubah (kemudi diperbaiki / diukur ulang), indeks
-    aksi yang sama berarti belokan lain, dan nilai Q model lama tidak lagi
-    berlaku - padahal jaringannya tetap jalan tanpa galat. Model sebelum
-    pengaman ini tidak menyimpan profil, jadi juga ditolak.
-    """
-    if "r_plan_cm" not in meta:
-        raise SystemExit(f"[!] {jalur} tidak mencatat profil kemudi (dilatih sebelum 2026-09-30).\n"
-                         f"    Latih ulang: python -m drl.latih --id {prof.id}")
-    if abs(meta["r_plan_cm"] - prof.r_plan_cm) > 1e-3:
-        raise SystemExit(f"[!] {jalur} dilatih untuk max_steer {meta['max_steer_deg']:.1f} deg "
-                         f"(R_PLAN {meta['r_plan_cm']:.1f} cm), konfig sekarang {prof.max_steer_deg:.1f} deg "
-                         f"(R_PLAN {prof.r_plan_cm:.1f} cm).\n"
-                         f"    Bangkitkan ulang demo dan latih ulang: python -m drl.skenario --id {prof.id} "
-                         f"lalu python -m drl.latih --id {prof.id}. Sementara itu pakai --perencana astar.")
