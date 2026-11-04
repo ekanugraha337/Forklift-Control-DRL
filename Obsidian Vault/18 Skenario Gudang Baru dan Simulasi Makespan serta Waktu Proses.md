@@ -13,6 +13,14 @@ Homografi kamera diulang, lalu skenario uji Gudang dibuat dari awal dengan `drl.
 > - **Waktu proses ≤ 0,2% dari makespan.** Makespan ditentukan oleh jalur, bukan oleh komputasi.
 > - **Tambahan 1,3–2,6 ms di robot 01** berasal dari peta rintangan sementara (badan robot 02), karena robot 01 selalu diberi tujuan lebih dulu (bagian 3.3). Biayanya sama untuk kedua perencana.
 > - **n = 1 per sel, simulasi.** Belum bisa dipakai sebagai klaim statistik.
+>
+> > [!warning] Pembaruan (bagian 5): angka waktu proses di bagian 3 terkontaminasi
+> > Kedua robot merencana di thread Python yang bersamaan, sehingga waktu jam dindingnya saling memuat. Pemberian tujuan juga asimetris. Setelah diperbaiki (tujuan simetris, perencanaan bergiliran, waktu CPU thread), run final memberi:
+> > - **Waktu proses per rencana:** A\* **24,2 ms** vs DQfD **14,3 ms** (**1,7×**).
+> > - **Pencarian jauh:** Hybrid A\* 23,8 ms vs model jauh 13,7 ms (1,7×).
+> > - **Penyelesaian dekat:** RS 0,33 ms vs model dekat 0,51 ms.
+> > - **Makespan:** S1 19,22 vs **10,34 s** (−46%), S2 23,89 vs 24,30 s.
+> > - **Offline** (tanpa loop simulasi): A\* 18,5 ms vs DQfD 8,6 ms (2,1×).
 
 ---
 
@@ -109,6 +117,9 @@ Simulasi `python -m drl.uji_robot_nyata --skenario uji_nyata/Gudang.json --simul
 
 Setiap robot merencanakan **satu kali** per percobaan, jadi ada 4 rencana per perencana. Angka diambil dari `rincian_ms` di `hasil.jsonl`, dicatat saat uji berjalan, sehingga perencana berbagi CPU dengan loop simulasi 20 Hz.
 
+> [!warning] Angka di bagian 3.1–3.2 terkontaminasi
+> Ini run asimetris dengan dua perencana berjalan bersamaan. Waktu jam dinding satu robot ikut memuat pekerjaan robot lain. Angka yang dipakai adalah bagian 5.
+
 ### 3.1 Rata-rata per bagian
 
 | Bagian | Hybrid A\* + RS | DQfD murni | Rasio |
@@ -169,7 +180,8 @@ Pengukuran offline (Windows, median 7 ulangan, rencana robot 01):
    - Ulangi dengan **`--ulang 5`**, di simulasi dengan derau dan di robot nyata, untuk mendapat sebaran dan uji signifikansi.
    - Tambah skenario yang **memaksa pilihan rute**, misalnya pindah lorong lewat celah di ujung Z5–Z8. Ini lebih mungkin membedakan makespan daripada putar balik di tempat.
    - Rapikan zona peta Gudang ke garis ubin (bagian 1.1), lalu periksa ulang tengah lorong dan semua pose skenario.
-   - Pertimbangkan apakah urutan pemberian tujuan (robot 01 selalu lebih dulu, sehingga hanya robot 01 yang menghindari robot lain) perlu disimetriskan, misalnya dengan menetapkan semua tujuan dulu baru memanggil `minta_rencana()`. Lihat bagian 3.3.
+   - ~~Simetriskan urutan pemberian tujuan~~: sudah dikerjakan, lihat bagian 5.
+   - Prototipe perencana **multi-proses** per robot untuk robot nyata, lihat bagian 5.4.
 
 > [!warning] Batasan
 > - **n = 1 per sel (skenario × perencana), simulasi tanpa derau.** Tidak ada sebaran, jadi belum ada uji statistik.
@@ -177,7 +189,89 @@ Pengukuran offline (Windows, median 7 ulangan, rencana robot 01):
 > - **Waktu rencana dicatat saat simulasi berjalan.** Angkanya lebih besar daripada pengukuran offline, misalnya A\* 24,5 ms di catatan 17.
 > - **Uji robot nyata dengan skenario ini belum dilakukan.**
 
-## 5. Sumber angka
+## 5. Perbaikan pengukuran: tujuan simetris, perencanaan bergiliran, waktu CPU thread
+
+### 5.1 Masalah yang ditemukan
+1. **Pemberian tujuan asimetris** (bagian 3.3). Hanya robot 01 yang merencana dengan badan robot 02 sebagai rintangan.
+2. **Dua perencana berjalan bersamaan.** Setiap robot merencana di thread Python sendiri (`navigasi.py`, `threading.Thread(target=kerja)`), dan thread berbagi **GIL**. Setelah tujuan disimetriskan, kedua robot mulai tepat bersamaan. Waktu jam dinding tiap robot hampir sama dengan **jumlah** kedua rencana offline:
+
+| Rencana | Run asimetris | Run simetris, bersamaan | Offline (median 9×) |
+|---|---|---|---|
+| A\* S1 robot 01 / 02 | 27,4 / 20,2 ms | 15,0 / 12,1 ms | 10,2 / 11,0 ms |
+| A\* S2 robot 01 / 02 | 34,9 / 42,0 ms | 58,6 / 51,8 ms | 29,3 / 23,4 ms |
+| DQfD S1 robot 01 / 02 | 12,5 / 16,2 ms | 37,3 / 29,0 ms | 8,6 / 15,4 ms |
+| DQfD S2 robot 01 / 02 | 11,3 / 7,3 ms | 11,8 / 11,4 ms | 5,4 / 5,1 ms |
+
+Contoh: DQfD S1 offline 8,6 + 15,4 = 24 ms, sedangkan di simulasi tercatat 29–37 ms **per robot**.
+
+### 5.2 Perubahan kode
+| Berkas | Perubahan |
+|---|---|
+| `navigasi.py` | `terima_tujuan(baru, tunda=True)`: tujuan diterima, perencanaan ditunda (`perlu_rencana`). `diam`: robot dengan perencanaan tertunda tidak dihitung diam. `batalkan()` mereset `perlu_rencana`. `KUNCI_RENCANA`: satu perencanaan pada satu waktu untuk semua robot, sedangkan daftar rintangan tetap diambil sebelum menunggu giliran |
+| `rencana.py` | `jam_cpu_thread()`: waktu CPU thread pemanggil. `rencanakan()` mengembalikan `cpu_s` |
+| `drl/uji_robot_nyata.py` | `_mulai_uji`: semua tujuan ditetapkan dulu (`tunda=True`), baru `minta_rencana()` untuk setiap robot. `hasil.jsonl` mencatat `cpu_ms` dan `mulai_ms` (jeda dari permintaan rencana pertama sampai rencana ini mulai) |
+
+- **Waktu CPU di Windows.** `time.thread_time()` memakai `GetThreadTimes`, yang hanya naik per **15,625 ms**: terukur 0; 15,625; 31,25; … ms. Itu lebih kasar daripada satu rencana. Karena itu dipakai `QueryThreadCycleTime` (siklus CPU thread), dikalibrasi sekali ke detik terhadap `perf_counter` (20 ms saat modul dimuat, ±3,79 GHz di laptop ini). Di sistem lain tetap `time.thread_time()`.
+- **Validasi.** Dua thread berebut GIL: jam dinding 71–79 ms, CPU 61–64 ms, sedangkan sendirian 58 ms. Offline tanpa perebutan: CPU = jam dinding, selisih < 0,1 ms.
+
+### 5.3 Hasil run final (`uji_nyata/20261104_232645_Gudang_sim`)
+
+Semua robot tiba, tanpa estop, tanpa menunggu.
+
+| Skenario | Hybrid A\* + RS | DQfD murni | Selisih |
+|---|---:|---:|---:|
+| S1 | 19,22 s | **10,34 s** | **−8,88 s (−46%)** |
+| S2 | 23,89 s | 24,30 s | +0,41 s (+1,7%) |
+| **Jumlah** | 43,11 s | **34,64 s** | **−8,47 s (−20%)** |
+
+| Rencana | Mulai | Jam dinding | CPU thread | Bagian jauh | Bagian dekat |
+|---|---:|---:|---:|---:|---:|
+| A\* S1 robot 01 / 02 | +1,1 / +14,9 ms | 13,3 / 12,1 ms | 12,0 / 12,0 ms | 12,75 / 11,71 | 0,47 / 0,26 |
+| A\* S2 robot 01 / 02 | +0,9 / +39,0 ms | 37,8 / 33,7 ms | 36,0 / 32,8 ms | 37,47 / 33,29 | 0,27 / 0,31 |
+| DQfD S1 robot 01 / 02 | +0,9 / +25,2 ms | 24,1 / 18,3 ms | 21,0 / 17,8 ms | 23,49 / 17,81 | 0,53 / 0,41 |
+| DQfD S2 robot 01 / 02 | +0,9 / +9,1 ms | 7,9 / 6,9 ms | 6,8 / 6,4 ms | 7,32 / 6,14 | 0,54 / 0,54 |
+
+| Bagian (rata-rata 4 rencana) | Hybrid A\* + RS | DQfD murni | Rasio |
+|---|---:|---:|---:|
+| Pencarian jauh: Hybrid A\* / model jauh | 23,8 ms | **13,7 ms** | DQfD 1,7× lebih cepat |
+| Penyelesaian dekat: RS / model dekat | **0,33 ms** | 0,51 ms | RS 1,5× lebih cepat |
+| Lain-lain | 0,07 ms | 0,11 ms | |
+| **Total (jam dinding)** | 24,2 ms | **14,3 ms** | DQfD 1,7× lebih cepat |
+| **Total (CPU thread)** | 23,2 ms | **13,0 ms** | DQfD 1,8× lebih cepat |
+| Offline, kondisi simetris (median 9×) | 18,5 ms | **8,6 ms** | DQfD 2,1× lebih cepat |
+
+Pengamatan:
+- **Tumpang tindih hilang.** Robot 02 mulai tepat setelah robot 01 selesai, dan jam dinding ≈ CPU (selisih 0,1–3,1 ms). Jeda mulai robot 02 (9–39 ms) kurang dari 0,4% dari makespan.
+- **"Lain" ≤ 0,22 ms untuk kedua robot.** Asimetri di bagian 3.3 sudah hilang.
+- **DQfD S1 di simulasi (18–24 ms) lebih lama daripada offline (8,6 / 15,4 ms).** CPU-nya juga 18–21 ms, jadi ini pekerjaan sungguhan, bukan perebutan GIL. Di simulasi robot mulai dari pose hasil pulang yang meleset 1,5–3 cm dari titik awal, dan DQfD menempuh pencarian yang berbeda: jalur robot 01 156 cm, sedangkan offline dari pose persis 177 cm. **Waktu dan jalur DQfD peka terhadap pose awal**, sehingga n = 1 per skenario belum stabil.
+- Simulasi tetap lebih lambat daripada offline (A\* +31%, DQfD +66%) karena loop simulasi 20 Hz ikut memakai GIL.
+
+### 5.4 Temuan: loop kendali terlambat saat rencana A\* panjang
+Diukur offline (Python 3.14.3, Windows): loop utama berdetak 20 Hz seperti `navigasi.py`, sementara satu thread merencana.
+
+| Rencana | Durasi | Keterlambatan detak (maks / median) |
+|---|---:|---:|
+| A\* S2 robot 01 | 30 ms | 0,6 / 0,6 ms |
+| A\* (195,75; 26; −90) → (32; 170; −90) | 503–642 ms | **16,5–28,5 / 7,4–13,9 ms** |
+| DQfD, ketiga kasus | 6–14 ms | ≤ 0,7 ms |
+
+| Interval GIL (`sys.setswitchinterval`) | Beban loop | Keterlambatan maks / median |
+|---|---|---:|
+| 5 ms (bawaan) | 0 ms | 28,5 / 13,9 ms |
+| 5 ms (bawaan) | 10 ms | 23,5 / 12,7 ms |
+| 1 ms | 0 ms | 16,7 / 7,4 ms |
+| 1 ms | 10 ms | 16,5 / 8,4 ms |
+
+- Loop kendali **tidak berhenti total**, tetapi selama rencana A\* yang panjang setiap detak terlambat 7–28 ms. Itu masih di bawah satu periode kendali (50 ms).
+- Hal yang sama membuat `Thread.start()` kadang baru kembali setelah rencana pendek selesai: 12,2 ms dari 12,6 ms. Karena itu `mulai_ms` diukur dari permintaan rencana pertama, bukan dari saat menunggu kunci.
+- **Tambah thread tidak menolong**, karena GIL hanya mengizinkan satu thread menjalankan Python pada satu waktu. Jalan keluar yang benar-benar paralel:
+  1. **Multi-proses**: satu proses perencana per robot, sehingga loop kendali tidak terganggu.
+  2. **Python free-threaded** (3.14t): dukungan numba dan OpenCV perlu dicek dulu.
+  3. Melepas GIL di bagian berat (numba `nogil=True`), tetapi Hybrid A\* sebagian besar Python murni.
+- Untuk pengukuran makespan dan waktu proses, perencanaan bergiliran dan waktu CPU sudah cukup. Multi-proses lebih bernilai untuk keselamatan robot nyata dan rencana ulang yang lama, misalnya kasus 1,3–1,8 s di [[17 Forward Numpy ver-1-5 dan Perbandingan Waktu Proses serta Makespan|catatan 17]].
+- `drl/uji_navigasi.py` (simulasi catatan 15 dan 17) masih memberi tujuan berurutan. Hasil catatan 15 dan 17 perlu dibaca dengan asimetri ini.
+
+## 6. Sumber angka
 
 | Angka | Sumber |
 |---|---|
@@ -186,3 +280,7 @@ Pengukuran offline (Windows, median 7 ulangan, rencana robot 01):
 | Bagian 1.2.1 (gambar peta, skenario, Dijkstra) | skrip sementara `gambar_peta.py`: `HybridAStarPlanner._holonomic_heuristic` pada `Perencana.peta_dengan()` |
 | Bagian 2–3.2 | `Forklift Robot Program/uji_nyata/20261104_224635_Gudang_sim/` (`hasil.jsonl`, `ringkasan.json`, `rincian_tabel.tex`, `lintasan_S1.png`, `lintasan_S2.png`), direkap dengan skrip sementara `rekap.py` |
 | Bagian 3.3 | skrip sementara `ukur_peta.py` (`peta_dengan`, 50 ulangan) dan `ukur_lain.py` (`rencanakan` robot 01 dengan/tanpa rintangan, 7 ulangan), Windows, offline |
+| Bagian 5.1 | run asimetris `20261104_224635_Gudang_sim`, run simetris tanpa kunci `20261104_230522_Gudang_sim`, offline `offline_simetris.py` (median 9 ulangan) |
+| Bagian 5.2 | `uji_siklus.py` (resolusi `thread_time`, kalibrasi siklus, uji dua thread) |
+| Bagian 5.3 | run final `20261104_232645_Gudang_sim` (kode di commit bagian 5.2), direkap `rekap.py` |
+| Bagian 5.4 | `uji_gil.py` (`Thread.start()` dan celah loop) dan `uji_loop.py`, `uji_loop2.py` (detak 20 Hz, interval GIL 5/1 ms, beban loop 0/10 ms, 3 ulangan) |
