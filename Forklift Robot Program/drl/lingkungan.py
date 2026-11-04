@@ -150,6 +150,78 @@ BIAYA_BUNTU_CM = 5000.0
 # sinar yang menyusur dinding pun sampai ke ujung jangkauannya.
 _SINAR_ITERASI = 256
 
+
+def _sinar_loop_numpy(dist, cx, cy, ux, uy, batas, iterasi):
+    """Sphere tracing semua sinar sekaligus dengan numpy: jarak tempuh t tiap sinar.
+
+    Versi asli (sampai ver-1-4). Dipakai bila numba tidak tersedia, dan sebagai
+    acuan verifikasi _sinar_loop. Lambat bukan karena hitungannya: tiap iterasi
+    ~28 operasi numpy pada larik 32 elemen, masing-masing ~0,3-0,5 us overhead
+    pemanggilan, dan sinar yang sudah berhenti tetap ikut dihitung sampai sinar
+    TERPANJANG selesai.
+    """
+    h, w = dist.shape
+    t = np.zeros(ux.shape[0])
+    aktif = np.ones(ux.shape[0], dtype=bool)
+    for _ in range(iterasi):
+        ix = np.floor(cx + t * ux).astype(np.int64)
+        iy = np.floor(cy + t * uy).astype(np.int64)
+        dalam = (ix >= 0) & (ix < w) & (iy >= 0) & (iy < h)
+        d = np.where(dalam, dist[np.clip(iy, 0, h - 1), np.clip(ix, 0, w - 1)], 0.0)
+        aktif &= (d >= 1.0) & (t < batas)
+        if not aktif.any():
+            break
+        t = np.where(aktif, t + np.maximum(d - 0.5, 0.5), t)
+    return t
+
+
+def _sinar_loop(dist, cx, cy, ux, uy, batas, iterasi):
+    """Sama dengan _sinar_loop_numpy, satu sinar demi satu sinar (dikompilasi numba).
+
+    Hasilnya IDENTIK bit demi bit, karena operasinya sama persis dan urutannya
+    sama: t*u lalu + c, floor, perbandingan, d - 0,5 (dist float32: selisih
+    dengan 0,5 eksak untuk jarak < 2^22 sel), lalu + ke t (float64). cos/sin
+    TIDAK dihitung di sini - tetap numpy di _sinar - karena libm numba bisa
+    berbeda satu ulp dari numpy, dan floor() akan memperbesar beda itu menjadi
+    sel yang berbeda. Sinar yang berhenti langsung selesai, tidak menunggu
+    sinar terpanjang seperti versi numpy.
+    """
+    h, w = dist.shape
+    n = ux.shape[0]
+    t = np.zeros(n)
+    for i in range(n):
+        ti = 0.0
+        for _ in range(iterasi):
+            ix = int(math.floor(cx + ti * ux[i]))
+            iy = int(math.floor(cy + ti * uy[i]))
+            if 0 <= ix < w and 0 <= iy < h:
+                d = float(dist[iy, ix])
+            else:
+                d = 0.0
+            if not (d >= 1.0 and ti < batas[i]):
+                break
+            ti = ti + max(d - 0.5, 0.5)
+        t[i] = ti
+    return t
+
+
+# numba (ver-1-5): _sinar_loop dikompilasi ke kode mesin - sinar adalah porsi
+# terbesar waktu model jauh. Tanpa numba (atau bila kompilasi gagal) _sinar
+# kembali ke _sinar_loop_numpy dengan hasil yang sama, hanya lebih lambat.
+# cache=True: hasil kompilasi disimpan di __pycache__, jadi kompilasi (~1-2 s)
+# hanya sekali per mesin; nogil=True: thread perencana tidak menahan GIL selama
+# sinar dihitung, sehingga tidak berebut dengan loop kamera/kendali navigasi.py.
+# Dikompilasi saat impor (pemanasan di bawah), bukan saat rencana pertama robot.
+try:
+    from numba import njit as _njit
+    _sinar_inti = _njit(cache=True, nogil=True)(_sinar_loop)
+    _sinar_inti(np.ones((2, 2), np.float32), 0.5, 0.5, np.ones(1), np.ones(1), np.ones(1), 1)
+except Exception as _e:                      # numba tidak ada / gagal kompilasi
+    if not isinstance(_e, ImportError):
+        print(f"[!] lingkungan.py: numba gagal ({type(_e).__name__}: {_e}), sinar memakai numpy")
+    _sinar_inti = None
+SINAR_NUMBA = _sinar_inti is not None
+
 _TETANGGA = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
 
 
@@ -764,27 +836,20 @@ class LingkunganRencana:
 
         Sphere tracing di atas distance transform: dari titik mana pun, lingkaran
         berjari-jari dist[titik] pasti kosong, jadi sinar boleh melompat sejauh
-        itu tanpa melewatkan rintangan.
+        itu tanpa melewatkan rintangan. Loopnya _sinar_loop (numba) atau
+        _sinar_loop_numpy (tanpa numba); hasilnya identik.
         """
         dist = self.omap.dist
-        h, w = dist.shape
         off = self._pusat_off
         cx = self.x + off * math.cos(self.yaw)
         cy = self.y + off * math.sin(self.yaw)
         ang = self.yaw + self._sudut
         ux, uy = np.cos(ang), np.sin(ang)
         batas = self._tepi + self._jangkau
-        t = np.zeros(N_SINAR)
-        aktif = np.ones(N_SINAR, dtype=bool)
-        for _ in range(_SINAR_ITERASI):
-            ix = np.floor(cx + t * ux).astype(np.int64)
-            iy = np.floor(cy + t * uy).astype(np.int64)
-            dalam = (ix >= 0) & (ix < w) & (iy >= 0) & (iy < h)
-            d = np.where(dalam, dist[np.clip(iy, 0, h - 1), np.clip(ix, 0, w - 1)], 0.0)
-            aktif &= (d >= 1.0) & (t < batas)
-            if not aktif.any():
-                break
-            t = np.where(aktif, t + np.maximum(d - 0.5, 0.5), t)
+        if _sinar_inti is not None:
+            t = _sinar_inti(dist, cx, cy, ux, uy, batas, _SINAR_ITERASI)
+        else:
+            t = _sinar_loop_numpy(dist, cx, cy, ux, uy, batas, _SINAR_ITERASI)
         return np.clip((np.minimum(t, batas) - self._tepi) / self._jangkau, 0.0, 1.0)
 
     def _arah_heuristik(self):
