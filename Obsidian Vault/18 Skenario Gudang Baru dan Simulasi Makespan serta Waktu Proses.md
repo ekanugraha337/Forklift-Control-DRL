@@ -21,6 +21,12 @@ Homografi kamera diulang, lalu skenario uji Gudang dibuat dari awal dengan `drl.
 > > - **Penyelesaian dekat:** RS 0,33 ms vs model dekat 0,51 ms.
 > > - **Makespan:** S1 19,22 vs **10,34 s** (−46%), S2 23,89 vs 24,30 s.
 > > - **Offline** (tanpa loop simulasi): A\* 18,5 ms vs DQfD 8,6 ms (2,1×).
+>
+> > [!success] Pembaruan (bagian 5.5): perencana per robot di proses terpisah (`--perencana-proses`)
+> > - **Makespan sama:** S1 19,19 vs **10,36 s**, S2 24,05 vs 23,98 s.
+> > - **Waktu proses bersih** (jam dinding = CPU): A\* **23,3 ms** vs DQfD **11,2 ms** per rencana (**2,1×**, sama dengan offline).
+> > - **Pencarian jauh:** Hybrid A\* 22,9 ms vs model jauh **10,6 ms**. **Penyelesaian dekat:** RS 0,35 ms vs model dekat 0,49 ms.
+> > - **Robot 02 mulai merencana +1,5–2,0 ms** (thread: +9–39 ms). **Celah loop kendali maks 0,07 s** (thread: 0,21–0,43 s).
 
 ---
 
@@ -183,7 +189,7 @@ Pengukuran offline (Windows, median 7 ulangan, rencana robot 01):
    - Tambah skenario yang **memaksa pilihan rute**, misalnya pindah lorong lewat celah di ujung Z5–Z8. Ini lebih mungkin membedakan makespan daripada putar balik di tempat.
    - Rapikan zona peta Gudang ke garis ubin (bagian 1.1), lalu periksa ulang tengah lorong dan semua pose skenario.
    - ~~Simetriskan urutan pemberian tujuan~~: sudah dikerjakan, lihat bagian 5.
-   - Prototipe perencana **multi-proses** per robot untuk robot nyata, lihat bagian 5.4.
+   - ~~Prototipe perencana multi-proses per robot~~: sudah dipasang (`--perencana-proses`), lihat bagian 5.5. Berikutnya: uji di robot nyata, dan jadikan bawaan bila hasilnya sama.
 
 > [!warning] Batasan
 > - **n = 1 per sel (skenario × perencana), simulasi tanpa derau.** Tidak ada sebaran, jadi belum ada uji statistik.
@@ -273,6 +279,64 @@ Diukur offline (Python 3.14.3, Windows): loop utama berdetak 20 Hz seperti `navi
 - Untuk pengukuran makespan dan waktu proses, perencanaan bergiliran dan waktu CPU sudah cukup. Multi-proses lebih bernilai untuk keselamatan robot nyata dan rencana ulang yang lama, misalnya kasus 1,3–1,8 s di [[17 Forward Numpy ver-1-5 dan Perbandingan Waktu Proses serta Makespan|catatan 17]].
 - `drl/uji_navigasi.py` (simulasi catatan 15 dan 17) masih memberi tujuan berurutan. Hasil catatan 15 dan 17 perlu dibaca dengan asimetri ini.
 
+### 5.5 Perencana per robot di proses terpisah (`--perencana-proses`)
+
+Commit `e981f0d`. Bawaan tetap thread. Diaktifkan dengan:
+```powershell
+python -m drl.uji_robot_nyata --skenario uji_nyata/Gudang.json --simulasi --ulang 1 --perencana-proses
+python navigasi.py --id 1,2 --perencana dqfd-murni --perencana-proses
+```
+
+**Rancangan** (`perencana_proses.py`):
+- **`PerencanaProses`**: satu proses anak (*spawn*) per robot. Proses itu membuat `Arena` dan `Perencana` sendiri dari nama peta dan nomor robot, untuk semua jenis yang diuji. Yang dikirim lewat pipa hanya pose, poligon rintangan, dan hasil (jalur + info).
+- **`PerencanaDiProses`**: pengganti `rencana.Perencana`. `rencanakan()` dikerjakan proses anak. Kueri lain (`margin_untuk_pose`, `peta_dengan`, `pose_bebas`, `_untuk`, …) dijawab `Perencana` lokal yang identik.
+- **`navigasi.py` hampir tidak berubah.** Thread pekerja tetap memanggil `self.per.rencanakan()`, tetapi kini hanya menunggu pipa (`recv()`). Thread yang menunggu I/O tidak memegang GIL, jadi loop kendali bebas. `KUNCI_RENCANA` hanya dipakai di mode thread.
+- **Dua jebakan Windows yang dihindari:**
+  - `multiprocessing.connection.wait()` dan `poll(batas)` memakai timer ±15,6 ms dan bisa tidur jauh melewati batasnya. Karena itu dipakai `recv()` (bangun tepat saat data tiba), atau `poll(0)` ditambah `sleep` 1 ms.
+  - `jam_cpu_thread()` dulu memakai satu penampung `c_ulonglong` bersama, sehingga dua thread yang bersamaan bisa membaca siklus thread lain (terukur CPU 11 ms untuk rencana 26 ms). Sekarang setiap panggilan memakai penampung baru. Angka bagian 5.3 tidak terpengaruh, karena perencanaannya bergiliran.
+
+**Pemeriksaan:** dari pose awal persis, jalur di proses anak **identik** dengan perencana lokal, 8/8 (S1, S2 × robot 01/02 × A\*/DQfD). IPC 0,6–1,0 ms per rencana. Dua proses siap dalam 1,10–1,13 s, dimuat paralel.
+
+**Banding tanpa robot** (`python perencana_proses.py --banding`, loop 20 Hz dengan beban 5 ms/detak, median 5 ulangan):
+
+| Kasus | Ukuran | Thread bersamaan | Thread bergiliran | **Proses per robot** |
+|---|---|---:|---:|---:|
+| S1 A\* | kedua robot selesai | 21,5 ms | 19,0 ms | **14,0 ms** |
+| S2 A\* | kedua robot selesai | 62,4 ms | 58,9 ms | **33,4 ms** |
+| S1 DQfD | kedua robot selesai | 32,5 ms | 29,9 ms | **17,8 ms** |
+| S2 DQfD | kedua robot selesai | 12,4 ms | 13,8 ms | **9,2 ms** |
+| A\* panjang | rencana robot 01 | 630 ms | 568 ms | **518 ms** |
+| A\* panjang | robot 02 (rencana 34–87 ms) menerima hasil setelah | 104 ms | 606 ms | **37 ms** |
+| A\* panjang | keterlambatan loop maks / median | 29,0 / 11,3 ms | 21,3 / 11,1 ms | **1,1 / 0,6 ms** |
+
+**Simulasi Gudang** (`--ulang 1`): thread bergiliran `20261104_232645_Gudang_sim` vs proses `20261104_234613_Gudang_sim`.
+
+| | Thread bergiliran | **Proses per robot** |
+|---|---:|---:|
+| Makespan S1: A\* / DQfD | 19,22 / 10,34 s | 19,19 / 10,36 s |
+| Makespan S2: A\* / DQfD | 23,89 / 24,30 s | 24,05 / 23,98 s |
+| Rencana A\* rata-rata (jam / CPU) | 24,2 / 23,2 ms | **23,3 / 23,3 ms** |
+| Rencana DQfD rata-rata (jam / CPU) | 14,3 / 13,0 ms | **11,2 / 11,2 ms** |
+| Bagian jauh: Hybrid A\* / model jauh | 23,8 / 13,7 ms | 22,9 / **10,6 ms** |
+| Bagian dekat: RS / model dekat | 0,33 / 0,51 ms | 0,35 / 0,49 ms |
+| Rasio waktu proses A\* / DQfD | 1,7× | **2,1×** (offline 2,1×) |
+| Robot 02 mulai merencana | +9 sampai +39 ms | **+1,5 sampai +2,0 ms** |
+| Celah loop terbesar sepanjang run | 0,43 s; ±0,2 s di awal setiap run thread | **0,07 s** |
+
+| Rencana (proses, ms) | Hybrid A\* | RS | Model jauh | Model dekat | Total |
+|---|---:|---:|---:|---:|---:|
+| S1 robot 01 / 02 | 13,14 / 10,47 | 0,50 / 0,33 | – | – | 13,71 / 10,86 |
+| S2 robot 01 / 02 | 35,39 / 32,68 | 0,25 / 0,33 | – | – | 35,72 / 33,10 |
+| S1 robot 01 / 02 | – | – | 17,12 / 13,10 | 0,53 / 0,48 | 17,74 / 13,68 |
+| S2 robot 01 / 02 | – | – | 7,27 / 5,00 | 0,42 / 0,54 | 7,77 / 5,65 |
+
+Pengamatan:
+- **Makespan tidak berubah** (selisih ≤ 0,3 s), karena rencana di skenario ini hanya ≤ 40 ms. Keunggulan DQfD di S1 tetap: **−46%**.
+- **Waktu proses sekarang bersih.** Jam dinding = CPU, dan DQfD turun 14,3 → 11,2 ms karena tidak lagi berbagi GIL dengan loop simulasi. Rasio 2,1× sama dengan pengukuran offline, jadi angka simulasi dan offline kini konsisten.
+- **Loop kendali mulus.** Celah ±0,2 s yang selalu muncul di awal percobaan pertama mode thread juga hilang.
+- **Satu run proses sebelumnya (`20261104_234155_Gudang_sim`) dibuang.** Loop berhenti 2,22 s di tengah S1 DQfD (+7,7 s, saat tidak ada rencana berjalan) dan dua kali saat pulang. Akibatnya makespan DQfD S1 menjadi 12,46 s. Run ulang dengan jendela tidak disentuh tidak menunjukkan celah > 0,07 s. Celah sebesar itu juga pernah muncul di mode thread (4,71 s dan 1,07 s di run awal). Kemungkinan penyebabnya interaksi dengan jendela OpenCV atau sistem, bukan perencana.
+- **Biaya:** persiapan +1,1 s sekali per sesi, memori satu salinan peta dan model per robot, dan IPC ±1 ms per rencana. Bila jumlah robot melebihi jumlah inti CPU, proses akan kembali berebut CPU.
+
 ## 6. Sumber angka
 
 | Angka | Sumber |
@@ -286,3 +350,4 @@ Diukur offline (Python 3.14.3, Windows): loop utama berdetak 20 Hz seperti `navi
 | Bagian 5.2 | `uji_siklus.py` (resolusi `thread_time`, kalibrasi siklus, uji dua thread) |
 | Bagian 5.3 | run final `20261104_232645_Gudang_sim` (kode di commit bagian 5.2), direkap `rekap.py` |
 | Bagian 5.4 | `uji_gil.py` (`Thread.start()` dan celah loop) dan `uji_loop.py`, `uji_loop2.py` (detak 20 Hz, interval GIL 5/1 ms, beban loop 0/10 ms, 3 ulangan) |
+| Bagian 5.5 | commit `e981f0d`. Pemeriksaan jalur: skrip sementara `cek_proxy.py`. Banding: `python perencana_proses.py --banding --ulang 5`. Simulasi: `20261104_232645_Gudang_sim` (thread) dan `20261104_234613_Gudang_sim` (proses), direkap `rekap.py`; celah loop dari `lintasan.csv`; run dibuang `20261104_234155_Gudang_sim` |
