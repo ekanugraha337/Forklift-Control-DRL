@@ -4,23 +4,32 @@ Tanggal: 2026-11-05 · Branch `ver-1-5`, kode commit `4d26e77` · Lanjutan dari 
 
 Peta Gudang2 diganti dengan rancangan baru: pulau rak di tengah, teluk parkir di dinding bawah, dan slot ambil di dinding atas. Berbeda dengan skenario Gudang di catatan 18, yang sengaja dibuat tanpa interaksi, skenario Gudang2 ini **sengaja membuat jalur kedua robot bersilangan**. Tanpa wasit, kedua robot akan bertabrakan, sehingga wasit harus memutuskan siapa yang menunggu, memutar, atau minggir.
 
-Catatan ini merekam peta, skenario, dan hasil **simulasi** (`--simulasi --ulang 2`) dengan parameter yang sama seperti catatan 18: makespan, galat pose akhir, dan waktu proses per bagian (Hybrid A\*, RS, model jauh, model dekat). Ditambah ukuran khusus wasit. Uji robot nyata menyusul.
+Catatan ini merekam peta, skenario, dan hasil **simulasi** (`--simulasi --ulang 2`, bagian 1–7) dan **uji robot nyata** (`--ulang 3`, bagian 8) dengan parameter yang sama seperti catatan 18: makespan, galat pose akhir, dan waktu proses per bagian (Hybrid A\*, RS, model jauh, model dekat). Ditambah ukuran khusus wasit dan titik konflik.
 
-> [!summary] Ringkasan (run `20261105_061315_Gudang2_sim`, 1 skenario × 2 perencana × 2 ulangan)
-> - **Wasit bekerja di keempat percobaan, tanpa sentuhan.** Jarak badan terdekat kedua robot 8,0–10,5 cm; tanpa wasit 0 cm. Tidak ada estop.
->   - **Hybrid A\* ulangan 1:** robot 01 menunggu 5 s, lalu **memutari pulau dari atas** (jalur baru 423 cm, robot menempuh 564 cm).
->   - **Tiga percobaan lain:** kedua robot berhadapan, dan robot yang mengalah **minggir** (dua kali di DQfD, sekali sebagai rencana minggir di A\*).
-> - **Makespan:**
+> [!summary] Ringkasan: simulasi (`20261105_061315_Gudang2_sim`, 2 ulangan) dan robot nyata (`20261105_070646_Gudang2`, 3 ulangan)
+> - **Wasit bekerja di semua 10 percobaan, tanpa sentuhan dan tanpa estop.** Jarak badan terdekat kedua robot 8,0–10,5 cm di simulasi dan 7,0–9,7 cm di robot nyata; tanpa wasit 0 cm.
+> - **Titik konflik praktis sama** di simulasi dan robot nyata: di bawah pulau, di antara kedua teluk dalam. Rata-ratanya (121, 145) vs (122, 149) cm, selisih 3,7 cm, terjadi ±7 s setelah tujuan diberikan (bagian 8.6).
+> - **Makespan rata-rata** (Hybrid A\* + RS vs DQfD murni):
 >
->   | | Hybrid A\* + RS | DQfD murni |
+>   | | Simulasi | Robot nyata |
 >   |---|---|---|
->   | Ulangan 1 / 2 → rata-rata | 52,26 / 34,64 → 43,45 s | 34,23 / 27,00 → **30,61 s** (−30%) |
+>   | Hybrid A\* + RS | 43,45 s (52,26 / 34,64) | 37,11 s (34,80 / 40,84 / 35,70) |
+>   | DQfD murni | **30,61 s** (34,23 / 27,00) | 37,39 s (48,37 / 32,43 / 31,37) |
+>   | Selisih DQfD vs A\* | **−30%** | **+1%** (setara) |
 >
->   Makespan di sini mengukur **perencana dan wasit sekaligus**. Satu jalan memutar A\* menambah ±18 s.
-> - **Waktu proses rencana pertama** (4 rencana per perencana): A\* 17,8 ms vs DQfD **15,9 ms**. Bagian jauh: Hybrid A\* **14,7 ms** vs model jauh 15,4 ms. Bagian dekat: RS 3,0 ms vs model dekat **0,39 ms**. Jam dinding = CPU (selisih ≤ 0,1 ms).
-> - **Rencana ulang akibat wasit:** A\* 15 kali (1 gagal, terlama 1,77 s), DQfD 21 kali (3 gagal, terlama 1,54 s). Loop kendali tidak terganggu (celah terbesar 0,11 s), karena perencana berjalan di proses sendiri.
-> - **Galat pose akhir** lebih besar daripada di Gudang tanpa interaksi: A\* 1,92 cm / 7,30° (maks 4,10 cm / **17,10°**), DQfD 3,33 cm / 6,28° (maks 4,99 cm / 10,20°).
-> - **n = 2, simulasi tanpa derau.** Hasil wasit sangat bergantung pada waktu kedua robot tiba di titik silang.
+>   Makespan di sini mengukur **perencana dan wasit sekaligus**, dan selalu ditentukan robot yang mengalah.
+>   - Di simulasi, A\* ulangan 1 memutari pulau (+18 s), dan robot yang mengalah berganti-ganti.
+>   - Di robot nyata tidak ada jalan memutar. **Robot 02 mengalah di 5 dari 6 percobaan.** Satu percobaan DQfD memakan 48,37 s karena dua rencana ulang gagal dan robot 01 menunggu 11,5 s.
+> - **Galat pose akhir** (posisi / arah, rata-rata):
+>
+>   | | Simulasi | Robot nyata |
+>   |---|---|---|
+>   | Hybrid A\* + RS | 1,92 cm / 7,30° (maks 4,10 cm / 17,10°) | 1,64 cm / 4,55° (maks 2,98 cm / 9,05°) |
+>   | DQfD murni | 3,33 cm / 6,28° (maks 4,99 cm / 10,20°) | **1,10 cm / 2,85°** (maks 2,10 cm / 6,73°) |
+>
+> - **Waktu proses rencana pertama:** simulasi A\* 17,8 vs DQfD 15,9 ms; robot nyata A\* 20,8 vs DQfD **13,4 ms**. Bagian dekat: RS 2,2–3,0 ms vs model dekat 0,4–0,5 ms. Jam dinding = CPU.
+> - **Rencana ulang akibat wasit:** simulasi A\* 15 / DQfD 21 kali, robot nyata A\* 41 / DQfD 35 kali. Rencana ulang DQfD yang gagal umumnya mahal (0,75–1,54 s), sedangkan A\* gagal dalam ≤ 1 ms. Loop kendali tidak terganggu (celah terbesar 0,11 s).
+> - **n = 2 (simulasi) dan 3 (robot nyata).** Keputusan wasit (siapa mengalah, minggir atau memutar) sangat memengaruhi makespan.
 
 ---
 
@@ -219,10 +228,7 @@ Garis hitam adalah jarak badan kedua robot selama UJI. Bilah berwarna adalah kea
 3. **Waktu proses rencana pertama hampir setara** (A\* 17,8 vs DQfD 15,9 ms). Di Gudang2, bagian jauh A\* sedikit lebih cepat, sedangkan RS lebih lambat daripada model dekat. Rencana ulang DQfD yang gagal mahal (0,75–1,54 s).
 4. **Galat pose akhir membesar setelah interaksi** (sampai 17° / 5 cm).
 5. Langkah berikutnya:
-   - **Uji robot nyata** dengan skenario ini:
-     ```powershell
-     python -m drl.uji_robot_nyata --skenario uji_nyata/Gudang2.json --ulang 2
-     ```
+   - ~~Uji robot nyata dengan skenario ini~~: sudah dilakukan (`--ulang 3`), lihat bagian 8.
    - Tambah ulangan (`--ulang 5`), supaya terlihat seberapa sering wasit memilih memutar vs minggir untuk setiap perencana.
 
 > [!warning] Batasan
@@ -241,3 +247,201 @@ Garis hitam adalah jarak badan kedua robot selama UJI. Bilah berwarna adalah kea
 | Bagian 1.3, gambar peta, skenario, linimasa wasit | skrip sementara `gambar_gudang2.py` |
 | Bagian 3–5 | `Forklift Robot Program/uji_nyata/20261105_061315_Gudang2_sim/` (`hasil.jsonl`, `lintasan.csv`, `ringkasan.json`, `lintasan_S1.png`) dan log simulasi, direkap dengan skrip sementara `analisis_u2.py` |
 | Parameter wasit | `Forklift Robot Program/konfig.py` (bagian MULTI-ROBOT), `wasit.py` |
+
+---
+
+## 8. Uji robot nyata
+
+Bagian ini terpisah dari simulasi di bagian 1–7. Peta, skenario, dan metodenya sama, tetapi dengan robot ID 01 dan ID 02 sungguhan, pose dari kamera AprilTag, dan perintah lewat MQTT.
+
+### 8.1 Pengaturan dan jalannya uji
+
+| | |
+|---|---|
+| Program | `python -m drl.uji_robot_nyata --skenario uji_nyata/Gudang2.json --ulang 3` (tanpa `--simulasi`) |
+| Folder hasil | `Forklift Robot Program/uji_nyata/20261105_070646_Gudang2`, 2026-11-05 pukul 07:07–07:16 (6 percobaan) |
+| Konfirmasi | operator menekan `n` sebelum setiap percobaan |
+| Perencana | satu proses per robot: pid 17948 (robot 01) dan 27952 (robot 02) di setiap rencana, termasuk rencana ulang |
+
+- **Semua 6 percobaan selesai**, dan semua robot tiba. Tidak ada estop dan tidak ada sentuhan.
+- **Pulang:** di setiap percobaan kedua robot tiba di pose awal pada percobaan pulang **pertama**, padahal jalur pulangnya juga bersilangan. Tidak ada campur tangan operator. Galat awal 2,5–3,8 cm.
+- **Kamera:** tag kedua robot terlihat di **100%** baris fase UJI. Hanya dua baris berupa ramalan, untuk robot 02.
+- **Loop kendali:** celah terbesar selama UJI 0,11 s, dan periode median 64 ms, sama dengan uji lain.
+- Run sebelumnya tidak dipakai: `20261105_065405_Gudang2` (3 percobaan, terhenti), `20261105_070514_Gudang2` (1 percobaan), serta `20261105_070159_Gudang2` dan `20261105_070347_Gudang2` (kosong).
+
+### 8.2 Makespan
+
+| | Hybrid A\* + RS | DQfD murni |
+|---|---:|---:|
+| Makespan ulangan 1 | 34,80 s | 48,37 s |
+| Makespan ulangan 2 | 40,84 s | 32,43 s |
+| Makespan ulangan 3 | 35,70 s | 31,37 s |
+| **Makespan rata-rata** | **37,11 s** | 37,39 s (+1%) |
+
+| Percobaan | Robot | Waktu tempuh | Rencana pertama | Jarak tempuh aktual | Menunggu | Minggir | Rencana |
+|---|---|---:|---:|---:|---:|---:|---:|
+| A\* ulangan 1 | 01 | 23,35 s | 243,7 cm | 240,1 cm | 4,50 s | 0 | 1 |
+| A\* ulangan 1 | 02 | **34,80 s** | 242,2 cm | 338,1 cm | 0,80 s | **1** | 14 |
+| A\* ulangan 2 | 01 | 23,53 s | 242,1 cm | 238,3 cm | 4,75 s | 0 | 1 |
+| A\* ulangan 2 | 02 | **40,84 s** | 246,8 cm | 355,4 cm | 0,80 s | **1** | 15 |
+| A\* ulangan 3 | 01 | 23,06 s | 242,7 cm | 246,0 cm | 3,00 s | 0 | 1 |
+| A\* ulangan 3 | 02 | **35,70 s** | 243,5 cm | 335,7 cm | 0,80 s | **1** | 15 |
+| DQfD ulangan 1 | 01 | 29,18 s | 231,6 cm | 223,9 cm | **11,50 s** | 0 | 1 |
+| DQfD ulangan 1 | 02 | **48,37 s** | 245,9 cm | 370,3 cm | 4,80 s | **1** | 7 |
+| DQfD ulangan 2 | 01 | **32,43 s** | 220,4 cm | 299,7 cm | 0,80 s | **1** | 16 |
+| DQfD ulangan 2 | 02 | 22,64 s | 259,1 cm | 262,1 cm | 2,10 s | 0 | 1 |
+| DQfD ulangan 3 | 01 | 18,92 s | 226,3 cm | 209,9 cm | 4,95 s | 0 | 1 |
+| DQfD ulangan 3 | 02 | **31,37 s** | 228,1 cm | 317,1 cm | 0,80 s | 0 | 15 |
+
+![[Uji nyata Gudang2 2026-11-05 S1.png]]
+
+- **Makespan kedua perencana setara** (37,11 vs 37,39 s). Rencana pertama keduanya mirip (A\* 242–247 cm, DQfD 220–259 cm), dan semuanya bersilangan di bawah pulau.
+- **Makespan selalu ditentukan robot yang mengalah**, yang tiba 31,4–48,4 s, sedangkan robot yang lewat tiba 18,9–29,2 s. Jarak tempuh robot yang mengalah 36–51% lebih panjang daripada rencana pertamanya, karena keluar jalur untuk minggir atau memutar lalu kembali.
+- **Percobaan terlama, DQfD ulangan 1 (48,37 s):** robot 01 menunggu 11,5 s. Robot 02 membutuhkan 6 rencana ulang, dua di antaranya gagal (terlama 1,08 s), sebelum minggir.
+
+### 8.3 Galat pose akhir
+
+| Percobaan | Robot | Posisi | Arah | Maju | Samping |
+|---|---|---:|---:|---:|---:|
+| A\* ulangan 1 | 01 | 1,18 cm | 2,83° | −0,43 cm | +1,10 cm |
+| A\* ulangan 1 | 02 | 1,83 cm | 7,12° | −0,75 cm | +1,67 cm |
+| A\* ulangan 2 | 01 | 1,24 cm | 2,28° | −0,38 cm | +1,19 cm |
+| A\* ulangan 2 | 02 | 2,98 cm | 9,05° | −0,70 cm | −2,90 cm |
+| A\* ulangan 3 | 01 | 1,59 cm | 4,77° | +1,00 cm | +1,24 cm |
+| A\* ulangan 3 | 02 | 1,04 cm | 1,22° | −1,03 cm | +0,17 cm |
+| DQfD ulangan 1 | 01 | 0,46 cm | 0,24° | −0,02 cm | −0,46 cm |
+| DQfD ulangan 1 | 02 | 1,04 cm | 0,11° | −1,04 cm | +0,06 cm |
+| DQfD ulangan 2 | 01 | 1,03 cm | 3,37° | −0,00 cm | −1,03 cm |
+| DQfD ulangan 2 | 02 | 1,34 cm | 6,18° | −0,47 cm | −1,26 cm |
+| DQfD ulangan 3 | 01 | 2,10 cm | 6,73° | −0,24 cm | −2,09 cm |
+| DQfD ulangan 3 | 02 | 0,61 cm | 0,46° | −0,23 cm | −0,57 cm |
+
+| Ringkasan (6 pose per perencana) | Hybrid A\* + RS | DQfD murni |
+|---|---:|---:|
+| Galat posisi: rata-rata / median / maks | 1,64 / 1,42 / 2,98 cm | **1,10** / 1,04 / 2,10 cm |
+| Galat arah: rata-rata / median / maks | 4,55 / 3,80 / 9,05° | **2,85** / 1,92 / 6,73° |
+| Komponen maju: rata-rata \|maju\| (rata-rata bertanda) | 0,72 (−0,38) cm | 0,33 (−0,33) cm |
+| Komponen samping: rata-rata \|samping\| / maks | 1,38 / 2,90 cm | 0,91 / 2,09 cm |
+| Jarak terdekat ke zona | 8,6–14,8 cm | 7,5–15,6 cm |
+
+- **Semua pose akhir ≤ 3,0 cm dari tujuan.** DQfD sedikit lebih presisi, tetapi selisihnya kecil dibanding sebaran antar-percobaan.
+- **Robot hampir selalu berhenti sedikit sebelum tujuan** (maju negatif di 11 dari 12 pose), sama polanya dengan Gudang (catatan 18).
+
+### 8.4 Waktu proses
+
+**Rencana pertama** (6 rencana per perencana):
+
+| Bagian | Hybrid A\* + RS | DQfD murni |
+|---|---:|---:|
+| **Pencarian jauh:** Hybrid A\* / model jauh | 18,47 ms (89%) | **12,80 ms** (96%) |
+| **Penyelesaian dekat:** RS / model dekat | 2,19 ms (11%) | **0,48 ms** (4%) |
+| Lain-lain | 0,10 ms | 0,09 ms |
+| **Total (jam dinding), rata-rata / median** | 20,76 / 18,68 ms | **13,37 / 14,59 ms** |
+| **Total (CPU), rata-rata** | 20,67 ms | **13,31 ms** |
+
+| Percobaan | Robot | Mulai | Jam / CPU | Hybrid A\* | RS | Model jauh | Model dekat |
+|---|---|---:|---:|---:|---:|---:|---:|
+| A\* ulangan 1 | 01 / 02 | +1,3 / +2,6 ms | 16,4 / 34,3 ms | 14,23 / 31,62 | 2,10 / 2,58 | – | – |
+| A\* ulangan 2 | 01 / 02 | +1,3 / +2,1 ms | 16,4 / 18,2 ms | 13,47 / 14,29 | 2,86 / 3,77 | – | – |
+| A\* ulangan 3 | 01 / 02 | +0,9 / +1,6 ms | 20,0 / 19,2 ms | 19,70 / 17,49 | 0,23 / 1,59 | – | – |
+| DQfD ulangan 1 | 01 / 02 | +1,2 / +2,1 ms | 13,4 / 9,3 ms | – | – | 12,90 / 8,75 | 0,44 / 0,42 |
+| DQfD ulangan 2 | 01 / 02 | +1,7 / +2,8 ms | 15,8 / 8,7 ms | – | – | 15,00 / 8,14 | 0,67 / 0,43 |
+| DQfD ulangan 3 | 01 / 02 | +1,0 / +2,1 ms | 17,0 / 16,1 ms | – | – | 16,46 / 15,52 | 0,51 / 0,43 |
+
+**Rencana ulang akibat wasit:**
+
+| Percobaan | Robot | Rencana ulang | Gagal | Total waktu | Terlama |
+|---|---|---:|---:|---:|---:|
+| A\* ulangan 1 | 02 | 13 | 1 | 335 ms | 115 ms |
+| A\* ulangan 2 | 02 | 14 | 1 | 454 ms | 95 ms |
+| A\* ulangan 3 | 02 | 14 | 1 | 375 ms | 123 ms |
+| DQfD ulangan 1 | 02 | 6 | 2 | 1 933 ms | **1 084 ms** |
+| DQfD ulangan 2 | 01 | 15 | 1 | 91 ms | 15 ms |
+| DQfD ulangan 3 | 02 | 14 | 1 | 2 282 ms | **1 420 ms** |
+| **Jumlah** | | A\* **41** (3 gagal), DQfD **35** (4 gagal) | | A\* 1,2 s, DQfD 4,3 s | |
+
+- **DQfD lebih cepat di rencana pertama** (13,4 vs 20,8 ms rata-rata), baik di bagian jauh maupun dekat. Di simulasi bagian jauh A\* sedikit lebih cepat; di robot nyata model jauh yang lebih cepat (12,8 vs 18,5 ms).
+- **Rencana ulang A\* murah dan konsisten** (terlama 123 ms; yang gagal selesai dalam 1 ms). **Rencana ulang DQfD kadang sangat mahal:** tiga dari empat yang gagal butuh 0,79–1,08 s, dan satu rencana memutar yang berhasil (DQfD ulangan 3) butuh 1,42 s.
+- IPC 0,66–2,03 ms per rencana. Robot 01 mulai merencana +0,9–1,7 ms setelah permintaan, robot 02 +1,6–2,8 ms.
+
+### 8.5 Kerja wasit
+
+![[Wasit uji nyata Gudang2 2026-11-05 S1.png]]
+
+| Percobaan | Yang mengalah | Kejadian (dari keadaan robot dan `hasil.jsonl`) | Jarak terdekat |
+|---|---|---|---:|
+| A\* ulangan 1 | **robot 02** | konflik +7,0 s; robot 02 merencana ulang (13×) lalu **minggir** ±6 s; robot 01 menunggu 4,5 s, lalu lewat dan tiba 23,4 s | 7,0 cm |
+| A\* ulangan 2 | **robot 02** | konflik +6,9 s; robot 02 merencana ulang (14×) lalu minggir; robot 01 menunggu 4,8 s | 7,2 cm |
+| A\* ulangan 3 | **robot 02** | konflik +7,4 s; robot 02 merencana ulang (14×) lalu minggir ±7 s; robot 01 menunggu 3,0 s | 9,4 cm |
+| DQfD ulangan 1 | **robot 02** | konflik +6,9 s; robot 02 merencana ulang (6×, 2 gagal, sampai 1,08 s); robot 01 menunggu **11,5 s**; robot 02 minggir, lalu menunggu lagi 4,8 s | 7,8 cm |
+| DQfD ulangan 2 | **robot 01** | konflik +9,2 s; robot 01 merencana ulang (15×) lalu **minggir**; robot 02 menunggu 2,1 s, lalu lewat dan tiba 22,6 s | 9,7 cm |
+| DQfD ulangan 3 | **robot 02** | konflik +6,9 s; robot 02 merencana ulang (14×, sampai 1,42 s) dan **memutar tanpa minggir** (317 cm); robot 01 menunggu 5,0 s | 7,8 cm |
+
+- **Tidak ada sentuhan dan tidak ada estop.** Jarak badan terdekat 7,0–9,7 cm, sedikit lebih dekat daripada di simulasi (8,0–10,5 cm), tetapi tetap di atas jarak aman 5 cm.
+- **Robot 02 mengalah di 5 dari 6 percobaan**, sedangkan di simulasi yang mengalah berganti-ganti (2 : 2). Dugaan: di catatan 18 robot 02 nyata lebih lambat daripada robot 01, sehingga saat konflik posisinya lebih tidak menguntungkan menurut aturan prioritas wasit. Ini belum ditelusuri.
+- **Tidak ada jalan memutar mengelilingi pulau** seperti A\* ulangan 1 di simulasi. Konflik selalu diselesaikan dengan minggir atau memutar pendek di bawah pulau.
+
+### 8.6 Simulasi vs robot nyata
+
+| | Simulasi: Hybrid A\* + RS / DQfD | Robot nyata: Hybrid A\* + RS / DQfD |
+|---|---|---|
+| Jumlah percobaan | 2 / 2 | 3 / 3 |
+| **Makespan rata-rata** | 43,45 / **30,61 s** | **37,11** / 37,39 s |
+| Makespan, rentang | 34,64–52,26 / 27,00–34,23 s | 34,80–40,84 / 31,37–48,37 s |
+| Robot yang lewat lebih dulu tiba | 21,2–32,6 / 18,0–21,9 s | 23,1–23,5 / 18,9–29,2 s |
+| Waktu menunggu total per percobaan | 7,45; 3,15 / 5,90; 4,80 s | 5,30; 5,55; 3,80 / 16,30; 2,90; 5,75 s |
+| Penyelesaian konflik | memutar 1, minggir 1 (rencana) / minggir 2 | minggir 3 / minggir 2, memutar 1 |
+| Yang mengalah: robot 01 / robot 02 | 1 / 1 dan 1 / 1 | 0 / 3 dan 1 / 2 |
+| Rencana ulang (gagal) | 15 (1) / 21 (3) | 41 (3) / 35 (4) |
+| **Galat posisi rata-rata (maks)** | 1,92 (4,10) / 3,33 (4,99) cm | 1,64 (2,98) / **1,10** (2,10) cm |
+| **Galat arah rata-rata (maks)** | 7,30 (17,10) / 6,28 (10,20)° | 4,55 (9,05) / **2,85** (6,73)° |
+| Waktu proses rencana pertama | 17,76 / 15,90 ms | 20,76 / **13,37 ms** |
+| Jarak badan terdekat | 8,0–9,9 / 9,9–10,5 cm | 7,0–9,4 / 7,8–9,7 cm |
+| Galat awal | 0–3,9 cm | 2,5–3,8 cm |
+
+**Titik konflik.** Karena wasit mencegah tabrakan, tidak ada titik tabrakan sungguhan. Yang dibandingkan:
+- **prediksi titik tabrakan**: titik tengah kedua robot saat badannya pertama kali bersentuhan, bila keduanya berangkat bersamaan dan melaju sama cepat di sepanjang rencana pertamanya tanpa wasit;
+- **titik konflik**: titik tengah kedua robot saat wasit pertama kali menahan salah satunya.
+
+| Uji | Percobaan | Prediksi titik tabrakan | Titik konflik | Saat konflik | Yang ditahan |
+|---|---|---|---|---:|---|
+| Simulasi | A\* ulangan 1 | (133, 151) | (126, 161) | +7,7 s | robot 01 |
+| Simulasi | A\* ulangan 2 | (118, 157) | (124, 147) | +7,0 s | robot 02 |
+| Simulasi | DQfD ulangan 1 | (125, 138) | (109, 133) | +8,5 s | robot 01 |
+| Simulasi | DQfD ulangan 2 | (124, 145) | (124, 142) | +6,7 s | robot 02 |
+| Nyata | A\* ulangan 1 | (120, 158) | (123, 155) | +7,0 s | robot 02 |
+| Nyata | A\* ulangan 2 | (122, 159) | (125, 154) | +6,9 s | robot 02 |
+| Nyata | A\* ulangan 3 | (120, 159) | (121, 159) | +7,4 s | robot 02 |
+| Nyata | DQfD ulangan 1 | (125, 148) | (124, 145) | +6,9 s | robot 02 |
+| Nyata | DQfD ulangan 2 | (136, 153) | (114, 147) | +9,2 s | robot 01 |
+| Nyata | DQfD ulangan 3 | (120, 141) | (126, 133) | +6,9 s | robot 02 |
+
+| Rata-rata | Simulasi | Robot nyata | Selisih |
+|---|---|---|---:|
+| Prediksi titik tabrakan | (125, 148) | (124, 153) | 5,7 cm |
+| Titik konflik | (121, 145) | (122, 149) | **3,7 cm** |
+
+1. **Titik konflik di simulasi dan robot nyata praktis sama**: di bawah pulau, di antara kedua teluk dalam (x 109–126, y 133–161), sekitar 7 s setelah tujuan diberikan. Selisih rata-ratanya 3,7 cm, lebih kecil daripada sebaran antar-percobaan (±15 cm). Simulasi meramalkan dengan baik di mana dan kapan kedua robot akan berebut ruang.
+2. **Titik silang bergantung pada perencananya, dan konsisten di kedua uji.** Jalur A\* bersilangan lebih ke bawah (prediksi y 151–159), sedangkan jalur DQfD lebih ke atas (y 138–153).
+3. **Titik jarak terdekat berbeda dari titik konflik.** Jarak terdekat sering terjadi belakangan, misalnya saat robot yang mengalah kembali dari pose minggir melewati robot lain yang sudah parkir. Contohnya A\* ulangan 1 nyata pada +27 s di dekat teluk robot 01.
+4. **Makespan:** keunggulan DQfD −30% di simulasi tidak muncul di robot nyata (+1%). Keunggulan di simulasi berasal dari satu jalan memutar A\* (ulangan 1) yang tidak terjadi di robot nyata. Di robot nyata, DQfD justru punya percobaan terlama (48,37 s) karena rencana ulang yang gagal.
+5. **Galat pose akhir lebih kecil di robot nyata** untuk kedua perencana (A\* 1,64 vs 1,92 cm, DQfD 1,10 vs 3,33 cm). Galat besar di simulasi datang dari percobaan dengan jalan memutar (A\* ulangan 1, 17,1°) dan dari DQfD ulangan 2, di mana kedua robot tiba miring ±10°. Dengan n = 2–3, ini belum bisa disimpulkan sebagai sifat perencana.
+
+### 8.7 Kesimpulan uji nyata
+
+1. **Wasit bekerja dengan andal di robot nyata.** Keenam konflik diselesaikan tanpa sentuhan (jarak terdekat ≥ 7 cm), di titik yang sama seperti yang diramalkan simulasi.
+2. **Makespan Hybrid A\* dan DQfD setara di robot nyata** (37,1 vs 37,4 s). Pada skenario dengan interaksi, makespan lebih ditentukan oleh cara wasit menyelesaikan konflik daripada oleh perencananya.
+3. **DQfD lebih presisi** (1,10 cm / 2,85° vs 1,64 cm / 4,55°) dan **lebih cepat merencana** (13,4 vs 20,8 ms rencana pertama), tetapi rencana ulangnya bisa mahal (0,79–1,42 s), sedangkan rencana ulang A\* ≤ 123 ms.
+
+> [!warning] Batasan uji nyata
+> - **n = 3 per perencana, satu sesi.** Satu kejadian (misalnya rencana ulang yang gagal) menggeser rata-rata makespan sampai ±11 s.
+> - **Robot 02 mengalah di 5 dari 6 percobaan**, jadi perilaku wasit belum seimbang antar-robot.
+> - **Galat awal 2,5–3,8 cm** di setiap percobaan, karena robot dimulai dari pose hasil pulang.
+
+### 8.8 Sumber angka
+
+| Angka | Sumber |
+|---|---|
+| Semua angka bagian 8 | `Forklift Robot Program/uji_nyata/20261105_070646_Gudang2/` (`hasil.jsonl`, `lintasan.csv`, `ringkasan.json`, `lintasan_S1.png`), direkap dengan skrip sementara `analisis_u2.py` |
+| Linimasa wasit, keterlihatan tag, celah loop | `lintasan.csv` (kolom `state`, `terlihat`, `diramalkan`, `t`), skrip sementara `gambar_wasit.py` |
+| Titik konflik dan prediksi titik tabrakan (8.6) | `lintasan.csv` (keadaan `MENUNGGU` pertama di fase UJI) dan `rencana[0].jalur_cm` di `hasil.jsonl` kedua run, dihitung dengan skrip sementara |
