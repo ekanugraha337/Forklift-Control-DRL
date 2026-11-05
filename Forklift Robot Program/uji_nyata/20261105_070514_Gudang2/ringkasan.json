@@ -1,0 +1,104 @@
+{
+ "dir": "C:\\Users\\Eka Nugraha\\Documents\\GitHub\\Forklift Control - DRL\\Forklift Robot Program\\uji_nyata\\20261105_070514_Gudang2",
+ "per_perencana": {
+  "astar": {
+   "n": 1,
+   "pasangan_tiba": 1,
+   "makespan_s": [
+    41.32044553756714
+   ],
+   "robot": {
+    "1": {
+     "n": 1,
+     "tiba": 1,
+     "rencana_ms_median": 16.262531280517578,
+     "rencana_ms_p90": 16.262531280517578,
+     "panjang_cm": [
+      242.0668359079253
+     ],
+     "ganti_arah": [
+      2
+     ],
+     "t_tempuh_s": [
+      25.969208478927612
+     ],
+     "galat_cm": [
+      0.7845750643720732
+     ],
+     "galat_deg": [
+      3.3127830577776365
+     ],
+     "estop": 0,
+     "t_menunggu_s": [
+      6.999999999999983
+     ],
+     "galat_awal_cm": [
+      3.251046789107295
+     ],
+     "galat_awal_deg": [
+      2.6628927879166895
+     ]
+    },
+    "2": {
+     "n": 1,
+     "tiba": 1,
+     "rencana_ms_median": 13.380289077758789,
+     "rencana_ms_p90": 13.380289077758789,
+     "panjang_cm": [
+      244.76472253744168
+     ],
+     "ganti_arah": [
+      2
+     ],
+     "t_tempuh_s": [
+      41.32044553756714
+     ],
+     "galat_cm": [
+      0.4724771370440611
+     ],
+     "galat_deg": [
+      0.44582672328883177
+     ],
+     "estop": 0,
+     "t_menunggu_s": [
+      0.8000000000000002
+     ],
+     "galat_awal_cm": [
+      2.472060112240108
+     ],
+     "galat_awal_deg": [
+      3.2430258391523807
+     ]
+    }
+   }
+  }
+ },
+ "rincian_rencana": {
+  "astar": {
+   "1": {
+    "n_panggilan": 1,
+    "n_pertama": 1,
+    "pertama_median_ms": {
+     "astar": 15.74350002920255,
+     "rs": 0.4199999966658652,
+     "lain": 0.09903125464916229
+    },
+    "semua_per_percobaan_ms": [
+     16.262531280517578
+    ]
+   },
+   "2": {
+    "n_panggilan": 14,
+    "n_pertama": 1,
+    "pertama_median_ms": {
+     "astar": 12.868099962361157,
+     "rs": 0.3372000064700842,
+     "lain": 0.17498910892754793
+    },
+    "semua_per_percobaan_ms": [
+     439.33653831481934
+    ]
+   }
+  }
+ }
+}
