@@ -1,0 +1,105 @@
+{
+ "dibuat": "2026-11-05 07:41:14",
+ "skenario": "uji_nyata/Gudang2.json",
+ "peta": "Gudang2",
+ "jarak_cm": 15.0,
+ "penyangga_cm": 10.0,
+ "jadwal": {
+  "S1": {
+   "astar": {
+    "mengalah": 2,
+    "lewat": 1,
+    "tahan": [
+     179.6,
+     108.6,
+     128.04
+    ],
+    "konflik_di": [
+     172.9,
+     117.2
+    ],
+    "lepas_di": null,
+    "tunggu_sampai_tiba": true,
+    "tempuh_cm": {
+     "lewat": 245.5,
+     "mengalah": 289.8,
+     "mengalah_sampai_tunggu": 78.5,
+     "lewat_sampai_lepas": 245.5
+    },
+    "makespan_cm": 456.9,
+    "tanpa_jadwal": {
+     "tempuh_cm": 168.0,
+     "titik": [
+      133.2,
+      150.5
+     ]
+    },
+    "pilihan": {
+     "1": {
+      "makespan_cm": 484.2,
+      "tahan": [
+       47.55,
+       86.18,
+       51.96
+      ]
+     },
+     "2": {
+      "makespan_cm": 456.9,
+      "tahan": [
+       179.6,
+       108.6,
+       128.04
+      ]
+     }
+    }
+   },
+   "dqfd-murni": {
+    "mengalah": 1,
+    "lewat": 2,
+    "tahan": [
+     71.04,
+     103.46,
+     77.77
+    ],
+    "konflik_di": [
+     74.2,
+     113.9
+    ],
+    "lepas_di": null,
+    "tunggu_sampai_tiba": true,
+    "tempuh_cm": {
+     "lewat": 227.1,
+     "mengalah": 226.2,
+     "mengalah_sampai_tunggu": 78.5,
+     "lewat_sampai_lepas": 227.1
+    },
+    "makespan_cm": 374.7,
+    "tanpa_jadwal": {
+     "tempuh_cm": 141.0,
+     "titik": [
+      120.6,
+      143.2
+     ]
+    },
+    "pilihan": {
+     "1": {
+      "makespan_cm": 374.7,
+      "tahan": [
+       71.04,
+       103.46,
+       77.77
+      ]
+     },
+     "2": {
+      "makespan_cm": 374.7,
+      "tahan": [
+       174.82,
+       105.88,
+       140.27
+      ]
+     }
+    }
+   }
+  }
+ }
+}

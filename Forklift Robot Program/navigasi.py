@@ -172,6 +172,9 @@ class Unit:
 
         # --- multi-robot ---
         self.keputusan = None           # keputusan wasit siklus ini
+        # Ditahan jadwal silang (drl/uji_robot_nyata.py --jadwal): jalur dan
+        # pelacak tetap berjalan, hanya roda yang diam sampai protokol melepas.
+        self.tahan_jadwal = False
         self._tunggu_sejak = None       # kapan mulai MENUNGGU
         self._bebas_sejak = None        # sejak kapan bayangan bebas (untuk lanjut)
         self.bayangan = []              # poligon cm, untuk digambar
@@ -282,6 +285,7 @@ class Unit:
     def batalkan(self):
         self.tujuan, self.jalur, self.tracker = None, None, None
         self.perlu_rencana = False
+        self.tahan_jadwal = False
         self._minggir = None
         self.state = SIAP
         self.alasan = ""
@@ -741,7 +745,11 @@ class Unit:
         if self.pose is None:
             return W.Peserta(self.id, None, False)
         ps = W.Peserta(self.id, A.jejak_badan(*self.pose.tuple()), self.pose.terlihat)
-        if self.berjalan:
+        # Robot yang ditahan jadwal silang benar-benar diam sampai dilepas: bagi
+        # wasit ia badan tanpa bayangan. Dengan bayangan laju penuh, aturan
+        # "silang" bisa menyuruh robot yang lewat menunggu robot yang justru
+        # sedang menunggunya.
+        if self.berjalan and not self.tahan_jadwal:
             titik = self.tracker.sisa_jalur()
             if titik:
                 arah = self.perintah.get("dir", 0) if self.perintah else 0
@@ -781,6 +789,11 @@ class Unit:
             self._kirim = (0, self._kirim[1])
         elif self.state != MELACAK:
             self._kirim = None
+        elif self.tahan_jadwal and self._kirim is not None:
+            # Ditahan jadwal silang: sama seperti menunggu wasit, roda diam dan
+            # kemudi tetap diarahkan, tetapi keadaan tetap MELACAK supaya wasit
+            # tidak melepasnya sendiri.
+            self._kirim = (0, self._kirim[1])
 
         # Aliran rc tetap dikirim walau diam: firmware memakai aliran ini
         # sebagai tanda bahwa pengendali masih hidup.

@@ -28,6 +28,9 @@ perencana.
     python -m drl.uji_robot_nyata --skenario uji_nyata/rumah.json --simulasi --ulang 1
     # lanjutkan uji yang terputus (percobaan yang sudah tercatat dilewati):
     python -m drl.uji_robot_nyata --skenario uji_nyata/rumah.json --ulang 5 --lanjut uji_nyata/20261024_101500_Rumah
+    # jalur bersilangan: siapa mengalah diatur jadwal (drl/jadwal_silang.py), bukan wasit:
+    python -m drl.jadwal_silang --skenario uji_nyata/Gudang2.json
+    python -m drl.uji_robot_nyata --skenario uji_nyata/Gudang2.json --jadwal uji_nyata/Gudang2_jadwal.json
     # rincian waktu perencanaan untuk data lama (sebelum rincian_ms dicatat):
     python -m drl.uji_robot_nyata --rinci uji_nyata/20261024_101500_Rumah
     # ringkasan, gambar lintasan, dan baris tabel LaTeX dari hasil:
@@ -85,8 +88,15 @@ WARNA_PLOT = {"astar": "#1f77b4", "dqfd": "#2ca02c", "dqfd-murni": "#d62728"}
 
 TENANG_S = 1.0          # robot dianggap diam sekian detik setelah SELESAI; pose diukur di sini
 GAGAL_RENCANA_S = 1.0   # SIAP tanpa jalur selama ini setelah tujuan diberikan = perencanaan gagal
+TAHAN_MAKS_S = 60.0     # --jadwal: robot yang mengalah dilepas paling lambat setelah ditahan selama ini
+LEPAS_RENCANA_ULANG_CM = 10.0  # --jadwal: saat dilepas, sisa jalur sedekat ini ke robot yang sudah parkir
+                               # -> rencana ulang sekarang, bukan setelah wasit menunggu 5 s
+RENCANA_ULANG_MAKS_S = 3.0     # --jadwal: robot tetap ditahan menunggu jalur memutar itu paling lama sekian
 
 PULANG, KONFIRMASI, UJI, OPERATOR, TAMAT = "PULANG", "KONFIRMASI", "UJI", "OPERATOR", "TAMAT"
+# Label fase di layar (kotak merah pojok kanan atas + baris status). Nilai fase yang
+# ditulis ke lintasan.csv tetap PULANG/UJI supaya analisis folder lama tetap berlaku.
+LABEL_FASE = {PULANG: "GO HOME", UJI: "CRUISE"}
 
 # Bagian waktu perencanaan (kunci info["rincian_s"] dari rencana.Perencana).
 BAGIAN = (("astar", "Hybrid A*"), ("rs", "RS"), ("dqfd_jauh", "DQfD jauh"), ("dqfd_dekat", "DQfD dekat"),
@@ -241,7 +251,9 @@ class Sesi:
             return None
         return (p.x, p.y, p.yaw)
 
-    def gambar(self, sk, baris, aktif=None):
+    def gambar(self, sk, baris, aktif=None, spanduk=None):
+        """spanduk: label fase (LABEL_FASE: "GO HOME" saat PULANG, "CRUISE" saat UJI) - putih
+        di kotak merah, pojok kanan atas; baris status robot ada di pojok kiri atas."""
         import cv2
         img = self.nav.gambar()
         A, ctx = self.A, self.arena.ctx
@@ -262,6 +274,13 @@ class Sesi:
         for teks in baris:
             self.N.AC.label(img, teks, (10, y), (0, 255, 255), 0.5)
             y += 20
+        if spanduk:
+            huruf, skala, tebal, pad, tepi = cv2.FONT_HERSHEY_SIMPLEX, 1.1, 2, 12, 14
+            (tw, th), base = cv2.getTextSize(spanduk, huruf, skala, tebal)
+            x1, y0 = img.shape[1] - tepi, tepi
+            x0, y1 = x1 - tw - 2 * pad, y0 + th + base + 2 * pad
+            cv2.rectangle(img, (x0, y0), (x1, y1), (0, 0, 210), -1)
+            cv2.putText(img, spanduk, (x0 + pad, y1 - pad - base), huruf, skala, (255, 255, 255), tebal, cv2.LINE_AA)
         return img
 
 
@@ -420,6 +439,18 @@ class Protokol:
         if baru:
             self.w_lin.writerow(["t", "skenario", "ulang", "perencana", "fase", "robot", "state", "x_cm", "y_cm",
                                  "yaw_deg", "terlihat", "diramalkan", "speed_sps", "steer_deg"])
+        # --jadwal: {skenario: {perencana: {mengalah, lewat, tahan, ...}}} dari drl/jadwal_silang.py.
+        self.jadwal, self.jarak_jadwal, self.penyangga_jadwal, self.jdw = None, None, None, None
+        if getattr(args, "jadwal", None):
+            with open(args.jadwal, encoding="utf-8") as f:
+                isi = json.load(f)
+            if isi.get("peta") != data["peta"]:
+                raise SystemExit(f"[!] jadwal {args.jadwal} untuk peta {isi.get('peta')}, bukan {data['peta']}.")
+            self.jadwal, self.jarak_jadwal = isi.get("jadwal", {}), float(isi.get("jarak_cm", 15.0))
+            self.penyangga_jadwal = float(isi.get("penyangga_cm", 10.0))
+            n = sum(len(v) for v in self.jadwal.values())
+            print(f"[i] jadwal silang {args.jadwal}: {n} pasangan (skenario, perencana), jarak dijaga "
+                  f"{self.jarak_jadwal:.0f} cm, penyangga {self.penyangga_jadwal:.0f} cm. Wasit tetap aktif.")
         self.i = 0
         self.fase = None
         self.terima_paksa = False
@@ -469,7 +500,7 @@ class Protokol:
             self.pulang_ids.append(rid)
         if self.pulang_ids:
             self.n_pulang += 1
-            self.pesan = f"PULANG ke titik awal (coba {self.n_pulang}): robot " + \
+            self.pesan = f"ke titik awal (coba {self.n_pulang}): robot " + \
                          ", ".join(f"{r:02d}" for r in self.pulang_ids)
         self.sampel = {rid: [] for rid in self.ids}
 
@@ -508,7 +539,8 @@ class Protokol:
             if u.pose is None:
                 continue
             sp, st = u._kirim_lalu
-            self.w_lin.writerow([f"{now:.3f}", p["skenario"], p["ulang"], p["perencana"], self.fase, u.id, u.state,
+            state = "DITAHAN" if getattr(u, "tahan_jadwal", False) else u.state
+            self.w_lin.writerow([f"{now:.3f}", p["skenario"], p["ulang"], p["perencana"], self.fase, u.id, state,
                                  f"{u.pose.x:.2f}", f"{u.pose.y:.2f}", f"{u.pose.yaw:.2f}", int(u.pose.terlihat),
                                  int(u.pose.diramalkan), int(sp), f"{st:.2f}"])
 
@@ -585,12 +617,24 @@ class Protokol:
         self.fase = UJI
         self.sesi.pakai(p["perencana"])
         self.t_fase = time.time()
+        self._t_uji_lalu = None
         self.selesai_sejak = None
         self.rencana = {rid: [] for rid in self.ids}
         self.sesi.catat_ke = self.rencana
-        self.ukur = {rid: {"t_tiba": None, "t_menunggu": 0.0, "n_minggir": 0, "zona_min_cm": float("inf"),
-                           "jarak_cm": 0.0, "lalu": None, "state_lalu": None, "bahaya": "", "ditolak": ""}
+        self.ukur = {rid: {"t_tiba": None, "t_menunggu": 0.0, "t_tahan": 0.0, "n_minggir": 0,
+                           "zona_min_cm": float("inf"), "jarak_cm": 0.0, "lalu": None, "state_lalu": None,
+                           "bahaya": "", "ditolak": ""}
                      for rid in self.ids}
+        self.jdw = None
+        e = (self.jadwal or {}).get(p["skenario"], {}).get(p["perencana"])
+        if e:
+            self.jdw = {"mengalah": int(e["mengalah"]), "lewat": int(e["lewat"]),
+                        "prediksi_tahan": list(e["tahan"]), "fase": "menuju", "tahan_di": None,
+                        "selisih_prediksi_cm": None, "jarak_saat_tahan_cm": None, "t_tahan": None,
+                        "t_lepas": None, "alasan_lepas": "", "rencana_ulang": False, "jarak_ke_parkir_cm": None,
+                        "hasil_rencana_ulang": None, "t_cek": 0.0, "tracker_lama": None, "t_rencana": None}
+            print(f"[i] jadwal: robot {self.jdw['mengalah']:02d} mengalah kepada robot {self.jdw['lewat']:02d} "
+                  f"(prediksi titik tunggu ({e['tahan'][0]:.0f}, {e['tahan'][1]:.0f})).")
         for rid in self.ids:
             u = self.sesi.unit(rid)
             u.batalkan()
@@ -610,18 +654,131 @@ class Protokol:
             u = self.sesi.unit(rid)
             if u.tujuan is not None:
                 u.minta_rencana()
-        self.pesan = f"UJI {p['skenario']} ulangan {p['ulang'] + 1}: {NAMA.get(p['perencana'], p['perencana'])}"
-        print(f"[i] {self.pesan}")
+        self.pesan = f"{p['skenario']} ulangan {p['ulang'] + 1}: {NAMA.get(p['perencana'], p['perencana'])}"
+        print(f"[i] {LABEL_FASE[UJI]} {self.pesan}")
+
+    def _langkah_jadwal(self, now):
+        """--jadwal: robot yang mengalah menunggu robot yang lewat (drl/jadwal_silang.py).
+
+        SIAPA yang mengalah diambil dari berkas jadwal (simulasi sebelum uji).
+        DI MANA ia menunggu ditentukan di sini dari jalur yang SEBENARNYA dipakai:
+        pose awal setelah pulang meleset beberapa cm dan derajat, dan jalur DQfD
+        dari pose itu bisa bergeser belasan cm dari jalur simulasi jadwal
+        (terukur 2026-11-05: titik tunggu berkas 18,9 cm dari jalur sebenarnya,
+        robot tertahan tepat di titik konflik). Titik tunggu di berkas hanya
+        menjadi prediksi pembanding.
+
+            menuju   robot yang mengalah ditahan begitu badannya di sepanjang
+                     penyangga_cm jalur depannya masuk dalam jarak_cm dari badan
+                     dan sisa jalur robot yang lewat;
+            tahan    dilepas setelah badan + sisa jalur robot yang lewat lebih
+                     jauh dari jarak_cm dari seluruh sisa jalurnya, robot yang
+                     lewat sudah tiba, atau setelah TAHAN_MAKS_S;
+            rencana  robot yang lewat sudah parkir, tetapi sisa jalur robot yang
+                     mengalah lewat dalam LEPAS_RENCANA_ULANG_CM dari badannya:
+                     jalur dihitung ulang memutarinya SEKARANG - perencanaan yang
+                     sama dengan yang dilakukan wasit setelah menunggu
+                     MULTI_TUNGGU_MAKS_S - dan robot tetap ditahan sampai jalur
+                     barunya terpasang.
+
+        Ditahan = jalur tetap dipegang, hanya roda yang diam (Unit.tahan_jadwal);
+        bagi wasit robot itu badan tanpa bayangan. Wasit tetap aktif.
+        """
+        j = self.jdw
+        if j is None or j["fase"] == "lepas":
+            return
+        import wasit as W
+        N, A, ar = self.sesi.N, self.sesi.A, self.sesi.arena
+        uy, up = self.sesi.unit(j["mengalah"]), self.sesi.unit(j["lewat"])
+        tiba = up.diam or up.state == N.SELESAI or up.pose is None
+
+        def himpunan_lewat():
+            return [A.jejak_badan(*up.pose.tuple())] + up.jejak_sisa()
+
+        if j["fase"] == "menuju":
+            if tiba:
+                self._lepas_jadwal(now, uy, up, f"robot {j['lewat']:02d} sudah tiba sebelum titik tunggu tercapai")
+                return
+            if uy.tracker is None or uy.pose is None:
+                return
+            depan = [ar.pose_ke_cm(q[0], q[1], q[2]) for q in uy.tracker.sisa_jalur()[:40]]
+            badan = [A.jejak_badan(*uy.pose.tuple())] + W.sapuan(depan, self.penyangga_jadwal)
+            d = W.jarak_himpunan(badan, himpunan_lewat(), batas=self.jarak_jadwal)
+            if d < self.jarak_jadwal:
+                uy.tahan_jadwal = True
+                x, y, yaw = uy.pose.tuple()
+                pr = j["prediksi_tahan"]
+                j.update(fase="tahan", t_tahan=now - self.t_fase,
+                         tahan_di=[round(x, 1), round(y, 1), round(yaw, 1)],
+                         selisih_prediksi_cm=round(math.hypot(x - pr[0], y - pr[1]), 1),
+                         jarak_saat_tahan_cm=round(float(d), 1))
+                print(f"[i] {j['mengalah']:02d}: ditahan jadwal di ({x:.0f}, {y:.0f}), "
+                      f"{j['selisih_prediksi_cm']:.0f} cm dari prediksi - menunggu robot {j['lewat']:02d} lewat.")
+            return
+
+        if j["fase"] == "tahan":
+            if now - j["t_cek"] < 0.25:            # periksa pelepasan 4x per detik
+                return
+            j["t_cek"] = now
+            alasan = None
+            if tiba:
+                alasan = f"robot {j['lewat']:02d} sudah tiba atau berhenti"
+            elif W.jarak_himpunan(himpunan_lewat(), uy.jejak_sisa(), batas=self.jarak_jadwal) >= self.jarak_jadwal:
+                alasan = f"robot {j['lewat']:02d} sudah melewati daerah silang"
+            elif now - self.t_fase - j["t_tahan"] > TAHAN_MAKS_S:
+                alasan = f"batas tahan {TAHAN_MAKS_S:.0f} s"
+            if alasan:
+                self._lepas_jadwal(now, uy, up, alasan)
+            return
+
+        # fase "rencana": tetap ditahan sampai jalur memutar terpasang (atau gagal)
+        baru = uy.tracker is not j["tracker_lama"]
+        gagal = not baru and not uy._sedang_merencana
+        if baru or gagal or now - j["t_rencana"] > RENCANA_ULANG_MAKS_S:
+            uy.tahan_jadwal = False
+            j["fase"] = "lepas"
+            j["hasil_rencana_ulang"] = "jalur baru" if baru else ("gagal, jalur lama dipakai" if gagal else "batas waktu")
+            print(f"[i] {j['mengalah']:02d}: dilepas jadwal - rencana ulang: {j['hasil_rencana_ulang']} "
+                  f"({(now - j['t_rencana']) * 1000:.0f} ms).")
+
+    def _lepas_jadwal(self, now, uy, up, alasan):
+        """Lepas robot yang mengalah. Bila robot yang lewat sudah parkir di dekat
+        sisa jalurnya, jalur dihitung ulang dulu (fase "rencana", lihat _langkah_jadwal)."""
+        import wasit as W
+        j, N, A = self.jdw, self.sesi.N, self.sesi.A
+        j.update(t_lepas=now - self.t_fase, alasan_lepas=alasan)
+        lama = f" setelah {j['t_lepas'] - j['t_tahan']:.1f} s" if j["t_tahan"] is not None else ""
+        print(f"[i] {j['mengalah']:02d}: dilepas jadwal{lama} - {alasan}.")
+        parkir = (up.diam or up.state == N.SELESAI) and up.pose is not None
+        if parkir and uy.tracker is not None:
+            d = W.jarak_himpunan(uy.jejak_sisa(), [A.jejak_badan(*up.pose.tuple())], batas=LEPAS_RENCANA_ULANG_CM)
+            if d < LEPAS_RENCANA_ULANG_CM:
+                j.update(fase="rencana", rencana_ulang=True, jarak_ke_parkir_cm=round(float(d), 1),
+                         tracker_lama=uy.tracker, t_rencana=now)
+                uy.tahan_jadwal = True
+                print(f"[i] {j['mengalah']:02d}: sisa jalur {d:.1f} cm dari robot {j['lewat']:02d} yang sudah "
+                      "parkir - jalur dihitung ulang memutarinya sekarang.")
+                uy.minta_rencana(hindari_semua=True, lawan=up)
+                return
+        uy.tahan_jadwal = False
+        j["fase"] = "lepas"
 
     def _langkah_uji(self, now):
         N, AC, A = self.sesi.N, self.sesi.N.AC, self.sesi.A
-        dt = konfig.RC_PERIODE_S
+        # Selang NYATA sejak siklus sebelumnya, bukan RC_PERIODE_S: di Windows
+        # cv2.waitKey membulatkan ke detak 15,6 ms, jadi siklus 50 ms menjadi
+        # 64 ms dan penjumlahan RC_PERIODE_S mencatat waktu tunggu 22 % terlalu kecil.
+        dt = now - self._t_uji_lalu if self._t_uji_lalu is not None else 0.0
+        self._t_uji_lalu = now
+        self._langkah_jadwal(now)
         status = {}
         for rid in self.ids:
             u, m = self.sesi.unit(rid), self.ukur[rid]
             status[rid] = "gagal" if m["ditolak"] else self._berhenti(u, self.t_fase)
             if u.state == N.MENUNGGU:
                 m["t_menunggu"] += dt
+            if u.tahan_jadwal:
+                m["t_tahan"] += dt
             if u.state == N.MINGGIR and m["state_lalu"] != N.MINGGIR:
                 m["n_minggir"] += 1
             if u.state == N.BAHAYA and not m["bahaya"]:
@@ -659,7 +816,11 @@ class Protokol:
         rec = {"skenario": p["skenario"], "ulang": p["ulang"], "urutan": p["urutan"], "perencana": p["perencana"],
                "status": status, "catatan": catatan, "waktu_mulai": time.strftime("%Y-%m-%d %H:%M:%S",
                                                                                     time.localtime(self.t_fase)),
-               "simulasi": bool(self.args.simulasi), "pulang": self.catatan_pulang, "robot": {}}
+               "simulasi": bool(self.args.simulasi), "pulang": self.catatan_pulang, "robot": {},
+               "jadwal": ({k: v for k, v in self.jdw.items() if k not in ("tracker_lama", "t_cek", "t_rencana")}
+                          if self.jdw else None)}
+        for rid in self.ids:
+            self.sesi.unit(rid).tahan_jadwal = False
         for rid in self.ids:
             r, m = sk["robot"][rid], self.ukur.get(rid, {})
             akhir = _rata_pose(self.sampel.get(rid, [])) if status == "selesai" else None
@@ -670,6 +831,7 @@ class Protokol:
             hasil = {"awal": r["awal"], "tujuan": r["tujuan"], "awal_ukur": self.awal_ukur.get(rid),
                      "tiba": self.status_akhir.get(rid) == "tiba" if status == "selesai" else False,
                      "t_tempuh_s": m.get("t_tiba"), "t_menunggu_s": m.get("t_menunggu"),
+                     "t_tahan_s": m.get("t_tahan"),
                      "n_minggir": m.get("n_minggir"), "estop": m.get("bahaya") or m.get("ditolak") or "",
                      "zona_min_cm": m.get("zona_min_cm"), "jarak_tempuh_cm": m.get("jarak_cm"),
                      "n_rencana": len(calls), "ms_rencana_total": float(sum(c["ms"] for c in calls)),
@@ -777,6 +939,8 @@ def mode_uji(args, ids):
                                  + ("_sim" if args.simulasi else ""))
     os.makedirs(dir_hasil, exist_ok=True)
     shutil.copy(args.skenario, os.path.join(dir_hasil, "skenario.json"))
+    if args.jadwal:
+        shutil.copy(args.jadwal, os.path.join(dir_hasil, "jadwal.json"))
     with open(os.path.join(dir_hasil, "pengaturan.json"), "w", encoding="utf-8") as f:
         json.dump({k: v for k, v in vars(args).items()}, f, indent=1)
     print(f"[i] hasil ke {dir_hasil}")
@@ -807,10 +971,10 @@ def mode_uji(args, ids):
         while True:
             now = time.time()
             proto.langkah(now)
-            baris = [f"[{proto.fase}] {proto.pesan}",
+            baris = [f"[{LABEL_FASE.get(proto.fase, proto.fase)}] {proto.pesan}",
                      f"percobaan {min(proto.i + 1, len(proto.antrian))}/{len(proto.antrian)} | "
                      "n: lanjut  spasi: tahan  e: estop  x: lewati  q: keluar"]
-            cv2.imshow(judul, sesi.gambar(proto.sk, baris))
+            cv2.imshow(judul, sesi.gambar(proto.sk, baris, spanduk=LABEL_FASE.get(proto.fase)))
             k = cv2.waitKey(max(1, int(1000 * (konfig.RC_PERIODE_S - (time.time() - now))))) & 0xFF
             if k != 255 and proto.tombol(k):
                 break
@@ -1149,6 +1313,9 @@ def main():
     ap.add_argument("--perencana", default=",".join(PERENCANA_UJI),
                     help=f"perencana yang diuji, dipisah koma (bawaan {','.join(PERENCANA_UJI)})")
     ap.add_argument("--perencana-pulang", default="astar", help="perencana untuk kembali ke titik awal")
+    ap.add_argument("--jadwal", metavar="JSON", default=None,
+                    help="jadwal silang dari drl/jadwal_silang.py: robot yang mengalah ditahan di titik "
+                         "tunggu sampai robot lain lewat (tanpa opsi ini hanya wasit yang mengatur)")
     ap.add_argument("--ulang", type=int, default=3, help="ulangan per perencana per skenario")
     ap.add_argument("--toleransi-cm", type=float, default=5.0, help="robot dianggap di titik awal dalam jarak ini")
     ap.add_argument("--toleransi-deg", type=float, default=10.0, help="... dan selisih arah hadap ini")
