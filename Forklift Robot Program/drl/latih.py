@@ -52,6 +52,7 @@ if __package__ in (None, ""):
     __package__ = "drl"
 
 import konfig                                   # noqa: E402
+from drl import label_tabrak as LT              # noqa: E402
 from drl import lingkungan as L                 # noqa: E402
 from drl import rollout as RO                   # noqa: E402
 from drl import skenario as S                   # noqa: E402
@@ -155,6 +156,7 @@ class Evaluator:
         self.obs_uji = d["obs"][idx]
         self.mask_uji = d["mask"][idx]
         self.aksi_uji = d["aksi"][idx].astype(np.int64)
+        self.tabrak_uji = d["tabrak"][idx] if "tabrak" in d else None
         self.neg = []
         if neg is not None:
             ok = np.flatnonzero(neg["alasan"] == "tidak ada jalur")
@@ -178,6 +180,12 @@ class Evaluator:
     def __call__(self, net):
         q = bermask(net.q_batch(self.obs_uji), self.mask_uji)
         setuju = float((q.argmax(1) == self.aksi_uji).mean()) * 100
+        ev_tabrak = {}
+        if getattr(net, "kepala_tabrak", False) and self.tabrak_uji is not None:
+            P, Y = net.tabrak_batch(self.obs_uji), self.tabrak_uji
+            ev_tabrak = {"auc_tabrak": auc(P, Y),
+                         "tabrak_terdeteksi": 100.0 * float((P[Y] >= 0.5).mean()) if Y.any() else float("nan"),
+                         "tabrak_alarm_palsu": 100.0 * float((P[~Y] >= 0.5).mean())}
         h = self._jalankan(net, self.sk)
         tiba_greedy = 100.0 * sum(x["sukses"] for x in h) / max(1, len(h))
         hn = self._jalankan(net, self.neg) if self.neg else []
@@ -202,6 +210,7 @@ class Evaluator:
             "galat_posisi_cm": _rata([x["galat_posisi_cm"] for x in ok]),
             "galat_arah_deg": _rata([x["galat_arah_deg"] for x in ok]),
             "neg_buntu": 100.0 * sum(not x["sukses"] for x in hn) / max(1, len(hn)),
+            **ev_tabrak,
         }
 
     def _satu(self, net, sk):
@@ -237,11 +246,31 @@ class Evaluator:
         return hasil
 
 
+def auc(skor, label):
+    """Peluang skor contoh positif > skor contoh negatif (peringkat rata-rata untuk seri)."""
+    skor, label = np.asarray(skor, float).ravel(), np.asarray(label, bool).ravel()
+    n_pos, n_neg = int(label.sum()), int((~label).sum())
+    if not n_pos or not n_neg:
+        return float("nan")
+    urut = np.argsort(skor, kind="mergesort")
+    pk = np.empty(len(skor))
+    s_urut = skor[urut]
+    awal = np.r_[0, np.flatnonzero(np.diff(s_urut)) + 1]
+    akhir = np.r_[awal[1:], len(skor)]
+    for a, b in zip(awal, akhir):
+        pk[urut[a:b]] = (a + b + 1) / 2.0
+    return float((pk[label].sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
+
+
 def baris_eval(ev):
-    return (f"setuju {ev['setuju']:5.1f}%  tiba greedy {ev['tiba_greedy']:5.1f}%  TIBA {ev['tiba']:5.1f}%  "
+    teks = (f"setuju {ev['setuju']:5.1f}%  tiba greedy {ev['tiba_greedy']:5.1f}%  TIBA {ev['tiba']:5.1f}%  "
             f"rasio med/p90 {ev['rasio_median']:.2f}/{ev['rasio_p90']:.2f}  balik {ev['balik']:.2f} "
             f"(demo {ev['balik_demo']:.2f})  galat akhir {ev['galat_posisi_cm']:.2f} cm / "
             f"{ev['galat_arah_deg']:.2f} deg  negatif buntu {ev['neg_buntu']:.0f}%  skor {ev['skor']:6.1f}")
+    if "auc_tabrak" in ev:
+        teks += (f"  tabrak: AUC {ev['auc_tabrak']:.3f}, terdeteksi {ev['tabrak_terdeteksi']:.1f}%, "
+                 f"alarm palsu {ev['tabrak_alarm_palsu']:.1f}%")
+    return teks
 
 
 # ------------------------------------------------------------ latih
@@ -254,6 +283,8 @@ def muat_data(args, rid):
     if int(d.get("versi_aksi", 0)) != L.VERSI_AKSI:
         raise SystemExit(f"[!] {berkas[0]} dibuat dengan versi aksi {int(d.get('versi_aksi', 0))}, program "
                          f"{L.VERSI_AKSI}. Bangkitkan ulang: python -m drl.skenario --id {rid}")
+    if args.kepala_tabrak and "tabrak" not in d:
+        d = LT.tambahkan(berkas[0], konfig.profil(rid))
     jalur_neg = os.path.join(args.data, f"negatif_id{rid:02d}.npz")
     neg = RO.muat_npz(jalur_neg) if os.path.exists(jalur_neg) else None
     return d, neg, berkas[0]
@@ -276,10 +307,12 @@ def latih_model(rid, args, device):
     buf = Buffer(n_demo + args.kapasitas, device)
     for e in latih_ep:
         obs, aksi, rew, mask = RO.episode_demo(d, e)
-        buf.tambah(RO.transisi_episode(obs, aksi, rew, mask, True, args.gamma, args.n), demo=True)
+        tabrak = RO.tabrak_demo(d, e) if "tabrak" in d else None
+        buf.tambah(RO.transisi_episode(obs, aksi, rew, mask, True, args.gamma, args.n, tabrak=tabrak), demo=True)
 
     agen = AgenDQfD(device, lr=args.lr, gamma=args.gamma, n=args.n, margin=args.margin,
-                    target_setiap=args.target_setiap, seed=args.seed + rid)
+                    target_setiap=args.target_setiap, seed=args.seed + rid,
+                    kepala_tabrak=args.kepala_tabrak, lam_t=args.lam_t)
     if args.transfer and rid != 1:
         sumber = jalur_model(1, args.keluar)
         bobot_awal(agen, sumber, prof)
@@ -295,14 +328,14 @@ def latih_model(rid, args, device):
                  judul=f"DQfD model jauh ID {rid:02d}", fps=args.fps, tampil=args.tampil)
 
     total = args.pra + int(args.mandiri * args.rasio)
-    riw = {"latih": {k: [] for k in ("langkah", "j_dq", "j_n", "j_e", "q", "setuju_batch")},
+    riw = {"latih": {k: [] for k in ("langkah", "j_dq", "j_n", "j_e", "j_t", "q", "setuju_batch")},
            "eval": {"langkah": []}, "batas_fase": []}
     ema = {}
     t0 = time.time()
     st = {"fase": "pra-latih (demo)", "target": total, "riwayat": riw["latih"],
           "eval_riwayat": riw["eval"], "batas_fase": riw["batas_fase"]}
     meta = {"robot": rid, "data_demo": os.path.basename(berkas), "probe": probe_idx,
-            "target": total, "args": vars(args), **meta_model(prof)}
+            "target": total, "args": vars(args), "kepala_tabrak": bool(args.kepala_tabrak), **meta_model(prof)}
     terbaik = {"skor": -float("inf"), "langkah": None}
     print(f"\n=== ID {rid:02d} model jauh ({L.N_OBS} masukan, {L.N_AKSI} aksi): {len(latih_ep)} episode demo latih "
           f"({n_demo} transisi, dari {meta['data_demo']}), validasi {len(val_ep)} episode "
@@ -311,13 +344,13 @@ def latih_model(rid, args, device):
     print(f"    peta: {', '.join(evaluator.jenis)} | tersulit (waktu A* terbesar): {evaluator.sulit}")
 
     def catat(m):
-        for k in ("j_dq", "j_n", "j_e", "q", "setuju_batch"):
+        for k in ("j_dq", "j_n", "j_e", "j_t", "q", "setuju_batch"):
             v = m[k]
             if np.isfinite(v):
                 ema[k] = v if k not in ema else 0.98 * ema[k] + 0.02 * v
         if agen.langkah % 50 == 0:
             riw["latih"]["langkah"].append(agen.langkah)
-            for k in ("j_dq", "j_n", "j_e", "q", "setuju_batch"):
+            for k in ("j_dq", "j_n", "j_e", "j_t", "q", "setuju_batch"):
                 riw["latih"][k].append(ema.get(k, float("nan")))
 
     def evaluasi(fase):
@@ -336,8 +369,9 @@ def latih_model(rid, args, device):
         st["terbaik"] = dict(terbaik)
         with open(os.path.join(dir_keluar, "riwayat.json"), "w", encoding="utf-8") as f:
             json.dump(riw, f)
+        jt = f"  J_T {ema.get('j_t', 0):.3f}" if args.kepala_tabrak else ""
         print(f"  [{(time.time() - t0) / 60:5.1f} mnt] {fase:<8} langkah {agen.langkah:>7}  "
-              f"{baris_eval(ev)}  J_E {ema.get('j_e', 0):.3f}  J_n {ema.get('j_n', 0):.3f}{tanda}",
+              f"{baris_eval(ev)}  J_E {ema.get('j_e', 0):.3f}  J_n {ema.get('j_n', 0):.3f}{jt}{tanda}",
               flush=True)
         return ev
 
@@ -399,7 +433,7 @@ def latih_model(rid, args, device):
             n_aktif = len(kumpulan.aktif())
             for _, ep in kumpulan.langkah(agen.numpy, eps, rng):
                 buf.tambah(RO.transisi_episode(ep["obs"], ep["aksi"], ep["reward"], ep["mask"],
-                                               not ep["terpotong"], args.gamma, args.n))
+                                               not ep["terpotong"], args.gamma, args.n, tabrak=ep["tabrak"]))
                 tiba_ema = ep["sukses"] * 100.0 if tiba_ema is None else 0.98 * tiba_ema + 2.0 * ep["sukses"]
             # potong episode yang berputar terlalu lama (disimpan sebagai terpotong)
             for i in kumpulan.aktif():
@@ -407,7 +441,8 @@ def latih_model(rid, args, device):
                 if len(s["aksi"]) >= BATAS_LANGKAH_EVAL:
                     buf.tambah(RO.transisi_episode(np.asarray(s["obs"], np.float32), np.asarray(s["aksi"]),
                                                    np.asarray(s["reward"], np.float32) / SKALA_REWARD,
-                                                   np.asarray(s["mask"], bool), False, args.gamma, args.n))
+                                                   np.asarray(s["mask"], bool), False, args.gamma, args.n,
+                                                   tabrak=np.asarray(s["tabrak"], bool)))
                     kumpulan.slot[i] = None
             langkah_env += n_aktif
             utang += args.rasio * n_aktif
@@ -451,6 +486,9 @@ def main():
     ap.add_argument("--n-slot", type=int, default=16)
     ap.add_argument("--eval-setiap", type=int, default=5000, help="langkah gradien antar-evaluasi")
     ap.add_argument("--n-negatif", type=int, default=16)
+    ap.add_argument("--tanpa-kepala-tabrak", action="store_true",
+                    help="tanpa kepala kelayakan P(aksi menabrak) - model seperti sebelum 2026-11-08")
+    ap.add_argument("--lam-t", type=float, default=1.0, help="bobot J_T (binary cross-entropy kepala kelayakan)")
     ap.add_argument("--fps", type=float, default=6.0)
     ap.add_argument("--metode-validasi", default=METODE_BAWAAN, choices=["mundur", "terbaik", "gabungan"],
                     help="pencarian rute saat validasi (bawaan = metode operasional)")
@@ -463,6 +501,7 @@ def main():
                     help="perangkat gradien PyTorch. auto = GPU (CUDA) bila ada; cuda = WAJIB GPU")
     ap.add_argument("--cpu", action="store_true", help="sama dengan --perangkat cpu")
     args = ap.parse_args()
+    args.kepala_tabrak = not args.tanpa_kepala_tabrak
 
     if args.cpu or args.perangkat == "cpu":
         device = "cpu"

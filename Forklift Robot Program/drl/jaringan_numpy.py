@@ -33,7 +33,8 @@ import numpy as np
 SKALA_REWARD = 100.0
 
 _LAPIS = ("fc1", "fc2", "v1", "v2", "a1", "a2")
-_META_DISIMPAN = ("jenis", "robot", "versi_aksi", "n_obs", "n_aksi", "max_steer_deg", "r_plan_cm", "langkah")
+_META_DISIMPAN = ("jenis", "robot", "versi_aksi", "n_obs", "n_aksi", "max_steer_deg", "r_plan_cm", "langkah",
+                  "kepala_tabrak")
 
 
 class JaringanNumpy:
@@ -56,16 +57,23 @@ class JaringanNumpy:
         w = {k: np.asarray(bobot[f"{k}.weight"], dtype=np.float32).T for k in _LAPIS}
         b = {k: np.asarray(bobot[f"{k}.bias"], dtype=np.float32) for k in _LAPIS}
         self.nh, self.n_aksi = w["v1"].shape[1], w["a2"].shape[1]
-        nh = self.nh
+        nh, n = self.nh, self.n_aksi
         self.n_obs = w["fc1"].shape[0]
+        # Kepala kelayakan opsional (t2: A-hidden -> logit tabrak) ikut digabung ke matriks
+        # keluaran: o = [V | A (14) | logit tabrak (14)]. Model tanpa t2 tetap jalan.
+        self.kepala_tabrak = "t2.weight" in bobot
         self.w1, self.b1 = np.ascontiguousarray(w["fc1"]), b["fc1"]
         self.w2, self.b2 = np.ascontiguousarray(w["fc2"]), b["fc2"]
         self.w_va = np.ascontiguousarray(np.concatenate([w["v1"], w["a1"]], axis=1))
         self.b_va = np.concatenate([b["v1"], b["a1"]])
-        self.w_out = np.zeros((2 * nh, 1 + self.n_aksi), np.float32)
+        self.w_out = np.zeros((2 * nh, 1 + n + (n if self.kepala_tabrak else 0)), np.float32)
         self.w_out[:nh, :1] = w["v2"]
-        self.w_out[nh:, 1:] = w["a2"]
-        self.b_out = np.concatenate([b["v2"], b["a2"]])
+        self.w_out[nh:, 1:1 + n] = w["a2"]
+        b_out = [b["v2"], b["a2"]]
+        if self.kepala_tabrak:
+            self.w_out[nh:, 1 + n:] = np.asarray(bobot["t2.weight"], dtype=np.float32).T
+            b_out.append(np.asarray(bobot["t2.bias"], dtype=np.float32))
+        self.b_out = np.concatenate(b_out)
 
     @classmethod
     def dari_state_dict(cls, sd):
@@ -76,21 +84,34 @@ class JaringanNumpy:
         h = x @ self.w1; h += self.b1; np.maximum(h, 0.0, out=h)
         h2 = h @ self.w2; h2 += self.b2; np.maximum(h2, 0.0, out=h2)
         hva = h2 @ self.w_va; hva += self.b_va; np.maximum(hva, 0.0, out=hva)
-        o = hva @ self.w_out; o += self.b_out          # o[..., 0] = V, o[..., 1:] = A
+        o = hva @ self.w_out; o += self.b_out          # o[..., 0] = V, o[..., 1:1+n] = A, sisanya logit tabrak
         return h, h2, hva, o
 
     def qv(self, obs):
         o = self._lapis(np.asarray(obs, dtype=np.float32))[3]
-        a = o[1:]
+        a = o[1:1 + self.n_aksi]
         return (a - a.mean()) + o[0], float(o[0])
 
     def q(self, obs):
         return self.qv(obs)[0]
 
+    def q_tabrak(self, obs):
+        """(Q, P aksi menabrak) untuk satu keadaan, satu forward. P None bila model tanpa kepala_tabrak."""
+        o = self._lapis(np.asarray(obs, dtype=np.float32))[3]
+        n = self.n_aksi
+        a = o[1:1 + n]
+        p = 1.0 / (1.0 + np.exp(-o[1 + n:])) if self.kepala_tabrak else None
+        return (a - a.mean()) + o[0], p
+
     def q_batch(self, X):
         o = self._lapis(np.asarray(X, dtype=np.float32).reshape(-1, self.n_obs))[3]
-        a = o[:, 1:]
+        a = o[:, 1:1 + self.n_aksi]
         return (a - a.mean(axis=1, keepdims=True)) + o[:, :1]
+
+    def tabrak_batch(self, X):
+        """P aksi menabrak untuk B keadaan, (B, n_aksi). Hanya model dengan kepala_tabrak."""
+        o = self._lapis(np.asarray(X, dtype=np.float32).reshape(-1, self.n_obs))[3]
+        return 1.0 / (1.0 + np.exp(-o[:, 1 + self.n_aksi:]))
 
     def v_batch(self, X):
         """V(s) untuk B keadaan sekaligus, (B,) - peta nilai dasbor."""
@@ -99,7 +120,7 @@ class JaringanNumpy:
     def aktivasi(self, obs):
         """(Q, dict fc1, fc2, v_hidden, a_hidden, v, a) untuk satu keadaan - nama sama dengan PyTorch lama."""
         h, h2, hva, o = self._lapis(np.asarray(obs, dtype=np.float32))
-        a = o[1:]
+        a = o[1:1 + self.n_aksi]
         return (a - a.mean()) + o[0], {"fc1": h, "fc2": h2, "v_hidden": hva[:self.nh],
                                        "a_hidden": hva[self.nh:], "v": o[:1], "a": a}
 

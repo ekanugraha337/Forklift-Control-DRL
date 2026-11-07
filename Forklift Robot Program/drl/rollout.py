@@ -131,7 +131,7 @@ class KumpulanRollout:
             self.slot[i] = None
             return False, info["alasan"]
         self.slot[i] = {"sk": sk, "env": env, "obs": [obs], "aksi": [], "reward": [],
-                        "mask": [env.mask()], "q_pilih": []}
+                        "mask": [env.mask()], "tabrak": [env.tabrak()], "q_pilih": []}
         return True, ""
 
     def aktif(self):
@@ -158,6 +158,7 @@ class KumpulanRollout:
             s["reward"].append(r)
             s["q_pilih"].append(float(q[j, a]))
             s["mask"].append(s["env"].mask() if not akhir else np.zeros(s["env"].n_aksi, bool))
+            s["tabrak"].append(s["env"].tabrak() if not akhir else np.zeros(s["env"].n_aksi, bool))
             if akhir:
                 selesai.append((i, ringkas_episode(s, info)))
                 self.slot[i] = None
@@ -174,7 +175,7 @@ def ringkas_episode(s, info):
         "obs": np.asarray(s["obs"], np.float32), "aksi": np.asarray(s["aksi"], np.int64),
         # reward sudah diskalakan untuk jaringan
         "reward": np.asarray(s["reward"], np.float32) / SKALA_REWARD,
-        "mask": np.asarray(s["mask"], bool), "jalur": env.jalur(),
+        "mask": np.asarray(s["mask"], bool), "tabrak": np.asarray(s["tabrak"], bool), "jalur": env.jalur(),
     }
 
 
@@ -200,10 +201,11 @@ def jalankan(net, pabrik, daftar_sk, n_slot=32, epsilon=0.0, rng=None):
     return hasil
 
 
-def transisi_episode(obs, aksi, reward, mask, terminal, gamma, n):
+def transisi_episode(obs, aksi, reward, mask, terminal, gamma, n, tabrak=None):
     """Episode -> larik transisi 1-langkah dan n-langkah untuk buffer.
 
     obs (T+1, 47), aksi (T,), reward (T,) SUDAH diskalakan, mask (T+1, 14).
+    tabrak (T+1 atau T, 14): label kepala kelayakan tiap keadaan; None = semua False.
     terminal: episode berakhir di keadaan terminal (serah/buntu).
     False = terpotong MAKS_LANGKAH - keadaan terakhir tetap di-bootstrap.
     """
@@ -223,7 +225,8 @@ def transisi_episode(obs, aksi, reward, mask, terminal, gamma, n):
         maskn[t] = mask[t + k]
         akhirn[t] = terminal and t + k == T
         gn[t] = gamma ** k
-    return {"obs": obs[:T], "aksi": aksi, "mask": mask[:T],
+    tabrak = np.zeros((T, mask.shape[1]), bool) if tabrak is None else np.asarray(tabrak, bool)[:T]
+    return {"obs": obs[:T], "aksi": aksi, "mask": mask[:T], "tabrak": tabrak,
             "r1": reward.astype(np.float32), "obs1": obs[1:], "mask1": mask[1:], "akhir1": akhir1,
             "g1": np.full(T, gamma, np.float32),
             "rn": rn, "obsn": obsn, "maskn": maskn, "akhirn": akhirn, "gn": gn}
@@ -236,6 +239,13 @@ def episode_demo(d, e):
     obs = np.concatenate([d["obs"][s0:s0 + T], d["obs_next"][s0 + T - 1:s0 + T]])
     mask = np.concatenate([d["mask"][s0:s0 + T], d["mask_next"][s0 + T - 1:s0 + T]])
     return obs, d["aksi"][s0:s0 + T].astype(np.int64), d["reward"][s0:s0 + T] / SKALA_REWARD, mask
+
+
+def tabrak_demo(d, e):
+    """Label kepala kelayakan episode demo ke-e, (T, 14). Butuh kolom "tabrak" dataset
+    (drl.label_tabrak menambahkannya dengan memutar ulang demo)."""
+    s0, T = int(d["ep_mulai"][e]), int(d["ep_langkah"][e])
+    return d["tabrak"][s0:s0 + T]
 
 
 def jarak_lurus_cm(pabrik, sk):

@@ -1,12 +1,16 @@
 """
 dqfd.py - Deep Q-learning from Demonstrations (Hester dkk. 2018).
 
-    J = J_DQ + lam_n * J_n + lam_e * J_E  (+ L2 lewat weight_decay)
+    J = J_DQ + lam_n * J_n + lam_e * J_E + lam_t * J_T  (+ L2 lewat weight_decay)
 
     J_DQ  TD 1-langkah, Double DQN (argmax jaringan online, nilai jaringan target)
     J_n   TD n-langkah (n = 10), sama
     J_E   large-margin, HANYA sampel demo:  max_a[Q(s,a) + l(a_E,a)] - Q(s,a_E)
           l = margin untuk a != a_E, 0 untuk a_E
+    J_T   (hanya bila kepala_tabrak) binary cross-entropy kepala kelayakan: untuk
+          ke-14 aksi di setiap keadaan buffer, apakah badannya menabrak zona
+          (label lingkungan._tabrak, demo maupun latihan sendiri). Inilah satu-satunya
+          sinyal latih tentang aksi yang menabrak - Q tetap hanya dilatih atas aksi sah.
 
 Semua max/argmax hanya atas aksi SAH (mask). Tanpa itu jaringan akan dihukum
 atau dibujuk oleh aksi yang toh tidak pernah boleh dipilih.
@@ -38,6 +42,7 @@ def kolom(n_aksi, n_obs):
         "akhir1": ((), torch.bool), "g1": ((), torch.float32),
         "rn": ((), torch.float32), "obsn": ((n_obs,), torch.float32), "maskn": ((n_aksi,), torch.bool),
         "akhirn": ((), torch.bool), "gn": ((), torch.float32),
+        "tabrak": ((n_aksi,), torch.bool),
     }
 
 
@@ -97,14 +102,15 @@ class Buffer:
 
 class AgenDQfD:
     def __init__(self, device, n_aksi=N_AKSI, n_obs=N_OBS, lr=1e-4, gamma=0.995, n=10, lam_n=1.0, lam_e=1.0,
-                 l2=1e-5, margin=0.8, target_setiap=2000, seed=0):
+                 l2=1e-5, margin=0.8, target_setiap=2000, seed=0, kepala_tabrak=False, lam_t=1.0):
         torch.manual_seed(seed)
         self.device = device
         self.n_aksi, self.n_obs = n_aksi, n_obs
         self.gamma, self.n = gamma, n
         self.lam_n, self.lam_e, self.margin = lam_n, lam_e, margin
+        self.lam_t = lam_t
         self.target_setiap = target_setiap
-        self.net = JaringanDQfD(n_aksi, n_obs).to(device)
+        self.net = JaringanDQfD(n_aksi, n_obs, kepala_tabrak=kepala_tabrak).to(device)
         self.target = copy.deepcopy(self.net)
         self.opt = torch.optim.Adam(self.net.parameters(), lr=lr, weight_decay=l2)
         # Salinan numpy untuk SEMUA forward di luar gradien (rollout, evaluasi, dasbor).
@@ -118,9 +124,10 @@ class AgenDQfD:
         return self.numpy
 
     def muat_bobot(self, sd):
-        """Bobot awal (mis. --awal) untuk jaringan online & target, lalu sinkron numpy."""
-        self.net.load_state_dict(sd)
-        self.target.load_state_dict(sd)
+        """Bobot awal (mis. --awal) untuk jaringan online & target, lalu sinkron numpy.
+        strict=False: bobot dari model tanpa kepala_tabrak boleh dipakai; t2 tetap acak."""
+        self.net.load_state_dict(sd, strict=False)
+        self.target.load_state_dict(sd, strict=False)
         self.sinkron_numpy()
 
     def _target(self, obs, mask, akhir, g, r):
@@ -131,7 +138,12 @@ class AgenDQfD:
 
     def latih_satu(self, buf, B, beta, rng):
         idx, b = buf.ambil(B, beta, rng)
-        q = self.net(b["obs"])
+        if self.net.kepala_tabrak:
+            q, logit = self.net.q_dan_tabrak(b["obs"])
+            j_t = F.binary_cross_entropy_with_logits(logit, b["tabrak"].float())
+        else:
+            q = self.net(b["obs"])
+            j_t = torch.zeros((), device=self.device)
         qa = q.gather(1, b["aksi"][:, None]).squeeze(1)
         y1 = self._target(b["obs1"], b["mask1"], b["akhir1"], b["g1"], b["r1"])
         yn = self._target(b["obsn"], b["maskn"], b["akhirn"], b["gn"], b["rn"])
@@ -148,7 +160,7 @@ class AgenDQfD:
         else:
             j_e = torch.zeros((), device=self.device)
 
-        loss = j_dq + self.lam_n * j_n + self.lam_e * j_e
+        loss = j_dq + self.lam_n * j_n + self.lam_e * j_e + self.lam_t * j_t
         self.opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.net.parameters(), 10.0)
@@ -163,7 +175,7 @@ class AgenDQfD:
         with torch.no_grad():
             setuju = (bermask(q, b["mask"]).argmax(1) == b["aksi"])[demo].float().mean() \
                 if demo.any() else torch.tensor(float("nan"))
-        return {"j_dq": j_dq.item(), "j_n": j_n.item(), "j_e": j_e.item(),
+        return {"j_dq": j_dq.item(), "j_n": j_n.item(), "j_e": j_e.item(), "j_t": j_t.item(),
                 "q": qa.mean().item(), "td": float(td.mean()),
                 "setuju_batch": float(setuju), "porsi_demo": float(demo.float().mean())}
 

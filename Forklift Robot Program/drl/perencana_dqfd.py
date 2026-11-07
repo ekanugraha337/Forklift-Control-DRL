@@ -68,9 +68,17 @@ ANGGARAN_TERBAIK = 1200
 # berubah di 3% rute (catatan Obsidian 20 §10). Validasi latih (latih.py) dan
 # evaluasi.py memakai fungsi di modul ini langsung dan tetap eager, supaya skor
 # model yang sudah dilatih tetap sebanding.
-PENCARIAN = ("eager", "lazy")
+# "belajar" (mode B, uji): lazy TANPA cek tabrakan primitif - kepala kelayakan model
+# (P aksi menabrak, jaringan.JaringanDQfD kepala_tabrak) satu-satunya yang memutuskan;
+# tanpa backtracking. Tembakan RS tetap dicek. Untuk mengukur, bukan untuk robot.
+PENCARIAN = ("eager", "lazy", "belajar")
 PENCARIAN_BAWAAN = "eager"
 PENCARIAN_ROBOT = "lazy"
+# Kepala kelayakan: aksi dengan P(menabrak) >= AMBANG_TABRAK diprediksi menabrak.
+# lazy: tetap masuk heap tetapi di belakang semua aksi lain (f + URUTAN_BELAKANG), jadi
+# pencarian tetap lengkap; belajar: tidak dimasukkan sama sekali.
+AMBANG_TABRAK = 0.5
+URUTAN_BELAKANG = 1e6
 # Metode gabungan: bagian batas waktu untuk terbaik-dulu; sisanya untuk mundur.
 PORSI_WAKTU_TERBAIK = 0.75
 
@@ -243,7 +251,8 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=None, bo
             "waktu_s": time.perf_counter() - t0, "jarak_min": jarak_min}
 
 
-def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=None, bobot=BOBOT_TERBAIK):
+def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=None, bobot=BOBOT_TERBAIK,
+                             belajar=False):
     """Terbaik-dulu LAZY: f dan urutan sama dengan rencanakan_terbaik, tetapi 14 primitif
     TIDAK disimulasi di muka.
 
@@ -255,11 +264,19 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
     Pindah cabang tidak menghitung ulang calon. Jalur tetap bebas tabrakan: setiap
     primitif yang dijalankan sudah dicek, atau dijamin bebas oleh ruang terbuka.
 
+    Model dengan kepala kelayakan (net.kepala_tabrak): aksi yang diprediksi menabrak
+    (P >= AMBANG_TABRAK) dimasukkan di belakang heap. belajar=True (mode B): aksi itu tidak
+    dimasukkan, dan aksi yang diambil TIDAK dicek tabrakannya - jaringan saja yang memutuskan.
+
     Kembalian dict sama dengan rencanakan_terbaik, ditambah dibuang (aksi yang ternyata
-    menabrak / selnya sudah dimasuki) dan masuk_ulang.
+    menabrak / selnya sudah dimasuki), masuk_ulang, dan aksi_jalur (urutan aksi jalur
+    yang berhasil; untuk memeriksa ulang jalur mode B).
     """
+    kepala = bool(getattr(net, "kepala_tabrak", False))
+    if belajar and not kepala:
+        raise ValueError("pencarian 'belajar' butuh model dengan kepala kelayakan (kepala_tabrak)")
     t0 = time.perf_counter()
-    snap, induk, potong, q_simpul = [env.simpan_keadaan()], [-1], [[]], {}
+    snap, induk, potong, aksi_simpul, q_simpul = [env.simpan_keadaan()], [-1], [[]], [None], {}
     heap, urut = [], itertools.count()
     PERKIRAAN, TERBUKA, TEPAT = 0, 1, 2
 
@@ -267,12 +284,20 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
         calon = env.calon_malas()
         if not calon:
             return
-        q = net.q(env.observasi())
+        if kepala:
+            q, p = net.q_tabrak(env.observasi())
+        else:
+            q, p = net.q(env.observasi()), None
         q_simpul[i] = q
         g = env.biaya
         for a, c, terbuka in calon:
             h = max(0.0, -float(q[a]) * SKALA_REWARD - c)
-            heapq.heappush(heap, (g + c + bobot * h, next(urut), i, a, TERBUKA if terbuka else PERKIRAAN))
+            f = g + c + bobot * h
+            if p is not None and not terbuka and p[a] >= AMBANG_TABRAK:
+                if belajar:
+                    continue                 # jaringan memutuskan: menabrak
+                f += URUTAN_BELAKANG
+            heapq.heappush(heap, (f, next(urut), i, a, TERBUKA if terbuka else PERKIRAAN))
 
     def pulihkan(i):
         rantai = []
@@ -289,10 +314,18 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
     alasan = "buntu"
     jarak_min = _jarak_tujuan(env)
 
-    def hasil(sukses, alasan_, jm):
+    def hasil(sukses, alasan_, jm, i_akhir=None, a_akhir=None):
+        aksi_jalur = None
+        if sukses:
+            aksi_jalur = [a_akhir]
+            j = i_akhir
+            while j > 0:
+                aksi_jalur.append(aksi_simpul[j])
+                j = induk[j]
+            aksi_jalur.reverse()
         return {"sukses": sukses, "alasan": alasan_, "dicoba": dicoba, "mundur": pindah,
                 "waktu_s": time.perf_counter() - t0, "jarak_min": jm, "dibuang": dibuang,
-                "masuk_ulang": masuk_ulang}
+                "masuk_ulang": masuk_ulang, "aksi_jalur": aksi_jalur}
 
     while heap:
         if dicoba >= anggaran:
@@ -306,11 +339,11 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
             pulihkan(i)
             di = i
             pindah += 1
-        calon = env.siapkan_aksi(a, tanpa_cek=jenis == TERBUKA)
+        calon = env.siapkan_aksi(a, tanpa_cek=belajar or jenis == TERBUKA)
         if calon is None:
             dibuang += 1
             continue
-        if jenis == PERKIRAAN:
+        if jenis == PERKIRAAN and not belajar:
             c = calon[1]
             fe = env.biaya + c + bobot * max(0.0, -float(q_simpul[i][a]) * SKALA_REWARD - c)
             if heap and fe > f and fe > heap[0][0]:
@@ -322,10 +355,11 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
         dicoba += 1
         jarak_min = min(jarak_min, _jarak_tujuan(env))
         if info["sukses"]:
-            return hasil(True, info["alasan"], 0.0)
+            return hasil(True, info["alasan"], 0.0, i, a)
         j = len(snap)
         snap.append(env.simpan_keadaan())
         induk.append(i)
+        aksi_simpul.append(a)
         potong.append(env._pose[n0:])
         if akhir or env.langkah_ke >= MAKS_LANGKAH:
             di = None
@@ -342,8 +376,9 @@ def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, mulai_ulang=None, bob
     gabungan: terbaik-dulu (PORSI_WAKTU_TERBAIK dari batas waktu), lalu mundur
     bila gagal. mulai_ulang(): me-reset env ke keadaan awal yang sama - sel
     tertutup milik pencarian pertama tidak boleh menutup pencarian kedua.
-    pencarian: "eager" (14 primitif disimulasi di muka) atau "lazy"
-    (rencanakan_terbaik_malas); hanya untuk tahap terbaik-dulu.
+    pencarian: "eager" (14 primitif disimulasi di muka), "lazy"
+    (rencanakan_terbaik_malas), atau "belajar" (lazy tanpa cek tabrakan primitif, tanpa
+    backtracking - mode B, uji); hanya untuk tahap terbaik-dulu.
     """
     t0 = time.perf_counter()
     pencarian = pencarian or PENCARIAN_BAWAAN
@@ -355,10 +390,13 @@ def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, mulai_ulang=None, bob
         return h
     bt = None if batas_waktu is None else (PORSI_WAKTU_TERBAIK * batas_waktu if metode == "gabungan"
                                            else batas_waktu)
-    terbaik = rencanakan_terbaik_malas if pencarian == "lazy" else rencanakan_terbaik
-    h = terbaik(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=bobot)
+    if pencarian == "eager":
+        h = rencanakan_terbaik(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=bobot)
+    else:
+        h = rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=bobot,
+                                     belajar=pencarian == "belajar")
     h["metode"] = "terbaik"
-    if h["sukses"] or metode == "terbaik":
+    if h["sukses"] or metode == "terbaik" or pencarian == "belajar":
         return h
     sisa = None if batas_waktu is None else batas_waktu - (time.perf_counter() - t0)
     if sisa is not None and sisa <= 0:
@@ -403,7 +441,7 @@ def rencanakan_dqfd(net, env, awal, tujuan, omap=None, metode=METODE_BAWAAN, bat
     h = cari(net, env, metode, batas_waktu=sisa, bobot=bobot, pencarian=pencarian,
              mulai_ulang=lambda: env.reset(awal, tujuan, omap)[0])
     hasil.update(sukses=h["sukses"], alasan="" if h["sukses"] else h["alasan"], metode=h["metode"],
-                 dicoba=h["dicoba"])
+                 dicoba=h["dicoba"], aksi_jalur=h.get("aksi_jalur"))
     if h["sukses"]:
         hasil.update(jalur=env.jalur(), biaya=env.biaya, n_titik_rs=env.n_titik_rs)
     hasil["waktu_s"] = time.perf_counter() - t0
@@ -478,6 +516,7 @@ class DQfDPlanner:
 
     def plan(self, omap, start, goal):
         t0 = time.perf_counter()
+        self._rencana_terakhir = (omap, start, goal)     # untuk memeriksa ulang jalur (drl/ukur_node.py)
         self.pustaka._t_rs = 0.0                 # waktu di dalam tembakan RS (HybridAStarBertanda)
         h = rencanakan_dqfd(self.net, self.env, start, goal, omap, metode=self.metode,
                             batas_waktu=self.time_limit, pencarian=self.pencarian)
@@ -494,7 +533,7 @@ class DQfDPlanner:
                 self.last_stats = {
                     "expansions": h["dicoba"], "time": time.perf_counter() - t0, "reason": "",
                     "perencana": f"dqfd ({h['metode']})", "rasio_perkiraan": rasio,
-                    "rs_titik": h["n_titik_rs"], "rincian_s": rincian}
+                    "rs_titik": h["n_titik_rs"], "rincian_s": rincian, "aksi_jalur": h.get("aksi_jalur")}
                 return h["jalur"]
             h["alasan"] = f"ditolak gerbang mutu (biaya {rasio:.2f} x perkiraan)"
         if not self.cadangan:

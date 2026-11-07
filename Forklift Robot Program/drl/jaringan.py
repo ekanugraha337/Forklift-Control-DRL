@@ -25,7 +25,10 @@ Q_TERLARANG = -1e9
 
 
 class JaringanDQfD(nn.Module):
-    def __init__(self, n_aksi, n_obs, lebar=256, cabang=128):
+    """kepala_tabrak=True: kepala kelayakan t2 (A-hidden 128 -> 14 logit "aksi menabrak zona"),
+    +1.806 parameter, dilatih dengan binary cross-entropy (dqfd.AgenDQfD). Q tidak berubah."""
+
+    def __init__(self, n_aksi, n_obs, lebar=256, cabang=128, kepala_tabrak=False):
         super().__init__()
         self.fc1 = nn.Linear(n_obs, lebar)
         self.fc2 = nn.Linear(lebar, lebar)
@@ -33,12 +36,24 @@ class JaringanDQfD(nn.Module):
         self.v2 = nn.Linear(cabang, 1)
         self.a1 = nn.Linear(lebar, cabang)
         self.a2 = nn.Linear(cabang, n_aksi)
+        self.kepala_tabrak = kepala_tabrak
+        if kepala_tabrak:
+            self.t2 = nn.Linear(cabang, n_aksi)
 
-    def forward(self, x):
+    def _batang(self, x):
         h2 = F.relu(self.fc2(F.relu(self.fc1(x))))
         v = self.v2(F.relu(self.v1(h2)))
-        a = self.a2(F.relu(self.a1(h2)))
-        return v + a - a.mean(dim=1, keepdim=True)
+        ha = F.relu(self.a1(h2))
+        a = self.a2(ha)
+        return v + a - a.mean(dim=1, keepdim=True), ha
+
+    def forward(self, x):
+        return self._batang(x)[0]
+
+    def q_dan_tabrak(self, x):
+        """(Q, logit tabrak) dari satu forward batang."""
+        q, ha = self._batang(x)
+        return q, self.t2(ha)
 
 
 def bermask(q, mask):

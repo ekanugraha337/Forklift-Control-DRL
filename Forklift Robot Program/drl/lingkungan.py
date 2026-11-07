@@ -233,6 +233,8 @@ class LingkunganRencana:
         self.ekor_rs = None
         self._rs_calon = None
         self._obs_c = None          # cache observasi(), lihat di sana
+        self._mask = np.zeros(N_AKSI, dtype=bool)
+        self._tabrak = np.zeros(N_AKSI, dtype=bool)
 
         # Ambang jalan pintas ruang terbuka (lihat _terbuka). Titik badan mana pun
         # bergeser paling jauh step x sqrt(1 + (offset x kappa)^2) dalam satu primitif.
@@ -267,6 +269,7 @@ class LingkunganRencana:
         self.selesai = True
         self.sukses = False
         self._mask = np.zeros(N_AKSI, dtype=bool)
+        self._tabrak = np.zeros(N_AKSI, dtype=bool)
 
         if gyaw is not None and not self.omap.pose_free(v, gx, gy, gyaw):
             return None, {"sah": False, "alasan": "tujuan menabrak rintangan"}
@@ -451,21 +454,26 @@ class LingkunganRencana:
         self.biaya += self.biaya_rs
         self.selesai = self.sukses = True
         self._mask = np.zeros(N_AKSI, dtype=bool)
+        self._tabrak = np.zeros(N_AKSI, dtype=bool)
 
     # -------------------------------------------------------------- calon
     def _hitung_calon(self):
         """Hitung semua aksi dari keadaan sekarang: hasil + mask. Dipakai ulang step().
-        Di ruang terbuka (_terbuka) tanpa cek tabrakan - hasilnya sama persis."""
+        Di ruang terbuka (_terbuka) tanpa cek tabrakan - hasilnya sama persis.
+        _tabrak (label kepala kelayakan): aksi yang badannya menabrak zona - beda dengan
+        mask, aksi ke sel yang sudah dikunjungi TIDAK dihitung menabrak."""
         pl = self.planner
         cek = not self._terbuka()
         self._calon = [None] * N_AKSI
         self._mask = np.zeros(N_AKSI, dtype=bool)
+        self._tabrak = np.zeros(N_AKSI, dtype=bool)
         for a in range(N_AKSI):
             nd, nk, _ = aksi_info(pl, a)
             if nd < 0 and not self.boleh_mundur:
                 continue
             hasil = self._ekspansi(nd, nk, cek)
             if hasil is None:
+                self._tabrak[a] = True
                 continue
             px, py, pyaw = hasil[0][-1][:3]
             if (pl._key(px, py, pyaw), nd) in self.dikunjungi:
@@ -523,6 +531,12 @@ class LingkunganRencana:
     def _kosongkan_calon(self):
         self._calon = [None] * N_AKSI
         self._mask = np.zeros(N_AKSI, dtype=bool)
+        self._tabrak = np.zeros(N_AKSI, dtype=bool)
+
+    def tabrak(self):
+        """Label kepala kelayakan untuk keadaan sekarang: aksi mana yang menabrak zona
+        (dari _hitung_calon terakhir; semua False sesudah serah / di pencarian lazy)."""
+        return self._tabrak.copy()
 
     def _terbuka(self):
         """Ruang terbuka: ke-14 primitif dari pose sekarang PASTI bebas tabrakan dan
