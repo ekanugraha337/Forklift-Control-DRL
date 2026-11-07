@@ -11,6 +11,10 @@ dqfd.py - Deep Q-learning from Demonstrations (Hester dkk. 2018).
 Semua max/argmax hanya atas aksi SAH (mask). Tanpa itu jaringan akan dihukum
 atau dibujuk oleh aksi yang toh tidak pernah boleh dipilih.
 
+ATURAN ver-1-6: PyTorch HANYA untuk gradien (latih_satu). Forward untuk rollout
+latihan sendiri, evaluasi, dan dasbor memakai AgenDQfD.numpy (JaringanNumpy),
+salinan bobot jaringan online yang disinkronkan dengan sinkron_numpy().
+
 Buffer: prioritized replay proporsional. Data demo di depan dan PERMANEN;
 data agen di belakangnya, melingkar. Prioritas demo mendapat bonus eps_demo
 supaya tetap sering terambil walau TD-nya sudah kecil.
@@ -22,14 +26,12 @@ import torch
 import torch.nn.functional as F
 
 from drl.jaringan import JaringanDQfD, bermask
-# periksa_profil tetap bisa diimpor dari sini seperti sebelumnya; definisinya
-# dipindah ke jaringan_numpy supaya perencana bisa memeriksa model tanpa torch.
-from drl.jaringan_numpy import periksa_kontrak, periksa_profil  # noqa: F401
-from drl.lingkungan import JENIS, VERSI_AKSI, n_aksi as jumlah_aksi, n_obs as jumlah_obs
+from drl.jaringan_numpy import JaringanNumpy, periksa_kontrak, periksa_profil  # noqa: F401
+from drl.lingkungan import JENIS, N_AKSI, N_OBS, VERSI_AKSI
 
 
 def kolom(n_aksi, n_obs):
-    """Bentuk kolom buffer: lebar obs dan mask = masukan dan aksi jenis model."""
+    """Bentuk kolom buffer: lebar obs dan mask = masukan dan aksi model."""
     return {
         "obs": ((n_obs,), torch.float32), "aksi": ((), torch.int64), "mask": ((n_aksi,), torch.bool),
         "r1": ((), torch.float32), "obs1": ((n_obs,), torch.float32), "mask1": ((n_aksi,), torch.bool),
@@ -40,7 +42,7 @@ def kolom(n_aksi, n_obs):
 
 
 class Buffer:
-    def __init__(self, kapasitas, device, n_aksi, n_obs, alpha=0.4, eps_agen=1e-3, eps_demo=1.0):
+    def __init__(self, kapasitas, device, n_aksi=N_AKSI, n_obs=N_OBS, alpha=0.4, eps_agen=1e-3, eps_demo=1.0):
         self.N, self.device = kapasitas, device
         self.alpha, self.eps_agen, self.eps_demo = alpha, eps_agen, eps_demo
         self.t = {k: torch.zeros((kapasitas, *bentuk), dtype=dt, device=device)
@@ -94,7 +96,7 @@ class Buffer:
 
 
 class AgenDQfD:
-    def __init__(self, device, n_aksi, n_obs, lr=1e-4, gamma=0.995, n=10, lam_n=1.0, lam_e=1.0,
+    def __init__(self, device, n_aksi=N_AKSI, n_obs=N_OBS, lr=1e-4, gamma=0.995, n=10, lam_n=1.0, lam_e=1.0,
                  l2=1e-5, margin=0.8, target_setiap=2000, seed=0):
         torch.manual_seed(seed)
         self.device = device
@@ -105,14 +107,21 @@ class AgenDQfD:
         self.net = JaringanDQfD(n_aksi, n_obs).to(device)
         self.target = copy.deepcopy(self.net)
         self.opt = torch.optim.Adam(self.net.parameters(), lr=lr, weight_decay=l2)
-        # Salinan CPU untuk rollout & dasbor, disinkronkan sesekali.
-        self.cpu = JaringanDQfD(n_aksi, n_obs)
-        self.sinkron_cpu()
+        # Salinan numpy untuk SEMUA forward di luar gradien (rollout, evaluasi, dasbor).
+        self.numpy = None
+        self.sinkron_numpy()
         self.langkah = 0
 
-    def sinkron_cpu(self):
-        self.cpu.load_state_dict({k: v.detach().cpu() for k, v in self.net.state_dict().items()})
-        self.cpu.eval()
+    def sinkron_numpy(self):
+        """Salin bobot jaringan online ke JaringanNumpy (dipakai rollout & evaluasi)."""
+        self.numpy = JaringanNumpy.dari_state_dict(self.net.state_dict())
+        return self.numpy
+
+    def muat_bobot(self, sd):
+        """Bobot awal (mis. --awal) untuk jaringan online & target, lalu sinkron numpy."""
+        self.net.load_state_dict(sd)
+        self.target.load_state_dict(sd)
+        self.sinkron_numpy()
 
     def _target(self, obs, mask, akhir, g, r):
         with torch.no_grad():
@@ -163,15 +172,17 @@ class AgenDQfD:
                     "opt": self.opt.state_dict(), "langkah": self.langkah, **meta}, jalur)
 
 
-def muat_jaringan(jalur, device="cpu", jenis=None):
-    """Jaringan dari checkpoint, siap dipakai (eval). jenis: 'jauh'/'dekat' yang
-    diharapkan pemanggil; None = tidak diperiksa."""
+def muat_checkpoint(jalur, device="cpu"):
+    """Checkpoint .pt (dict) setelah lolos pemeriksaan kontrak - SEBELUM bobot dipakai."""
     ck = torch.load(jalur, map_location=device, weights_only=False)
-    periksa_kontrak(ck, jalur, jenis)     # versi & bentuk, SEBELUM bobot dimuat
-    net = JaringanDQfD(ck["n_aksi"], ck["n_obs"]).to(device)
-    net.load_state_dict(ck["net"])
-    net.eval()
-    return net, ck
+    periksa_kontrak(ck, jalur)
+    return ck
+
+
+def muat_bobot(jalur):
+    """(bobot numpy {nama: larik}, checkpoint) - untuk JaringanNumpy (jaringan_numpy.muat_dari_pt)."""
+    ck = muat_checkpoint(jalur)
+    return {k: v.detach().cpu().numpy() for k, v in ck["net"].items()}, ck
 
 
 def meta_profil(prof):
@@ -180,10 +191,6 @@ def meta_profil(prof):
             "versi_aksi": VERSI_AKSI}
 
 
-def meta_model(prof, jenis):
-    """meta_profil + jenis model (jauh/dekat) dan jumlah aksinya."""
-    if jenis not in JENIS:
-        raise ValueError(f"jenis model '{jenis}' tidak dikenal")
-    return {**meta_profil(prof), "jenis": jenis, "n_aksi": jumlah_aksi(jenis), "n_obs": jumlah_obs(jenis)}
-
-
+def meta_model(prof):
+    """meta_profil + jenis model dan bentuk masukan/keluarannya."""
+    return {**meta_profil(prof), "jenis": JENIS, "n_aksi": N_AKSI, "n_obs": N_OBS}

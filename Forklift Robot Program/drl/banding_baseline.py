@@ -1,24 +1,18 @@
 """
-banding_baseline.py - Tahap 1.1: baseline Hybrid A* yang adil vs DQfD, satu run offline.
+banding_baseline.py - Hybrid A* + RS standar vs DQfD (model jauh + tembakan RS), satu run offline.
 
-    python -m drl.banding_baseline                     semua varian, semua rute uji, ID 01 & 02
-    python -m drl.banding_baseline --varian A0,D0 --maks 20      uji singkat
+    python -m drl.banding_baseline                       kedua perencana, semua rute uji, ID 01 & 02
+    python -m drl.banding_baseline --varian astar --maks 20      uji singkat
 
-Rute: semua episode UJI demo_jauh_id0N (Kalibrasi, Rumah2, Rumah, dan peta
-sintetis yang tidak pernah dilihat saat latih), lewat Perencana.rencanakan()
-- jalur kode yang sama dengan robot (sapuan heading bebas, margin cadangan),
-batas waktu 2 s per percobaan untuk semua varian.
+Rute: semua episode UJI demo_jauh_id0N (peta asli dengan rute yang belum
+dilihat, dan peta sintetis yang tidak pernah dilihat saat latih), lewat
+Perencana.rencanakan() - jalur kode yang sama dengan robot (sapuan heading
+bebas, margin cadangan), batas waktu 2 s per percobaan untuk kedua perencana.
 
-Varian (opsi Perencana, lihat rencana.buat_perencana dan DQfDPlanner):
-    A0  Hybrid A*: Dijkstra, w 1,3, RS di setiap node < 60 cm   (konfigurasi robot)
-    A1  A0 dengan w 2,0
-    A2  A0 dengan h = max(RS tanpa rintangan, Dijkstra)
-    A3  A2 dengan w 2,0
-    A4  A3 dengan saringan handover DQfD                          (baseline "adil")
-    D0  DQfD: w 2,0, saringan handover, cadangan backtracking     (konfigurasi robot)
-    D1  D0 dengan w 1,3
-    D2  D0 tanpa saringan handover
-    D3  D0 tanpa backtracking
+Varian (aturan ver-1-6, w = 2,0 untuk keduanya):
+    astar  Hybrid A* + RS standar: h = max(h_RS, h_D), RS setiap ekspansi ke-4
+    dqfd   DQfD murni: model jauh (terbaik-dulu + backtracking) + tembakan RS
+           di dalam 60 cm bila tidak ada halangan, tanpa cadangan Hybrid A*
 
 Per rute dicatat: sukses, ms (median ULANG ulangan), node (jumlah ekspansi /
 langkah DQfD SEMUA panggilan perencana di rencanakan() terakhir, termasuk
@@ -52,15 +46,8 @@ AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ULANG = 3
 
 VARIAN = {
-    "A0": ("astar", {}),
-    "A1": ("astar", {"h_weight": 2.0}),
-    "A2": ("astar", {"heuristik": "rs"}),
-    "A3": ("astar", {"heuristik": "rs", "h_weight": 2.0}),
-    "A4": ("astar", {"heuristik": "rs", "h_weight": 2.0, "saring_serah": True}),
-    "D0": ("dqfd-murni", {}),
-    "D1": ("dqfd-murni", {"bobot": 1.3}),
-    "D2": ("dqfd-murni", {"saring_serah": False}),
-    "D3": ("dqfd-murni", {"metode": "terbaik"}),
+    "astar": "astar",
+    "dqfd": "dqfd-murni",
 }
 
 
@@ -142,14 +129,13 @@ def jalankan(args):
             # Planner per varian dibuat sekali per peta (seperti robot: satu planner per arena)
             per = {}
             for v in varian:
-                jenis, opsi = VARIAN[v]
-                p = R.Perencana(ar, prof, jenis=jenis, opsi=opsi)
+                p = R.Perencana(ar, prof, jenis=VARIAN[v])
                 p._untuk(konfig.SAFETY_MARGIN_CM)
                 p.rencanakan(rute[0]["awal"], rute[0]["tujuan"], rute[0]["rintangan"])   # pemanasan
                 per[v] = (p, PencatatNode(p))
-            # Parameter biaya Eq. (2) untuk SEMUA varian: Hybrid A* konfigurasi robot
+            # Parameter biaya Eq. (2) untuk SEMUA varian (sama untuk setiap peran Hybrid A*)
             pl_biaya = R.buat_perencana(ar, R.buat_kendaraan(ar, konfig.SAFETY_MARGIN_CM,
-                                                             prof.max_steer_rad))
+                                                             prof.max_steer_rad), "astar")
             for r in rute:
                 ax, ay, ayaw = r["awal"]
                 gx, gy = r["tujuan"][0], r["tujuan"][1]

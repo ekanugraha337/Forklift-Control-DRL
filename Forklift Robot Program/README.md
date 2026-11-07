@@ -14,7 +14,7 @@ Pasangan firmware: **Forklift Control v2** (topik `forklift01/...`).
 | `arena.py` | Peta constraint → occupancy grid → `ObstacleMap` | `python arena.py --peta Rumah` |
 | `pose.py` | AprilTag → pose cm; juga simulator model sepeda | `python pose.py --simulasi` |
 | `robot.py` | MQTT ke firmware v2, konversi kemudi→servo, estop | `python robot.py` |
-| `rencana.py` | Hybrid A\* dalam sel grid | `python rencana.py --peta Rumah` |
+| `rencana.py` | Perencana dalam sel grid: Hybrid A\* + RS standar (`astar`) atau DQfD (`dqfd`, `dqfd-murni`) | `python rencana.py --peta Rumah` |
 | `jejak.py` | Pelacak jalur — **titik tukar algoritma** | (pustaka) |
 | `navigasi.py` | Program utama, satu atau beberapa robot (`--id 1,2`) | `python navigasi.py --simulasi` |
 | `wasit.py` | Pencegah tabrakan antar-robot: bayangan, aturan, prioritas | `python wasit.py` |
@@ -23,7 +23,9 @@ Pasangan firmware: **Forklift Control v2** (topik `forklift01/...`).
 | `identifikasi.py` | Ukur parameter model **di robot** | `python identifikasi.py --simulasi` |
 | `uji_gas.py` | Uji-mandiri uji tangga gas: tanam parameter, periksa pulihnya | `python uji_gas.py` |
 | `uji_kamera.py` | Bandingkan latensi dekode kamera antar-pengaturan, tanpa robot | `python uji_kamera.py` |
-| `forklift_planner.py` | Pustaka Hybrid A\* + Reeds-Shepp + pure pursuit. **Salinan v1, jangan diubah.** | |
+| `forklift_planner.py` | Pustaka Hybrid A\* + Reeds-Shepp (h = max(h_RS, h_D)) + pure pursuit | |
+| `heuristik_rs.py` | Tabel heuristik Reeds-Shepp tanpa rintangan (h_RS) | `python heuristik_rs.py` |
+| `drl/` | Perencana DQfD: model jauh + tembakan Reeds-Shepp (lihat `drl/__init__.py`) | `python -m drl.adaptor_demo --uji` |
 
 Urutannya berlapis: `konfig` → `arena` → `rencana`/`jejak` → `navigasi`.
 Tiap berkas bisa dijalankan sendiri, dan tiga yang pertama tidak butuh kamera

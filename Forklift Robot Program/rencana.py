@@ -7,15 +7,20 @@ menerjemahkan parameter cm di konfig.py menjadi sel grid, dan menerjemahkan
 jalur yang dihasilkan kembali ke cm.
 
 PERENCANA BISA DITUKAR (Perencana(..., jenis=...)):
-    "astar"       Hybrid A* (bawaan)
-    "astar-rs"    Hybrid A* dengan heuristik max(RS, Dijkstra) dan w = 2,0 (A3,
-                  Tahap 1.1) - hanya untuk uji, bukan bawaan robot
-    "dqfd"        jaringan DQfD robot itu (model_dqn/id0N.pt), Hybrid A* sebagai
-                  cadangan bila DQfD gagal
+    "astar"       Hybrid A* + Reeds-Shepp standar (bawaan): w = 2,0,
+                  h = max(h_RS, h_D), tembakan RS setiap ekspansi ke-4
+    "dqfd"        model jauh DQfD robot itu (model_dqn/id0N_jauh.pt) + tembakan
+                  RS di dalam 60 cm, Hybrid A* standar sebagai cadangan
     "dqfd-murni"  DQfD saja, tanpa cadangan - untuk menilai DQfD sendirian
-Keduanya mengembalikan jalur berformat sama, jadi pelacak & navigasi tidak
-tahu bedanya. Lihat drl/perencana_dqfd.py dan catatan Obsidian "Deep
-Reinforcement Learning".
+Semuanya mengembalikan jalur berformat sama, jadi pelacak & navigasi tidak
+tahu bedanya. Lihat drl/perencana_dqfd.py dan catatan Obsidian "Struktur DQfD
+Full".
+
+PERAN HYBRID A* (buat_perencana(..., peran=...)), aturan RS di konfig.ATURAN_RS:
+    "astar"         perencana pembanding: RS setiap ekspansi ke-4
+    "demonstrator"  demonstrator & pustaka gerak model jauh DQfD: RS di setiap
+                    node < 60 cm dari tujuan (batas serah model jauh)
+Bobot, heuristik, dan biaya sama untuk keduanya (konfig.PARAM_RENCANA).
 
 Titik acuan pose adalah POROS RODA DEPAN, bukan pusat AprilTag. Roda depan
 tidak berbelok, jadi robot selalu bergerak searah heading di titik itu - itulah
@@ -36,16 +41,15 @@ import cv2
 import numpy as np
 
 import arena as A
+import heuristik_rs
 import konfig
 from forklift_planner import HybridAStarPlanner, ObstacleMap, VehicleModel
 
 konfig.pasang_path_kamera()
 import area_constraint as AC          # noqa: E402
 
-JENIS_PERENCANA = ("astar", "astar-rs", "dqfd", "dqfd-murni")
-# Varian Hybrid A* yang dipilih lewat nama jenis (uji closed-loop Tahap 1.1):
-# "astar-rs" = A3, heuristik max(RS tanpa rintangan, Dijkstra) dengan w = 2,0.
-OPSI_JENIS = {"astar-rs": {"heuristik": "rs", "h_weight": 2.0}}
+JENIS_PERENCANA = ("astar", "dqfd", "dqfd-murni")
+PERAN_ASTAR = ("astar", "demonstrator")
 
 
 def _buat_jam_cpu_thread():
@@ -145,18 +149,17 @@ class HybridAStarBertanda(HybridAStarPlanner):
         return jalur
 
 
-def buat_perencana(arena, kendaraan, opsi=None):
-    """HybridAStarBertanda dari konfig.PARAM_RENCANA.
+def buat_perencana(arena, kendaraan, peran="astar"):
+    """HybridAStarBertanda dari konfig.PARAM_RENCANA + konfig.ATURAN_RS[peran].
 
-    opsi (varian baseline, benchmark Tahap 1.1; None = konfigurasi robot):
-      h_weight      bobot heuristik (bawaan PARAM_RENCANA, 1,3)
-      heuristik     "dijkstra" (bawaan) | "rs": max(biaya RS tanpa rintangan, Dijkstra)
-      saring_serah  True = tembakan RS hanya bila peta Dijkstra tidak memaksa memutar
-                    (atau < 25 cm), saringan handover yang sama dengan model jauh DQfD
+    peran "astar" = perencana pembanding, "demonstrator" = demonstrator dan
+    pustaka gerak model jauh DQfD (lihat docstring modul). Heuristik keduanya
+    h = max(h_RS, h_D) dengan w = PARAM_RENCANA["h_weight"].
     """
-    p = konfig.PARAM_RENCANA
+    if peran not in PERAN_ASTAR:
+        raise ValueError(f"peran Hybrid A* '{peran}' tidak dikenal, pilih {PERAN_ASTAR}")
+    p = {**konfig.PARAM_RENCANA, **konfig.ATURAN_RS[peran]}
     s = arena.panjang_ke_sel
-    opsi = opsi or {}
     planner = HybridAStarBertanda(
         kendaraan,
         plan_steer_ratio=konfig.PLAN_STEER_RATIO,
@@ -186,15 +189,8 @@ def buat_perencana(arena, kendaraan, opsi=None):
         time_limit=p["time_limit"],
         max_expansions=p["max_expansions"],
     )
-    if "h_weight" in opsi:
-        planner.h_weight = float(opsi["h_weight"])
-    if opsi.get("heuristik", "dijkstra") == "rs":
-        import heuristik_rs
-        planner.h_rs = heuristik_rs.tabel_untuk(planner)
-    if opsi.get("saring_serah"):
-        from drl.lingkungan import RADIUS_SERAH_PAKSA_CM
-        planner.serah_saring = True
-        planner.serah_paksa = s(RADIUS_SERAH_PAKSA_CM)
+    planner.peran = peran
+    planner.h_rs = heuristik_rs.tabel_untuk(planner)
     return planner
 
 
@@ -206,16 +202,12 @@ class Perencana:
     jenis: salah satu JENIS_PERENCANA, lihat docstring modul.
     """
 
-    def __init__(self, arena, profil=None, jenis="astar", opsi=None):
-        """opsi: varian perencana untuk benchmark (None = konfigurasi robot).
-        jenis "astar": lihat buat_perencana(). jenis DQfD: bobot, saring_serah,
-        metode ("gabungan" = dengan backtracking, "terbaik" = tanpa) - lihat DQfDPlanner."""
+    def __init__(self, arena, profil=None, jenis="astar"):
         if jenis not in JENIS_PERENCANA:
             raise SystemExit(f"[!] Perencana '{jenis}' tidak dikenal. Yang ada: {', '.join(JENIS_PERENCANA)}")
         self.arena = arena
         self.p = profil or konfig.profil()
         self.jenis = jenis
-        self.opsi = {**OPSI_JENIS.get(jenis, {}), **(opsi or {})}
         self._cache = {}
         self.kendaraan, self.planner = self._untuk(konfig.SAFETY_MARGIN_CM)
         # Margin & kendaraan yang BENAR-BENAR dipakai jalur terakhir. Bisa lebih
@@ -231,14 +223,16 @@ class Perencana:
         if kunci not in self._cache:
             k = buat_kendaraan(self.arena, kunci, self.p.max_steer_rad)
             if not self.jenis.startswith("dqfd"):
-                planner = buat_perencana(self.arena, k, self.opsi)
+                planner = buat_perencana(self.arena, k, "astar")
             else:
                 # Diimpor di sini, bukan di atas: tanpa DQfD, rencana.py (dan
-                # navigasi.py) tidak perlu PyTorch sama sekali.
+                # navigasi.py) tidak perlu memuat modul DQfD sama sekali.
                 from drl.perencana_dqfd import DQfDPlanner
-                # Hybrid A* di dalam DQfD (pustaka gerak + cadangan) selalu konfigurasi robot.
-                planner = DQfDPlanner(buat_perencana(self.arena, k), self.arena, self.p, kunci,
-                                      cadangan=self.jenis == "dqfd", **self.opsi)
+                # Pustaka gerak model jauh = Hybrid A* peran demonstrator (RS < 60 cm);
+                # cadangan mode "dqfd" = Hybrid A* standar.
+                planner = DQfDPlanner(buat_perencana(self.arena, k, "astar"),
+                                      buat_perencana(self.arena, k, "demonstrator"),
+                                      self.arena, self.p, kunci, cadangan=self.jenis == "dqfd")
             self._cache[kunci] = (k, planner)
         return self._cache[kunci]
 
@@ -419,12 +413,12 @@ class Perencana:
         return self.arena.panjang_ke_cm(total)
 
 
-# Warna jalur (BGR). Bagian Hybrid A* = primitif hasil pencarian; bagian
+# Warna jalur (BGR). Bagian Hybrid A* / model jauh DQfD = primitif; bagian
 # Reeds-Shepp = tembakan analitik penutup ke tujuan (info["rs_titik"]).
 WARNA_HA_MAJU, WARNA_HA_MUNDUR = (0, 255, 0), (0, 165, 255)      # hijau, oranye
 WARNA_RS_MAJU, WARNA_RS_MUNDUR = (255, 255, 0), (255, 0, 255)    # biru muda, ungu
-LEGENDA_JALUR = ("Hybrid A* / DQfD jauh: hijau maju, oranye mundur | "
-                 "Reeds-Shepp / DQfD dekat: biru muda maju, ungu mundur")
+LEGENDA_JALUR = ("Hybrid A* / model jauh DQfD: hijau maju, oranye mundur | "
+                 "Reeds-Shepp: biru muda maju, ungu mundur")
 
 
 def gambar_jalur(img, arena, jalur_sel, rs_titik=0, label="RS",
@@ -432,9 +426,9 @@ def gambar_jalur(img, arena, jalur_sel, rs_titik=0, label="RS",
     """Jalur digambar per arah gerak dan per asal.
 
     Maju dan mundur diberi warna berbeda. rs_titik = jumlah titik di ujung
-    jalur yang berasal dari Reeds-Shepp, atau dari model DQfD dekat
-    (Perencana.rencanakan -> info): bagian itu digambar dengan WARNA_RS_*, dan
-    titik sambungnya ditandai label ("RS" untuk Hybrid A*, "serah" untuk DQfD).
+    jalur yang berasal dari tembakan Reeds-Shepp (Perencana.rencanakan -> info):
+    bagian itu digambar dengan WARNA_RS_*, dan titik sambungnya ditandai label
+    ("RS" untuk Hybrid A*, "serah" untuk DQfD).
     """
     if not jalur_sel or len(jalur_sel) < 2:
         return

@@ -1,44 +1,38 @@
 """
-adaptor_demo.py - jalur Hybrid A* -> episode demonstrasi (s, a, r, s') untuk DQfD.
+adaptor_demo.py - jalur Hybrid A* -> episode demonstrasi (s, a, r, s') untuk model jauh DQfD.
 
+Demonstratornya Hybrid A* + Reeds-Shepp peran "demonstrator" (rencana.buat_perencana:
+w = 2,0, h = max(h_RS, h_D), RS dicoba di setiap node < 60 cm dari tujuan).
 Karena lingkungan perencanaan deterministik dan memakai aritmetika A* sendiri,
 aksi demonstrator tidak perlu ditebak - ia DIREKONSTRUKSI tepat dari jalur:
 
     jalur = [awal] + (n_sub pose per primitif) x N + (pose ekor Reeds-Shepp)
     tiap kelompok n_sub pose -> satu primitif: arah dari kolom arah,
                                 kappa = delta-yaw / (arah x step), dibulatkan
-    ekor Reeds-Shepp          -> SATU aksi model dekat: kata RS yang dipilih
-                                 demonstrator di pose serah (versi 6, ver-1-4;
-                                 env_dekat.aksi_demonstrator = _best_free_rs),
-                                 PERSIS ekor A* - kurva dan biayanya
+    ekor Reeds-Shepp          -> BUKAN aksi: lingkungan berhenti (SERAH) tepat
+                                 setelah primitif terakhir dan memasang tembakan
+                                 RS yang sama (_analytic), PERSIS ekor A*
 
 plan() tidak mengembalikan g-cost, jadi biaya A* direkam dari luar selama
-plan() berjalan: _h dan _analytic dibungkus di tingkat OBJEK, dan heapq modul
-forklift_planner ditukar sementara dengan perekam. forklift_planner.py sendiri
-tidak disentuh.
-
-DUA MODEL (ver-1-2): pisah_demo() memotong aksi di titik serah (masuk radius
-60 cm) menjadi episode model jauh dan episode model dekat.
+plan() berjalan: _h_cari dan _analytic dibungkus di tingkat OBJEK, dan heapq
+modul forklift_planner ditukar sementara dengan perekam.
 
 UJI PENERIMAAN:
     python -m drl.adaptor_demo --uji                      # ID 01 & 02, semua peta
     python -m drl.adaptor_demo --uji --id 2 --peta Kalibrasi --n 30
 
-    Lulus bila, untuk SETIAP jalur yang ditemukan A* (lihat uji()):
-      1. episode jauh lolos mask, selesai SERAH, dan jalurnya IDENTIK dengan
-         awalan jalur A*;
-      2. episode dekat = satu kata RS, TIBA, dan kurvanya IDENTIK dengan ekor
-         RS A* (atau ditolak dengan alasan sah: A* tiba tanpa RS);
-      3. observasi berukuran 47 / 9 dan berhingga.
-    Bagian dekat dilaporkan: galat pose akhir, simpangan dari jalur A* + RS,
-    selisih biaya (harus 0).
+    Lulus bila, untuk SETIAP jalur yang ditemukan A*:
+      1. episode jauh lolos mask, SERAH tepat setelah primitif A* terakhir, dan
+         jalurnya (primitif + ekor RS) IDENTIK dengan jalur A*;
+      2. biaya episode = g-cost A* seluruh jalur;
+      3. atau demo ditolak dengan salah satu alasan sah di TOLAK;
+      4. observasi berukuran 47 dan berhingga.
 """
 import argparse
 import heapq
 import math
 import os
 import sys
-import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -50,15 +44,12 @@ if __package__ in (None, ""):
 
 import arena as A                     # noqa: E402
 import forklift_planner as FP         # noqa: E402
-import jejak                          # noqa: E402
 import konfig                         # noqa: E402
 from drl import lingkungan as L       # noqa: E402
 
 konfig.pasang_path_kamera()
 import area_constraint as AC          # noqa: E402
 
-# Bawaan: semua peta di Camera/peta_constraint/ (lihat main).
-PETA_UJI = None
 TOL_JALUR_SEL = 0.01
 TOL_BIAYA = 1e-6
 
@@ -73,13 +64,14 @@ def rencanakan_terekam(planner, omap, awal, tujuan):
 
     g simpul diambil dua cara: untuk ekor RS langsung dari simpulnya (node[5],
     eksak); untuk tiba lewat primitif dari f - h_weight*h saat simpul didorong
-    ke heap (galat pembulatan ~1e-13, jauh di bawah toleransi uji).
+    ke heap, dengan h = _h_cari (heuristik yang dipakai heap; galat pembulatan
+    ~1e-13, jauh di bawah toleransi uji).
     """
     rek = SimpleNamespace(h=0.0, g={0: 0.0}, pop=None, rs=None)
-    h_asli, analitik_asli = planner._h, planner._analytic
+    h_asli, analitik_asli = planner._h_cari, planner._analytic
 
-    def h(x, y, gx, gy):
-        rek.h = h_asli(x, y, gx, gy)
+    def h(x, y, yaw, goal):
+        rek.h = h_asli(x, y, yaw, goal)
         return rek.h
 
     def analitik(omap_, node, goal):
@@ -97,13 +89,13 @@ def rencanakan_terekam(planner, omap, awal, tujuan):
         rek.pop = item[1]
         return item
 
-    planner._h, planner._analytic = h, analitik
+    planner._h_cari, planner._analytic = h, analitik
     FP.heapq = SimpleNamespace(heappush=dorong, heappop=ambil)
     try:
         jalur = planner.plan(omap, awal, tujuan)
     finally:
         FP.heapq = heapq
-        del planner._h, planner._analytic
+        del planner._h_cari, planner._analytic
 
     hasil = SimpleNamespace(biaya=None, n_ekor=0, g_sambung=None, stats=dict(planner.last_stats))
     if jalur:
@@ -117,12 +109,11 @@ def rencanakan_terekam(planner, omap, awal, tujuan):
 
 
 def urai_aksi(planner, jalur, n_ekor):
-    """Jalur A* + ekor Reeds-Shepp -> (aksi model jauh, segmen ekor RS).
+    """Jalur A* + ekor Reeds-Shepp -> (aksi model jauh, pose ekor RS).
 
-    Bagian A* diurai PERSIS menjadi primitif model jauh (satu kelompok n_sub
-    pose = satu primitif). Ekor RS dikembalikan sebagai daftar segmen
-    (segmen_ekor_rs) - aksi model dekatnya dipilih pisah_demo dengan
-    demonstrator di pose serah. ValueError bila strukturnya tak terduga.
+    Bagian A* diurai PERSIS menjadi primitif (satu kelompok n_sub pose = satu
+    primitif). Ekor RS dikembalikan apa adanya, untuk dibandingkan dengan
+    tembakan RS lingkungan. ValueError bila strukturnya tak terduga.
     """
     n = planner.n_sub
     tubuh = jalur[1:len(jalur) - n_ekor]
@@ -136,53 +127,18 @@ def urai_aksi(planner, jalur, n_ekor):
         if any(p[3] != arah for p in kel):
             raise ValueError(f"arah berubah di dalam primitif ke-{i // n}")
         kappa = (kel[-1][2] - yaw) / (arah * planner.step)
-        a = L.aksi_dari(planner, arah, kappa, jenis="jauh")
-        if abs(L.arah_kappa(planner, a, "jauh")[1] - kappa) > 1e-6 * planner.kappa_max + 1e-12:
+        a = L.aksi_dari(planner, arah, kappa)
+        if abs(L.arah_kappa(planner, a)[1] - kappa) > 1e-6 * planner.kappa_max + 1e-12:
             raise ValueError(f"kappa {kappa:.6g} bukan tingkat kemudi perencana")
         aksi.append(a)
         yaw = kel[-1][2]
-    ekor = []
-    if n_ekor:
-        awal_ekor = jalur[len(jalur) - n_ekor - 1]
-        ekor = segmen_ekor_rs(planner, awal_ekor, jalur[len(jalur) - n_ekor:])
+    ekor = list(jalur[len(jalur) - n_ekor:]) if n_ekor else []
     return aksi, ekor
 
 
-def segmen_ekor_rs(planner, awal, ekor):
-    """Pose ekor RS (sample_rs_path) -> daftar segmen (jenis 'S'/'L'/'R', arah, panjang sel).
-
-    sample_rs_path membagi tiap segmen menjadi sub-langkah sama panjang, jadi
-    segmen bisa dibaca kembali dari perubahan yaw per sub-langkah: nol =
-    lurus, selain itu busur dengan kelengkungan planner.kappa_max (Reeds-Shepp
-    selalu memakai radius rencana). Segmen lurus pendekatan yang ditempel ke
-    ujung RS ikut terbaca sebagai segmen 'S' biasa.
-    """
-    seg = []
-    px, py, pyaw = awal[0], awal[1], awal[2]
-    for x, y, yaw, d in ekor:
-        dyaw = FP.wrap_angle(yaw - pyaw)
-        if abs(dyaw) < 1e-9:
-            jenis, panjang = "S", math.hypot(x - px, y - py)
-        else:
-            jenis = "L" if dyaw * d > 0 else "R"
-            panjang = abs(dyaw) / planner.kappa_max
-        if seg and seg[-1][0] == jenis and seg[-1][1] == d:
-            seg[-1][2] += panjang
-        else:
-            seg.append([jenis, d, panjang])
-        px, py, pyaw = x, y, yaw
-    return [tuple(s) for s in seg]
-
-
-def putar_ulang(env, awal, tujuan, aksi, omap=None, d0=0, k0=0.0):
-    """Mainkan aksi di lingkungan. Kembalian (episode dict, pesan galat atau None).
-
-    Episode boleh SELESAI SUKSES sebelum aksi habis: lingkungan jauh berhenti
-    di titik serah (sisa aksinya milik model dekat), dan ekor RS yang diurai
-    bisa masuk toleransi tujuan satu-dua aksi pendek sebelum ujungnya. Sisa
-    aksinya dibuang - yang disimpan adalah yang benar-benar dimainkan.
-    """
-    obs, info = env.reset(awal, tujuan, omap, d0=d0, k0=k0)
+def putar_ulang(env, awal, tujuan, aksi, omap=None):
+    """Mainkan aksi di lingkungan. Kembalian (episode dict, pesan galat atau None)."""
+    obs, info = env.reset(awal, tujuan, omap)
     if obs is None:
         return None, f"reset ditolak: {info['alasan']}"
     ep = {"obs": [obs], "aksi": [], "reward": [], "mask": [env.mask()], "selesai": []}
@@ -196,85 +152,51 @@ def putar_ulang(env, awal, tujuan, aksi, omap=None, d0=0, k0=0.0):
         ep["mask"].append(env.mask() if not selesai else np.zeros(env.n_aksi, bool))
         ep["selesai"].append(selesai)
         if selesai and i != len(aksi) - 1:
-            if env.sukses:
-                break
             return None, f"episode berakhir di aksi ke-{i} dari {len(aksi)} ({info['alasan']})"
     if not env.sukses:
-        return None, "aksi habis tanpa tiba di tujuan"
+        return None, "aksi habis tanpa serah"
     return {k: np.asarray(v) for k, v in ep.items()}, None
 
 
-# Kode alasan demo ditolak (pisah_demo -> "tolak"). Semua SAH, bukan galat:
+# Kode alasan demo ditolak (demo_jauh -> "tolak"). Semua SAH, bukan galat:
 TOLAK = {
     "jauh_margin": "bagian A* menyentuh margin (peta dengan robot lain)",
     "belum_bebas": "RS mulai sebelum peta Dijkstra bebas (RS memutari rintangan)",
-    "tanpa_rs": "A* tiba tanpa ekor RS - tidak ada bagian model dekat",
+    "tanpa_rs": "A* tiba tanpa ekor RS - tidak ada titik serah",
+    "rs_di_awal": "A* langsung menembak RS dari pose awal - tidak ada langkah model jauh",
 }
 
 
-def pisah_demo(e_jauh, e_dekat, awal, tujuan, aksi_jauh, ekor, omap=None):
-    """Satu demo A* + RS -> episode model jauh dan episode model dekat.
+def demo_jauh(env, awal, tujuan, aksi_jauh, ekor, omap=None):
+    """Satu demo A* + RS -> episode model jauh.
 
-    Model jauh memainkan primitif A*; lingkungannya (cek_serah bawaan =
-    tembakan RS bebas) harus SERAH tepat setelah primitif terakhir - titik
-    yang sama dengan saat Hybrid A* beralih ke RS. Model dekat (versi 6)
-    memainkan SATU aksi: kata RS pilihan demonstrator di pose itu, dengan arah
-    dan kelengkungan yang sedang berjalan. Kurvanya harus identik dengan ekor
-    A* (ekor: segmen_ekor_rs). Start yang sudah boleh serah: hanya episode dekat.
+    Model jauh memainkan primitif A*; lingkungannya harus SERAH tepat setelah
+    primitif terakhir - titik yang sama dengan saat Hybrid A* beralih ke RS -
+    dengan tembakan RS yang identik dengan ekor A*.
 
-    Kembalian dict: jauh / dekat (episode atau None), tolak (kode TOLAK atau
-    None), galat (pesan galat struktur atau None), serah (x, y, yaw, d, k) atau
-    None, obs_serah & mask_serah (observasi/mask model dekat di pose serah, untuk
-    nilai akhir model jauh saat latih).
+    Kembalian dict: ep (episode atau None), tolak (kode TOLAK atau None),
+    galat (pesan galat struktur atau None).
     """
-    h = {"jauh": None, "dekat": None, "tolak": None, "galat": None, "serah": None,
-         "obs_serah": None, "mask_serah": None}
+    h = {"ep": None, "tolak": None, "galat": None}
     if not ekor:
         h["tolak"] = "tanpa_rs"
         return h
-    obs, info = e_jauh.reset(awal, tujuan, omap)
-    if obs is None and info["alasan"] == "sudah di radius dekat":
-        if aksi_jauh:
-            h["galat"] = "serah di pose awal, padahal demo masih punya primitif A*"
-            return h
-        mulai, d0, k0 = awal, 0, 0.0
-    else:
-        ep, galat = putar_ulang(e_jauh, awal, tujuan, aksi_jauh, omap)
-        if galat:
-            if galat_margin(galat):
-                h["tolak"] = "jauh_margin"
-            elif galat.startswith("aksi habis tanpa tiba"):
-                h["tolak"] = "belum_bebas"
-            else:
-                h["galat"] = f"jauh: {galat}"
-            return h
-        if len(ep["aksi"]) != len(aksi_jauh):
-            h["galat"] = (f"jauh serah setelah {len(ep['aksi'])} dari {len(aksi_jauh)} primitif - "
-                          f"lebih awal dari demonstrator")
-            return h
-        h["jauh"] = ep
-        mulai = (e_jauh.x, e_jauh.y, e_jauh.yaw)
-        d0, k0 = e_jauh.d, e_jauh.k
-        h["serah"] = (*mulai, d0, k0)
-    obs, info = e_dekat.reset(mulai, tujuan, omap, d0=d0, k0=k0)
-    if obs is None:
-        h["galat"] = f"dekat: reset ditolak ({info['alasan']})"
+    if not aksi_jauh:
+        h["tolak"] = "rs_di_awal"
         return h
-    h["obs_serah"], h["mask_serah"] = obs, e_dekat.mask()
-    a = e_dekat.aksi_demonstrator()
-    if a is None:
-        h["galat"] = "dekat: tidak ada kata RS bebas di pose serah, padahal A* memakai RS di sana"
-        return h
-    ep, galat = putar_ulang(e_dekat, mulai, tujuan, [a], omap, d0=d0, k0=k0)
+    ep, galat = putar_ulang(env, awal, tujuan, aksi_jauh, omap)
     if galat:
-        h["galat"] = f"dekat: {galat}"
+        if galat_margin(galat):
+            h["tolak"] = "jauh_margin"
+        elif galat.startswith("aksi habis tanpa serah"):
+            h["tolak"] = "belum_bebas"
+        else:
+            h["galat"] = galat
         return h
-    kurva = segmen_ekor_rs(e_dekat.planner, mulai, e_dekat.jalur()[1:])
-    if len(kurva) != len(ekor) or any(p[0] != q[0] or p[1] != q[1] or abs(p[2] - q[2]) > 1e-6
-                                      for p, q in zip(kurva, ekor)):
-        h["galat"] = f"dekat: kata demonstrator {kurva} berbeda dari ekor A* {ekor}"
+    if selisih_jalur(env.ekor_rs, ekor) > TOL_JALUR_SEL:
+        h["galat"] = "tembakan RS lingkungan berbeda dari ekor RS A*"
         return h
-    h["dekat"] = ep
+    h["ep"] = ep
     return h
 
 
@@ -283,39 +205,15 @@ def galat_margin(galat):
     return bool(galat) and galat.startswith("aksi demo ke-")
 
 
-def simpang_ekor(asli, ulang):
-    """Jarak terbesar (sel) dari pose ekor hasil urai ke polyline ekor RS asli."""
-    a = np.asarray(asli, dtype=np.float64)[:, :2]
-    terjauh = 0.0
-    for p in np.asarray(ulang, dtype=np.float64)[:, :2]:
-        ab = a[1:] - a[:-1]
-        t = np.clip(np.einsum("ij,ij->i", p - a[:-1], ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0, 1)
-        terjauh = max(terjauh, float(np.min(np.hypot(*(a[:-1] + t[:, None] * ab - p).T))))
-    return terjauh
-
-
 def selisih_jalur(j1, j2):
     """Selisih terbesar x/y (sel) dan yaw (rad) antara dua jalur, inf bila panjang beda."""
+    j1, j2 = list(j1 or []), list(j2 or [])
     if len(j1) != len(j2):
         return float("inf")
     if not j1:
         return 0.0
     a, b = np.asarray(j1, dtype=np.float64), np.asarray(j2, dtype=np.float64)
     return float(np.max(np.abs(a - b)))
-
-
-def bandingkan_pelacak(arena, env, j_astar, j_ulang, langkah=6):
-    """Umpankan pose yang sama ke pure pursuit pada kedua jalur. True = perintah identik."""
-    t1 = jejak.buat("pursuit", j_astar, env.v, env.omap, arena)
-    t2 = jejak.buat("pursuit", j_ulang, env.v, env.omap, arena)
-    now = 0.0
-    kolom = ("speed", "steer_deg", "dir", "seg", "done", "paused")
-    for p in j_astar[::langkah]:
-        now += konfig.RC_PERIODE_S
-        c1, c2 = t1.update(p[0], p[1], p[2], now), t2.update(p[0], p[1], p[2], now)
-        if any(c1.get(k) != c2.get(k) for k in kolom):
-            return False
-    return True
 
 
 # -------------------------------------------------------------- skenario uji
@@ -343,37 +241,32 @@ def acak_skenario(env, rng, n, peluang_bebas=0.3, jarak_cm=(40.0, 250.0)):
 
 
 def uji(ids, peta, n, seed):
-    """Uji penerimaan dua model: potong tiap demo A* + RS di titik serah.
+    """Uji penerimaan model jauh: putar ulang tiap demo A* + RS di lingkungan.
 
-    Lulus bila untuk setiap jalur A*:
-      1. episode jauh (bila start belum boleh serah) lolos mask, SERAH tepat
-         setelah primitif A* terakhir, dan jalurnya IDENTIK dengan bagian A*;
-      2. episode dekat lolos mask dan TIBA dalam toleransi model dekat;
-      3. atau demo ditolak dengan salah satu alasan sah di TOLAK;
-      4. observasi berukuran n_obs jenisnya (47 / 9) dan berhingga.
+    Lulus bila untuk setiap jalur A*: episode jauh lolos mask, SERAH tepat
+    setelah primitif A* terakhir, jalurnya (termasuk ekor RS) IDENTIK dengan
+    jalur A*, biayanya = g-cost A*, dan observasinya 47 angka berhingga - atau
+    demo ditolak dengan salah satu alasan sah di TOLAK.
     """
-    print(f"[i] uji penerimaan dua model (jauh + dekat): {n} skenario per robot per peta, seed {seed}")
-    print(f"[i] serah: di dalam {konfig.PARAM_RENCANA['analytic_dist']:.0f} cm DAN tidak ada halangan "
-          f"(peta Dijkstra bebas atau < {L.RADIUS_SERAH_PAKSA_CM} cm, lalu tembakan RS bebas); toleransi dekat "
-          f"{L.TOL_DEKAT_CM} cm & {L.TOL_DEKAT_DEG} deg, jalur jauh < {TOL_JALUR_SEL} sel")
+    aturan = konfig.ATURAN_RS["demonstrator"]
+    print(f"[i] uji penerimaan model jauh: {n} skenario per robot per peta, seed {seed}")
+    print(f"[i] demonstrator: w {konfig.PARAM_RENCANA['h_weight']}, h = max(h_RS, h_D), RS di setiap node "
+          f"< {aturan['analytic_dist']:.0f} cm; serah = < {aturan['analytic_dist']:.0f} cm + peta Dijkstra bebas "
+          f"(atau < {L.RADIUS_SERAH_PAKSA_CM} cm) + tembakan RS bebas; toleransi jalur {TOL_JALUR_SEL} sel")
     ringkas = []
     semua_lulus = True
     for rid in ids:
         prof = konfig.profil(rid)
         for nama in peta:
             arena = A.Arena(nama)
-            e_jauh = L.LingkunganRencana(arena, prof, jenis="jauh")
-            e_dekat = L.LingkunganRencana(arena, prof, jenis="dekat", planner=e_jauh.planner)
-            pl = e_jauh.planner
+            env = L.LingkunganRencana(arena, prof)
+            pl = env.planner
             # Bukan hash(nama): hash string diacak per proses, jadi skenarionya
             # tidak akan sama di setiap jalan.
             rng = np.random.default_rng([seed, rid, *nama.encode()])
-            s = SimpleNamespace(n=0, ditemukan=0, lulus=0, maks_jalur=0.0, galat=[],
-                                n_jauh=[], n_dekat=[], segmen=[], hanya_dekat=0,
-                                tolak={}, simpang=[], biaya=[],
-                                galat_akhir=[], arah_akhir=[])
-            cm = arena.panjang_ke_cm(1.0)
-            for awal, tujuan in acak_skenario(e_jauh, rng, n):
+            s = SimpleNamespace(n=0, ditemukan=0, lulus=0, maks_jalur=0.0, maks_biaya=0.0, galat=[],
+                                n_jauh=[], n_rs=[], tolak={})
+            for awal, tujuan in acak_skenario(env, rng, n):
                 s.n += 1
                 jalur, rek = rencanakan_terekam(pl, arena.omap, awal, tujuan)
                 if not jalur:
@@ -384,39 +277,26 @@ def uji(ids, peta, n, seed):
                 except ValueError as e:
                     s.galat.append(f"urai: {e}")
                     continue
-                h = pisah_demo(e_jauh, e_dekat, awal, tujuan, aksi_jauh, ekor)
+                h = demo_jauh(env, awal, tujuan, aksi_jauh, ekor)
                 if h["galat"]:
                     s.galat.append(h["galat"])
                     continue
                 if h["tolak"]:
                     s.tolak[h["tolak"]] = s.tolak.get(h["tolak"], 0) + 1
                     continue
-                dj = 0.0
-                if h["jauh"] is not None:
-                    # Bagian jauh harus IDENTIK dengan bagian primitif A*.
-                    ulang = e_jauh.jalur()
-                    dj = selisih_jalur(jalur[:len(ulang)], ulang)
-                    s.n_jauh.append(len(h["jauh"]["aksi"]))
-                else:
-                    s.hanya_dekat += 1
-                ep = h["dekat"]
-                s.n_dekat.append(len(ep["aksi"]))
-                s.segmen.append(len(segmen_ekor_rs(pl, e_dekat.awal, e_dekat.jalur()[1:])))
-                x, y, yaw = e_dekat.x, e_dekat.y, e_dekat.yaw
-                s.galat_akhir.append(math.hypot(tujuan[0] - x, tujuan[1] - y) * cm)
-                if tujuan[2] is not None:
-                    s.arah_akhir.append(abs(math.degrees(FP.wrap_angle(yaw - tujuan[2]))))
-                s.simpang.append(simpang_ekor(jalur, e_dekat.jalur()) * cm)
-                biaya_dua = (e_jauh.biaya if h["jauh"] is not None else 0.0) + e_dekat.biaya
-                s.biaya.append(biaya_dua / rek.biaya - 1.0)
-                obs_ok = (ep["obs"].shape[1] == L.n_obs("dekat") and np.isfinite(ep["obs"]).all()
-                          and (h["jauh"] is None or (h["jauh"]["obs"].shape[1] == L.n_obs("jauh")
-                                                     and np.isfinite(h["jauh"]["obs"]).all())))
+                ep = h["ep"]
+                dj = selisih_jalur(jalur, env.jalur())
+                db = abs(env.biaya - rek.biaya) / max(1.0, rek.biaya)
+                s.n_jauh.append(len(ep["aksi"]))
+                s.n_rs.append(env.n_titik_rs)
+                obs_ok = ep["obs"].shape[1] == L.N_OBS and np.isfinite(ep["obs"]).all()
                 s.maks_jalur = max(s.maks_jalur, dj)
-                if dj < TOL_JALUR_SEL and obs_ok:
+                s.maks_biaya = max(s.maks_biaya, db)
+                if dj < TOL_JALUR_SEL and db < TOL_BIAYA and obs_ok:
                     s.lulus += 1
                 else:
-                    s.galat.append(f"selisih jalur jauh {dj:.3g}, obs {'ok' if obs_ok else 'RUSAK'}")
+                    s.galat.append(f"selisih jalur {dj:.3g} sel, selisih biaya {db:.3g}, "
+                                   f"obs {'ok' if obs_ok else 'RUSAK'}")
             ok = not s.galat
             semua_lulus &= ok
             ringkas.append((rid, nama, s, ok))
@@ -426,24 +306,18 @@ def uji(ids, peta, n, seed):
                 print(f"        [!] {g}")
 
     print()
-    print("  robot peta       lulus   aksi jauh / dekat (rata)  segmen RS  hanya-dekat  "
-          "maks selisih jalur jauh   galat akhir posisi / arah (rata, maks)   simpang dari A*+RS   biaya vs A*+RS")
+    print("  robot peta       lulus     aksi jauh (rata)  titik RS (rata)  maks selisih jalur   maks selisih biaya")
     for rid, nama, s, ok in ringkas:
-        f = lambda v: (np.mean(v), max(v)) if v else (float("nan"), float("nan"))  # noqa: E731
-        print(f"  ID {rid:02d} {nama:<9} {s.lulus:>3}/{s.ditemukan:<3}   "
-              f"{np.mean(s.n_jauh or [0]):6.1f} / {np.mean(s.n_dekat or [0]):5.1f}           "
-              f"{np.mean(s.segmen or [0]):5.1f}      {s.hanya_dekat:>5}        {s.maks_jalur:10.2e} sel          "
-              f"{f(s.galat_akhir)[0]:4.2f} cm / {f(s.arah_akhir)[0]:4.2f} deg ({f(s.galat_akhir)[1]:4.2f}, "
-              f"{f(s.arah_akhir)[1]:4.2f})          {f(s.simpang)[0]:4.2f} / {f(s.simpang)[1]:4.2f} cm   "
-              f"{100 * f(s.biaya)[0]:+5.1f}%")
+        print(f"  ID {rid:02d} {nama:<9} {s.lulus:>3}/{s.ditemukan:<3}   {np.mean(s.n_jauh or [0]):10.1f}"
+              f"   {np.mean(s.n_rs or [0]):12.1f}   {s.maks_jalur:14.2e} sel   {s.maks_biaya:12.2e}")
     print()
     print("[OK] SEMUA LULUS" if semua_lulus else "[!] ADA YANG GAGAL - lihat di atas")
     return semua_lulus
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Adaptor demonstrasi Hybrid A* -> DQfD")
-    ap.add_argument("--uji", action="store_true", help="jalankan uji penerimaan tahap 1-2")
+    ap = argparse.ArgumentParser(description="Adaptor demonstrasi Hybrid A* -> model jauh DQfD")
+    ap.add_argument("--uji", action="store_true", help="jalankan uji penerimaan")
     ap.add_argument("--id", default="1,2", help="robot, mis. 1 atau 1,2")
     ap.add_argument("--peta", default=None,
                     help="dipisah koma; bawaan semua peta di Camera/peta_constraint/")

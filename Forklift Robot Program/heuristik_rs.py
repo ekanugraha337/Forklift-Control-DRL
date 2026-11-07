@@ -6,9 +6,10 @@ Dolgov dkk. (2010) memakai DUA heuristik dan mengambil maksimumnya:
      Memperhitungkan arah hadap dan radius belok, mengabaikan rintangan.
   2. holonomik dengan rintangan: jarak Dijkstra 2D yang memutari rintangan
      (HybridAStarPlanner._holonomic_heuristic).
-Program sampai ver-1-5 hanya memakai yang kedua. Modul ini menambahkan yang
-pertama sebagai TABEL (lookup table), dihitung sekali per profil kemudi,
-supaya satu pembacaan cukup beberapa mikrodetik.
+Semua Hybrid A* di program ini (pembanding `astar` dan demonstrator DQfD)
+memakai keduanya: h = max(h_RS, h_D). Modul ini menyediakan h_RS sebagai TABEL
+(lookup table), dihitung sekali per profil kemudi, supaya satu pembacaan cukup
+beberapa mikrodetik.
 
 Isi tabel = biaya Eq. (2) jalur RS termurah (rumus _rs_cost Hybrid A*: maju 1x,
 mundur reverse_cost x, ganti arah, kelengkungan, ganti kelengkungan; TANPA

@@ -142,7 +142,7 @@ ROBOT = {
     # antar-uji. Dipilih 55,0: sudut terbesar yang masih konsisten; rencana
     # (x PLAN_STEER_RATIO) ~41 deg, yang tertinggal < 1 deg. R_MIN 15,8 cm,
     # R_PLAN 25,7 cm (pada 35: 32,1 / 45,6). ID 01 juga 55,0 (lihat di atas).
-    # Model DQfD model_dqn/id02.pt HARUS dilatih ulang setiap nilai ini berubah
+    # Model DQfD model_dqn/id02_jauh.pt HARUS dilatih ulang setiap nilai ini berubah
     # (kelengkungan aksinya diturunkan dari sini); perencana_dqfd menolak model
     # yang profilnya tidak cocok.
     2: dict(tag=2, steer_center=96.15, cm_per_step=0.002490, accel_sps2=12000.0,
@@ -733,27 +733,27 @@ PARAM_RENCANA = dict(
     steer_change_cost=6.0,
     clearance_pref=6.1,      # 15 px
     clearance_cost=0.8,
-    h_weight=1.3,
+    # f = g + w*h, h = max(h_RS, h_D): biaya Reeds-Shepp tanpa rintangan
+    # (heuristik_rs.py) dan Dijkstra 2D dengan rintangan. w = 2,0 untuk SEMUA
+    # Hybrid A* (pembanding dan demonstrator DQfD) dan untuk pencarian DQfD.
+    h_weight=2.0,
     h_reso=4.9,              # 12 px
     approach_len=32.4,       # 80 px
     goal_pos_tol=3.2,        # 8 px
     goal_yaw_tol_deg=12.0,
-    # Tembakan Reeds-Shepp ke tujuan HANYA dicoba bila titik acuan robot sudah
-    # < analytic_dist dari tujuan (2026-10-20). Semula juga dicoba di setiap
-    # ekspansi ke-4 berapa pun jaraknya (analytic_every=4) dengan batas 101 cm:
-    # di ruang lapang tembakan itu langsung bebas pada ekspansi ke-4, sehingga
-    # Hybrid A* hanya membuat SATU primitif (7,3 cm) dan 93% jalur adalah
-    # Reeds-Shepp. None = percobaan berkala dimatikan (lihat rencana.py).
-    # Diukur (30 rute acak, Kalibrasi, ID 02): porsi Reeds-Shepp 93% -> 52%,
-    # tapi ganti arah per jalur 0,83 -> 1,70 (lapang) dan 1,76 -> 2,33 (dengan
-    # dinding) - A* tiba di batas 60 cm menghadap ke tujuan, bukan searah
-    # tujuan, dan Reeds-Shepp sisanya memutar arah dengan maju-mundur. Batas
-    # 80 / 100 cm: 1,13 / 0,87 ganti arah. 60 dipilih dengan sadar.
-    analytic_every=None,
-    analytic_dist=60.0,
     time_limit=2.0,
     max_expansions=30000,
 )
+# Aturan tembakan Reeds-Shepp per peran Hybrid A* (rencana.buat_perencana):
+#   "astar"         perencana pembanding (--perencana astar): RS dicoba di setiap
+#                   ekspansi ke-4, berapa pun jaraknya ke tujuan.
+#   "demonstrator"  demonstrator model jauh DQfD dan pustaka geraknya: RS dicoba
+#                   di setiap node yang titik acuannya < 60 cm dari tujuan. Batas
+#                   ini juga batas serah model jauh (drl/lingkungan.py).
+ATURAN_RS = {
+    "astar": dict(analytic_every=4, analytic_dist=0.0),
+    "demonstrator": dict(analytic_every=None, analytic_dist=60.0),
+}
 ALLOW_REVERSE = True
 
 # ===========================================================================

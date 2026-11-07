@@ -1,56 +1,39 @@
 """
-latih.py - melatih DQfD per robot: pra-latih dari demo, lalu latihan sendiri.
+latih.py - melatih model jauh DQfD per robot: pra-latih dari demo, lalu latihan sendiri.
 
-    python -m drl.latih --id 1,2 --perangkat cuda               # dekat lalu jauh, ID 01 lalu ID 02
-    python -m drl.latih --id 1 --model dekat --tampil           # satu model, dengan dasbor
-    python -m drl.latih --id 1 --model dekat --pra 5000 --mandiri 0   # cepat, hanya pra-latih
-    python -m drl.visual_neuron --putar model_dqn/id01_dekat    # putar ulang sesudahnya
+    python -m drl.latih --id 1,2 --perangkat cuda               # ID 01 lalu ID 02
+    python -m drl.latih --id 1 --tampil                         # dengan dasbor
+    python -m drl.latih --id 1 --pra 5000 --mandiri 0           # cepat, hanya pra-latih
+    python -m drl.visual_neuron --putar model_dqn/id01_jauh     # putar ulang sesudahnya
 
-DUA MODEL PER ROBOT (versi aksi 6, ver-1-4), lihat lingkungan.py - model jauh
-meniru masukan & keluaran Hybrid A* (47 / 14), model dekat MEMILIH KATA
-Reeds-Shepp (9 masukan RS / 88 = 44 kata x 2 titik sambung; panjang segmen dari
-rumus RS; kata dicek tabrakan berurutan menurut Q). Episode model dekat = satu
-aksi, imbalan = -biaya kurva (bebas) atau -biaya buntu (menabrak):
-    dekat  model_dqn/id0N_dekat.pt - dari demo_dekat (+ demo_dekat_tambahan,
-           + demo_dekat_dagger bila ada). Dilatih LEBIH DULU.
-    jauh   model_dqn/id0N_jauh.pt - dari demo_jauh. Butuh id0N_dekat.pt.
-           Imbalan di pose serah (--nilai-akhir):
-             pendaratan (bawaan) - PENDARATAN SUNGGUHAN model dekat dari pose
-               serah: biaya jalurnya bila berhasil, biaya buntu bila gagal.
-               Demo: episode jauh diputar ulang, lalu model dekat mendarat dari
-               pose akhirnya. Fase B: lingkungan jauh berhenti HANYA di pose
-               tempat model dekat benar-benar bisa mendarat (sama dengan saat
-               pengujian, rencanakan_dua), paling banyak --maks-pendaratan
-               percobaan per episode, lalu gagal.
-             v - perkiraan max_a Q model dekat di pose serah (cara lama;
-               berhenti di pose tembakan RS bebas). Lebih cepat, tapi model
-               dekat versi 4 yang buta rintangan sering terlalu optimis.
-           Jadi model jauh belajar tiba di batas 60 cm di pose yang benar-benar
-           bisa didaratkan.
+ATURAN ver-1-6. Satu model per robot - MODEL JAUH, meniru Hybrid A* (demo dari
+Hybrid A* peran "demonstrator": w = 2,0, h = max(h_RS, h_D), RS di setiap node
+< 60 cm). Episode berakhir SERAH: di dalam 60 cm, peta Dijkstra bebas, dan
+tembakan RS bebas tabrakan; imbalan langkah terakhir sudah memuat biaya
+tembakan RS (drl/lingkungan.py). Tidak ada model dekat.
+
+PyTorch HANYA untuk gradien (dqfd.AgenDQfD.latih_satu). Semua forward -
+rollout latihan sendiri, evaluasi, dasbor - memakai JaringanNumpy (agen.numpy),
+salinan bobot yang disinkronkan dari jaringan online. 32 sinar observasi
+dihitung dengan numba (drl/lingkungan.py).
 
 FASE A - PRA-LATIH: hanya data demo (episode bukan-uji). Jaringan belajar
     meniru demonstrator (J_E) sekaligus memperkirakan biaya-sisa (J_DQ, J_n).
 FASE B - LATIHAN SENDIRI: jaringan merencanakan sendiri (epsilon-greedy di
     antara aksi SAH), hasilnya masuk buffer di samping demo yang tetap ada.
-    Skenario: 70% dari episode demo latih, 30% acak baru (skenario.acak_satu;
-    model dekat: start di cincin 15-60 cm dari tujuan).
+    Skenario: 70% dari episode demo latih, 30% acak baru (skenario.acak_satu).
 
 EVALUASI (tiap --eval-setiap langkah gradien) pada set VALIDASI - 10% episode
-latih yang disisihkan, BUKAN set uji (python -m drl.evaluasi).
-    dekat   tiba (<= 1 cm & 2 deg), rasio biaya vs demo, galat pose akhir,
-            titik balik maju-mundur. Pencarian urutan Q.
-    jauh    rute GABUNGAN jauh + dekat: tiba, gagal jauh / dekat, rasio biaya
-            vs demo A* + RS seluruh rute, titik balik. Metode pencarian
-            --metode-validasi, bawaan = metode operasional (gabungan).
-    skor    tiba - 10 x (p90 rasio - 1), dua-duanya
-Kunci riwayat "tiba_mundur" / "rasio_p90_mundur" tetap bernama begitu (riwayat
-lama), isinya hasil metode validasi.
+latih yang disisihkan, BUKAN set uji (python -m drl.evaluasi):
+    tiba         pencarian operasional (perencana_dqfd.rencanakan_dqfd, --metode-validasi)
+    tiba greedy  rollout argmax-Q saja
+    rasio biaya  vs demo Hybrid A* + RS seluruh rute; ganti arah; galat pose akhir
+    setuju       argmax Q = aksi demo, pada transisi validasi
+    negatif      skenario tanpa jalur menurut A*: DQfD harus ikut buntu
+    skor         tiba - 10 x (p90 rasio - 1)
 
-KELUARAN model_dqn/id0N_<jenis>/: ckpt_<langkah>.pt tiap evaluasi, riwayat.json;
-model_dqn/id0N_<jenis>.pt = checkpoint SKOR TERBAIK, id0N_<jenis>_akhir.pt = terakhir.
-
-Riwayat: putaran 2 (2026-09-30) menetapkan validasi + model terbaik, mode
-mundur, fase B yang lebih stabil, pra-latih 20k dan latihan sendiri 150k.
+KELUARAN model_dqn/id0N_jauh/: ckpt_<langkah>.pt tiap evaluasi, riwayat.json;
+model_dqn/id0N_jauh.pt = checkpoint SKOR TERBAIK, id0N_jauh_akhir.pt = terakhir.
 Peta tidak ditulis mati: jenis peta dibaca dari dataset, PETA TERSULIT = jenis
 peta asli dengan waktu A* rata-rata terbesar (--porsi-sulit, validasi terbanyak).
 """
@@ -72,10 +55,9 @@ import konfig                                   # noqa: E402
 from drl import lingkungan as L                 # noqa: E402
 from drl import rollout as RO                   # noqa: E402
 from drl import skenario as S                   # noqa: E402
-from drl.dqfd import AgenDQfD, Buffer, meta_model, muat_jaringan, periksa_profil  # noqa: E402
-from drl.jaringan import SKALA_REWARD, bermask  # noqa: E402
-from drl.perencana_dqfd import (BATAS_DEKAT_S, MAKS_SERAH, METODE_BAWAAN, buat_cek_pendaratan,  # noqa: E402
-                                jalur_model, mutu_jalur, rencanakan, rencanakan_dua)
+from drl.dqfd import AgenDQfD, Buffer, meta_model, muat_checkpoint, periksa_profil  # noqa: E402
+from drl.jaringan_numpy import SKALA_REWARD, bermask  # noqa: E402
+from drl.perencana_dqfd import METODE_BAWAAN, jalur_model, mutu_jalur, rencanakan_dqfd  # noqa: E402
 from drl.visual_neuron import Dasbor            # noqa: E402
 
 AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -97,7 +79,6 @@ def jenis_peta(d):
     jenis = np.array([_jenis(p) for p in d["ep_peta"]])
     semua = sorted(set(jenis))
     asli = [j for j in semua if j != "sintetis"] or semua
-    # nanmean: episode DAgger tidak punya waktu A* (NaN)
     w = {j: d["ep_waktu_astar"][jenis == j] for j in asli}
     sulit = max(asli, key=lambda j: float(np.nanmean(w[j])) if np.isfinite(w[j]).any() else -1.0)
     porsi = {j: float(np.mean(jenis == j)) for j in semua}
@@ -150,163 +131,59 @@ def _rata(x):
     return float(np.mean(x)) if x else float("nan")
 
 
-# ------------------------------------------------------------ model dekat -> jauh
-def nilai_akhir(net_dekat, obs, mask, biaya_buntu):
-    """Biaya mendarat menurut model dekat (sel) dari observasi/mask model dekat di pose serah.
-
-    = -max_a Q x skala, dipotong >= 0. Mask kosong (model dekat tidak punya aksi
-    sah di pose itu): biaya buntu - pose serah itu memang jalan buntu.
-    """
-    obs = torch.as_tensor(np.asarray(obs, np.float32).reshape(-1, L.n_obs("dekat")))
-    mask = torch.as_tensor(np.asarray(mask, bool).reshape(len(obs), -1))
-    with torch.no_grad():
-        q = bermask(net_dekat(obs), mask).max(1).values.numpy()
-    biaya = np.maximum(0.0, -q * SKALA_REWARD)
-    return np.where(mask.numpy().any(1), biaya, biaya_buntu)
-
-
-def buat_nilai_serah(net_dekat):
-    """nilai_serah untuk lingkungan jauh saat latihan sendiri: model dekat di pose serah."""
-    cache = {}
-
-    def nilai(env):
-        kunci = id(env)
-        if kunci not in cache:
-            cache[kunci] = L.LingkunganRencana(env.arena, env.p, margin_cm=env.margin_cm,
-                                               planner=env.planner, jenis="dekat")
-        ed = cache[kunci]
-        obs, info = ed.reset((env.x, env.y, env.yaw), env.tujuan, env.omap, d0=env.d, k0=env.k)
-        if obs is None:
-            return 0.0 if info["alasan"] == "sudah di tujuan" else env.biaya_buntu
-        return float(nilai_akhir(net_dekat, obs, ed.mask(), env.biaya_buntu)[0])
-
-    return nilai
-
-
-def nilai_akhir_pendaratan(d, episode, ulang, cek, nilai, cadangan):
-    """Imbalan akhir demo jauh dari pendaratan sungguhan model dekat (sel).
-
-    Tiap episode diputar ulang di lingkungan demonstrator (ulang: PabrikEnv
-    jauh tanpa cek_serah - berhenti di pose tembakan RS bebas, persis akhir
-    demo), lalu model dekat mendarat dari pose itu: biaya jalurnya bila
-    berhasil, biaya buntu bila gagal. Episode yang tidak bisa diputar ulang
-    memakai cadangan[e]. Kembalian (larik per episode dataset, n berhasil, n dicoba).
-    """
-    akhir = np.array(cadangan, dtype=np.float64)
-    n_ok = n = 0
-    t0 = time.time()
-    for i, e in enumerate(episode):
-        sk = RO.dari_demo(d, int(e))
-        env, obs, _ = ulang.buat(sk)
-        if obs is None:
-            continue
-        for a in sk.aksi_demo:
-            if env.selesai:
-                break
-            env.step(int(a))
-        if not env.sukses:
-            continue
-        n += 1
-        if cek(env):
-            n_ok += 1
-            akhir[e] = nilai(env)
-        else:
-            akhir[e] = env.biaya_buntu
-        if (i + 1) % 500 == 0:
-            print(f"    pendaratan demo {i + 1}/{len(episode)}: berhasil {100.0 * n_ok / max(1, n):.1f}% "
-                  f"({time.time() - t0:.0f} s)", flush=True)
-    return akhir, n_ok, n
-
-
-def bobot_awal(agen, jalur, jenis, prof, device):
-    """Mulai latihan dari checkpoint lain berjenis sama (--awal).
-
-    Bila checkpoint itu punya masukan LEBIH SEDIKIT - satu-satunya yang dikenal:
-    model dekat versi 4, 9 masukan = indeks 0-8 versi 5 (identik, diperiksa di
-    dataset) - bobot FC1-nya disalin ke kolom pertama, dan kolom masukan baru
-    (sinar & ruang manuver) diberi bobot NOL. Di awal latihan jaringan menghitung
-    Q persis seperti model lama; masukan baru baru dipakai sejauh menurunkan loss.
-    Model terbaik dipilih dari validasi, termasuk evaluasi "awal" di langkah 0,
-    jadi hasil latihan tidak bisa lebih buruk dari model lama di set validasi.
-    """
+def bobot_awal(agen, jalur, prof):
+    """Mulai latihan dari checkpoint model jauh lain (--awal / --transfer). Kembalian: langkahnya."""
     if not os.path.exists(jalur):
-        raise SystemExit(f"[!] --awal: {jalur} tidak ada")
-    ck = torch.load(jalur, map_location=device, weights_only=False)
-    if ck.get("jenis") != jenis or ck.get("n_aksi") != L.n_aksi(jenis):
-        raise SystemExit(f"[!] --awal: {jalur} adalah model '{ck.get('jenis')}' dengan {ck.get('n_aksi')} aksi, "
-                         f"bukan model {jenis} dengan {L.n_aksi(jenis)} aksi")
+        raise SystemExit(f"[!] bobot awal: {jalur} tidak ada")
+    ck = muat_checkpoint(jalur, agen.device)
     periksa_profil(ck, prof, jalur)
-    lama, baru = ck["n_obs"], L.n_obs(jenis)
-    sd = {k: v.clone() for k, v in ck["net"].items()}
-    if lama != baru:
-        if not (jenis == "dekat" and lama == 9 and baru > lama):
-            raise SystemExit(f"[!] --awal: {jalur} punya {lama} masukan, program {baru}; pemetaan masukannya "
-                             f"tidak dikenal (hanya model dekat 9 masukan RS -> lebih banyak)")
-        w = sd["fc1.weight"]
-        sd["fc1.weight"] = torch.cat([w, torch.zeros((w.shape[0], baru - lama), dtype=w.dtype, device=w.device)], 1)
-    agen.net.load_state_dict(sd)
-    agen.target.load_state_dict(sd)
-    agen.sinkron_cpu()
-    return lama, baru, ck.get("langkah")
+    agen.muat_bobot(ck["net"])
+    return ck.get("langkah")
 
 
 # ------------------------------------------------------------ evaluasi
 class Evaluator:
-    """Evaluasi pada himpunan episode yang diberikan (validasi saat latih).
+    """Evaluasi pada himpunan episode yang diberikan (validasi saat latih). Forward: JaringanNumpy."""
 
-    jenis 'dekat': pendaratan model dekat sendirian dari pose awal episode dekat.
-    jenis 'jauh': rute GABUNGAN - model jauh (yang dinilai) + net_dekat,
-    pencarian `metode` (rencanakan_dua).
-    """
-
-    def __init__(self, d, neg, pabrik, episode, n_negatif, jenis, net_dekat=None, anggaran=600,
-                 metode=METODE_BAWAAN):
+    def __init__(self, d, neg, pabrik, episode, n_negatif, metode=METODE_BAWAAN):
         self.pabrik = pabrik
         self.metode = metode
-        self.anggaran = anggaran
-        self.jenis_model = jenis
-        self.net_dekat = net_dekat
         self.jenis, self.sulit, _ = jenis_peta(d)
         self.sk = [RO.dari_demo(d, e) for e in pilih_per_jenis(d, episode, jumlah_validasi(d))]
         idx = np.concatenate([np.arange(d["ep_mulai"][e], d["ep_mulai"][e] + d["ep_langkah"][e])
                               for e in episode])
-        self.obs_uji = torch.as_tensor(d["obs"][idx])
-        self.mask_uji = torch.as_tensor(d["mask"][idx])
-        self.aksi_uji = torch.as_tensor(d["aksi"][idx].astype(np.int64))
+        self.obs_uji = d["obs"][idx]
+        self.mask_uji = d["mask"][idx]
+        self.aksi_uji = d["aksi"][idx].astype(np.int64)
         self.neg = []
-        if neg is not None and jenis == "jauh":
+        if neg is not None:
             ok = np.flatnonzero(neg["alasan"] == "tidak ada jalur")
             jn = np.array([_jenis(p) for p in neg["peta"]])
             for j in self.jenis:
                 self.neg += [RO.dari_negatif(neg, i) for i in ok[jn[ok] == j][:max(1, n_negatif // 4)]]
-        # Pembanding: titik balik demo di jalur jenis ini. Diputar ulang di
-        # lingkungan demonstrator (tanpa cek_serah model dekat).
-        ulang = RO.PabrikEnv(pabrik.p, jenis)
+        # Pembanding: titik balik jalur demo (primitif A* + ekor RS) di rute validasi.
         self.balik_demo = {}
         for sk in self.sk:
-            env, obs, _ = ulang.buat(sk)
+            env, obs, _ = pabrik.buat(sk)
             if obs is None:
                 continue
             for a in sk.aksi_demo:
+                if env.selesai:
+                    break
                 env.step(int(a))
-            self.balik_demo[sk.nama] = mutu_jalur(env.jalur(), env.tujuan, env.radius_serah, 1.0)["ganti_arah"]
-        sulit = [s for s in self.sk if _jenis(s.peta) == self.sulit][:8]
-        self.sk_waktu = sulit
-
-    def _lingkungan(self, sk, jenis):
-        return L.LingkunganRencana(self.pabrik.arena(sk.peta), self.pabrik.p, margin_cm=sk.margin,
-                                   jenis=jenis)
+            if env.sukses:
+                self.balik_demo[sk.nama] = mutu_jalur(env.jalur(), env.tujuan, env.radius_serah, 1.0)["ganti_arah"]
+        self.sk_waktu = [s for s in self.sk if _jenis(s.peta) == self.sulit][:8]
 
     def __call__(self, net):
-        with torch.no_grad():
-            q = bermask(net(self.obs_uji), self.mask_uji)
-            setuju = float((q.argmax(1) == self.aksi_uji).float().mean()) * 100
+        q = bermask(net.q_batch(self.obs_uji), self.mask_uji)
+        setuju = float((q.argmax(1) == self.aksi_uji).mean()) * 100
         h = self._jalankan(net, self.sk)
         tiba_greedy = 100.0 * sum(x["sukses"] for x in h) / max(1, len(h))
         hn = self._jalankan(net, self.neg) if self.neg else []
         t0 = time.perf_counter()
         for s in self.sk_waktu:
-            self._jalankan(net, [s], n_slot=1)
+            self._satu(net, s)
         ms = (time.perf_counter() - t0) / max(1, len(self.sk_waktu)) * 1000
 
         hm = [self._satu(net, sk) for sk in self.sk]
@@ -316,45 +193,26 @@ class Evaluator:
         p90 = _p(rasio, 90)
         per_jenis = {j: 100.0 * sum(x["sukses"] for x in hm if _jenis(x["sk"].peta) == j)
                      / max(1, sum(_jenis(x["sk"].peta) == j for x in hm)) for j in self.jenis}
-        ev = {
-            "tiba_mundur": tiba, "rasio_p90_mundur": p90, "rasio_median_mundur": _p(rasio, 50),
+        return {
+            "tiba": tiba, "tiba_greedy": tiba_greedy, "rasio_p90": p90, "rasio_median": _p(rasio, 50),
             "skor": tiba - BOBOT_P90 * (p90 - 1.0) if rasio else -1e9,
-            "setuju": setuju, "tiba": tiba_greedy, "ms_dqfd": ms, "tiba_per_jenis": per_jenis,
+            "setuju": setuju, "ms_dqfd": ms, "tiba_per_jenis": per_jenis,
             "balik": _rata([x["ganti_arah"] for x in ok]),
             "balik_demo": _rata([self.balik_demo.get(x["sk"].nama) for x in ok]),
             "galat_posisi_cm": _rata([x["galat_posisi_cm"] for x in ok]),
             "galat_arah_deg": _rata([x["galat_arah_deg"] for x in ok]),
-            "galat_arah_p90": _p([x["galat_arah_deg"] for x in ok if x["galat_arah_deg"] is not None], 90),
+            "neg_buntu": 100.0 * sum(not x["sukses"] for x in hn) / max(1, len(hn)),
         }
-        if self.jenis_model == "jauh":
-            ev.update(
-                gagal_jauh=100.0 * sum(x.get("fase") == "gagal_jauh" for x in hm) / max(1, len(hm)),
-                gagal_dekat=100.0 * sum(x.get("fase") == "gagal_dekat" for x in hm) / max(1, len(hm)),
-                balik_dekat=_rata([x["ganti_arah_dekat"] for x in ok]),
-                neg_buntu=100.0 * sum(not x["sukses"] for x in hn) / max(1, len(hn)))
-        return ev
 
     def _satu(self, net, sk):
-        """Perencana operasional (mundur saat buntu) satu skenario."""
-        cm = self.pabrik.arena(sk.peta).panjang_ke_cm(1.0)
-        om = self.pabrik.omap(sk)
-        if self.jenis_model == "dekat":
-            env = self._lingkungan(sk, "dekat")
-            obs, _ = env.reset(sk.awal, sk.tujuan, om, d0=sk.d0, k0=sk.k0)
-            if obs is None:
-                return {"sk": sk, "sukses": False}
-            r = rencanakan(net, env, mundur=True, anggaran=self.anggaran)
-            if not r["sukses"]:
-                return {"sk": sk, "sukses": False}
-            return {"sk": sk, "sukses": True, "rasio": env.biaya / sk.biaya_astar if sk.biaya_astar else None,
-                    **mutu_jalur(env.jalur(), sk.tujuan, env.radius_serah, cm)}
-        ej, ed = self._lingkungan(sk, "jauh"), self._lingkungan(sk, "dekat")
-        r = rencanakan_dua(net, self.net_dekat, ej, ed, sk.awal, sk.tujuan, om, metode=self.metode)
-        if not r["sukses"] or not r["jalur"]:
-            return {"sk": sk, "sukses": False, "fase": r["fase"]}
-        acuan = sk.biaya_astar_total or None
-        return {"sk": sk, "sukses": True, "fase": "tiba", "rasio": r["biaya"] / acuan if acuan else None,
-                **mutu_jalur(r["jalur"], sk.tujuan, ej.radius_serah, cm)}
+        """Perencana operasional (model jauh + tembakan RS, metode validasi) satu skenario."""
+        arena = self.pabrik.arena(sk.peta)
+        env = self.pabrik.lingkungan(sk)
+        h = rencanakan_dqfd(net, env, sk.awal, sk.tujuan, self.pabrik.omap(sk), metode=self.metode)
+        if not h["sukses"] or not h["jalur"]:
+            return {"sk": sk, "sukses": False, "alasan": h["alasan"]}
+        return {"sk": sk, "sukses": True, "rasio": h["biaya"] / sk.biaya_astar if sk.biaya_astar else None,
+                **mutu_jalur(h["jalur"], sk.tujuan, env.radius_serah, arena.panjang_ke_cm(1.0))}
 
     def _jalankan(self, net, daftar, n_slot=32):
         k = RO.KumpulanRollout(self.pabrik, n_slot)
@@ -379,101 +237,62 @@ class Evaluator:
         return hasil
 
 
-def baris_eval(jenis, ev):
-    if jenis == "dekat":
-        return (f"setuju {ev['setuju']:5.1f}%  tiba greedy {ev['tiba']:5.1f}% / mundur {ev['tiba_mundur']:5.1f}%  "
-                f"rasio p90 {ev['rasio_p90_mundur']:.2f}  galat akhir {ev['galat_posisi_cm']:.2f} cm / "
-                f"{ev['galat_arah_deg']:.2f} deg  balik {ev['balik']:.2f} (demo {ev['balik_demo']:.2f})  "
-                f"skor {ev['skor']:6.1f}")
-    return (f"setuju {ev['setuju']:5.1f}%  serah greedy {ev['tiba']:5.1f}%  TIBA gabungan {ev['tiba_mundur']:5.1f}%  "
-            f"gagal jauh/dekat {ev['gagal_jauh']:4.1f}/{ev['gagal_dekat']:4.1f}%  rasio p90 {ev['rasio_p90_mundur']:.2f}  "
-            f"balik {ev['balik']:.2f} (<60cm {ev['balik_dekat']:.2f})  galat akhir {ev['galat_posisi_cm']:.2f} cm / "
-            f"{ev['galat_arah_deg']:.2f} deg  skor {ev['skor']:6.1f}")
+def baris_eval(ev):
+    return (f"setuju {ev['setuju']:5.1f}%  tiba greedy {ev['tiba_greedy']:5.1f}%  TIBA {ev['tiba']:5.1f}%  "
+            f"rasio med/p90 {ev['rasio_median']:.2f}/{ev['rasio_p90']:.2f}  balik {ev['balik']:.2f} "
+            f"(demo {ev['balik_demo']:.2f})  galat akhir {ev['galat_posisi_cm']:.2f} cm / "
+            f"{ev['galat_arah_deg']:.2f} deg  negatif buntu {ev['neg_buntu']:.0f}%  skor {ev['skor']:6.1f}")
 
 
 # ------------------------------------------------------------ latih
-def muat_data(args, rid, jenis):
-    berkas = S.berkas_demo(args.data, rid, jenis)
+def muat_data(args, rid):
+    berkas = S.berkas_demo(args.data, rid)
     if not berkas:
-        raise SystemExit(f"[!] Dataset model {jenis} ID {rid:02d} tidak ada di {args.data}.\n"
-                         f"    Bangkitkan dulu: python -m drl.skenario --id {rid} --n 5000"
-                         + (" (lalu --hanya-dekat untuk demo dekat tambahan)" if jenis == "dekat" else ""))
-    d = RO.muat_gabung(berkas)
+        raise SystemExit(f"[!] Dataset model jauh ID {rid:02d} tidak ada di {args.data}.\n"
+                         f"    Bangkitkan dulu: python -m drl.skenario --id {rid} --n 5000")
+    d = RO.muat_npz(berkas[0])
+    if int(d.get("versi_aksi", 0)) != L.VERSI_AKSI:
+        raise SystemExit(f"[!] {berkas[0]} dibuat dengan versi aksi {int(d.get('versi_aksi', 0))}, program "
+                         f"{L.VERSI_AKSI}. Bangkitkan ulang: python -m drl.skenario --id {rid}")
     jalur_neg = os.path.join(args.data, f"negatif_id{rid:02d}.npz")
-    neg = RO.muat_npz(jalur_neg) if jenis == "jauh" and os.path.exists(jalur_neg) else None
-    return d, neg, berkas
+    neg = RO.muat_npz(jalur_neg) if os.path.exists(jalur_neg) else None
+    return d, neg, berkas[0]
 
 
-def latih_model(rid, jenis, args, device):
+def latih_model(rid, args, device):
     prof = konfig.profil(rid)
-    n_aksi = L.n_aksi(jenis)
-    d, neg, berkas = muat_data(args, rid, jenis)
-    nama = f"id{rid:02d}_{jenis}"
+    d, neg, berkas = muat_data(args, rid)
+    nama = f"id{rid:02d}_{L.JENIS}"
     dir_keluar = os.path.join(args.keluar, nama)
     os.makedirs(dir_keluar, exist_ok=True)
     for f in os.listdir(dir_keluar):
         if f.startswith("ckpt_") and f.endswith(".pt"):
             os.remove(os.path.join(dir_keluar, f))
-    rng = np.random.default_rng([args.seed, rid, len(jenis)])
-
-    net_dekat = None
-    if jenis == "jauh":
-        jd = jalur_model(rid, "dekat", args.keluar)
-        if not os.path.exists(jd):
-            raise SystemExit(f"[!] Model jauh butuh model dekat yang sudah dilatih: {jd}\n"
-                             f"    Latih dulu: python -m drl.latih --id {rid} --model dekat")
-        net_dekat, _ = muat_jaringan(jd, jenis="dekat")
-        if args.nilai_akhir == "pendaratan":
-            cek, nilai = buat_cek_pendaratan(net_dekat, args.metode_pendaratan, args.batas_pendaratan,
-                                             args.maks_pendaratan)
-            pabrik = RO.PabrikEnv(prof, "jauh", nilai_serah=nilai, cek_serah=cek)
-        else:
-            pabrik = RO.PabrikEnv(prof, "jauh", nilai_serah=buat_nilai_serah(net_dekat))
-    else:
-        pabrik = RO.PabrikEnv(prof, "dekat", peluang_dekat=1.0)
+    rng = np.random.default_rng([args.seed, rid])
+    pabrik = RO.PabrikEnv(prof)
 
     latih_ep, val_ep = bagi_validasi(d)
     n_demo = int(d["ep_langkah"][latih_ep].sum())
-    buf = Buffer(n_demo + args.kapasitas, device, n_aksi, L.n_obs(jenis))
-    akhir_jauh, info_akhir = None, ""
-    if jenis == "jauh":
-        # Imbalan di pose serah dari model dekat (dataset menyimpan reward TANPA nilai ini).
-        biaya_buntu = pabrik.arena(str(d["ep_peta"][0])).panjang_ke_sel(L.BIAYA_BUNTU_CM)
-        akhir_jauh = nilai_akhir(net_dekat, d["ep_obs_serah"], d["ep_mask_serah"], biaya_buntu)
-        if args.nilai_akhir == "pendaratan":
-            print(f"[i] ID {rid:02d} jauh: model dekat mendarat dari akhir {len(latih_ep)} demo "
-                  f"({args.metode_pendaratan}, maks {args.batas_pendaratan} s) ...", flush=True)
-            t = time.time()
-            akhir_jauh, n_ok, n_coba = nilai_akhir_pendaratan(
-                d, latih_ep, RO.PabrikEnv(prof, "jauh"), cek, nilai, akhir_jauh)
-            info_akhir = (f"pendaratan model dekat berhasil di {n_ok}/{n_coba} pose akhir demo "
-                          f"({100.0 * n_ok / max(1, n_coba):.1f}%, {time.time() - t:.0f} s); gagal = biaya buntu")
+    buf = Buffer(n_demo + args.kapasitas, device)
     for e in latih_ep:
         obs, aksi, rew, mask = RO.episode_demo(d, e)
-        if akhir_jauh is not None:
-            rew = rew.copy()
-            rew[-1] -= akhir_jauh[e] / SKALA_REWARD
         buf.tambah(RO.transisi_episode(obs, aksi, rew, mask, True, args.gamma, args.n), demo=True)
 
-    agen = AgenDQfD(device, n_aksi, L.n_obs(jenis), lr=args.lr, gamma=args.gamma, n=args.n, margin=args.margin,
+    agen = AgenDQfD(device, lr=args.lr, gamma=args.gamma, n=args.n, margin=args.margin,
                     target_setiap=args.target_setiap, seed=args.seed + rid)
     if args.transfer and rid != 1:
-        sumber = jalur_model(1, jenis, args.keluar)
-        ck = torch.load(sumber, map_location=device, weights_only=False)
-        agen.net.load_state_dict(ck["net"])
-        agen.target.load_state_dict(ck["net"])
-        agen.sinkron_cpu()
-        print(f"[i] ID {rid:02d} {jenis}: bobot awal dari {sumber} (transfer)")
+        sumber = jalur_model(1, args.keluar)
+        bobot_awal(agen, sumber, prof)
+        print(f"[i] ID {rid:02d}: bobot awal dari {sumber} (transfer)")
     if args.awal:
-        sumber = jalur_model(rid, jenis, args.awal)
-        lama, baru, langkah = bobot_awal(agen, sumber, jenis, prof, device)
-        print(f"[i] ID {rid:02d} {jenis}: bobot awal dari {sumber} (langkah {langkah}, {lama} masukan"
-              + (f"; {baru - lama} masukan baru berbobot nol)" if baru != lama else ")"))
+        sumber = jalur_model(rid, args.awal)
+        langkah = bobot_awal(agen, sumber, prof)
+        print(f"[i] ID {rid:02d}: bobot awal dari {sumber} (langkah {langkah})")
 
-    evaluator = Evaluator(d, neg, pabrik, val_ep, args.n_negatif, jenis, net_dekat, metode=args.metode_validasi)
+    evaluator = Evaluator(d, neg, pabrik, val_ep, args.n_negatif, metode=args.metode_validasi)
     probe_idx = pilih_probe(d, val_ep)
     das = Dasbor(prof, pabrik, [RO.dari_demo(d, e) for e in probe_idx],
-                 judul=f"DQfD {jenis} ID {rid:02d}", fps=args.fps, tampil=args.tampil)
+                 judul=f"DQfD model jauh ID {rid:02d}", fps=args.fps, tampil=args.tampil)
 
     total = args.pra + int(args.mandiri * args.rasio)
     riw = {"latih": {k: [] for k in ("langkah", "j_dq", "j_n", "j_e", "q", "setuju_batch")},
@@ -482,20 +301,14 @@ def latih_model(rid, jenis, args, device):
     t0 = time.time()
     st = {"fase": "pra-latih (demo)", "target": total, "riwayat": riw["latih"],
           "eval_riwayat": riw["eval"], "batas_fase": riw["batas_fase"]}
-    meta = {"robot": rid, "data_demo": [os.path.basename(b) for b in berkas], "probe": probe_idx,
-            "target": total, "args": vars(args), **meta_model(prof, jenis)}
+    meta = {"robot": rid, "data_demo": os.path.basename(berkas), "probe": probe_idx,
+            "target": total, "args": vars(args), **meta_model(prof)}
     terbaik = {"skor": -float("inf"), "langkah": None}
-    print(f"\n=== ID {rid:02d} model {jenis.upper()} ({L.n_obs(jenis)} masukan, {n_aksi} aksi): "
-          f"{len(latih_ep)} episode demo latih "
-          f"({n_demo} transisi, dari {', '.join(meta['data_demo'])}), validasi {len(val_ep)} episode "
+    print(f"\n=== ID {rid:02d} model jauh ({L.N_OBS} masukan, {L.N_AKSI} aksi): {len(latih_ep)} episode demo latih "
+          f"({n_demo} transisi, dari {meta['data_demo']}), validasi {len(val_ep)} episode "
           f"({len(evaluator.sk)} rute dievaluasi) + {len(evaluator.neg)} negatif, target {total} langkah "
-          f"gradien, perangkat {device}")
+          f"gradien, perangkat {device}, forward numpy")
     print(f"    peta: {', '.join(evaluator.jenis)} | tersulit (waktu A* terbesar): {evaluator.sulit}")
-    if akhir_jauh is not None:
-        print(f"    nilai akhir di pose serah ({args.nilai_akhir}): median {np.median(akhir_jauh[latih_ep]):.0f} sel, "
-              f"p90 {np.percentile(akhir_jauh[latih_ep], 90):.0f}")
-        if info_akhir:
-            print(f"    {info_akhir}")
 
     def catat(m):
         for k in ("j_dq", "j_n", "j_e", "q", "setuju_batch"):
@@ -508,8 +321,7 @@ def latih_model(rid, jenis, args, device):
                 riw["latih"][k].append(ema.get(k, float("nan")))
 
     def evaluasi(fase):
-        agen.sinkron_cpu()
-        ev = evaluator(agen.cpu)
+        ev = evaluator(agen.sinkron_numpy())
         riw["eval"]["langkah"].append(agen.langkah)
         for k, v in ev.items():
             if isinstance(v, (int, float)):
@@ -519,13 +331,13 @@ def latih_model(rid, jenis, args, device):
         tanda = ""
         if ev["skor"] > terbaik["skor"]:
             terbaik.update(skor=ev["skor"], langkah=agen.langkah)
-            agen.simpan(jalur_model(rid, jenis, args.keluar), fase=fase, eval=ev, terbaik=True, **meta)
+            agen.simpan(jalur_model(rid, args.keluar), fase=fase, eval=ev, terbaik=True, **meta)
             tanda = "  <- terbaik"
         st["terbaik"] = dict(terbaik)
         with open(os.path.join(dir_keluar, "riwayat.json"), "w", encoding="utf-8") as f:
             json.dump(riw, f)
         print(f"  [{(time.time() - t0) / 60:5.1f} mnt] {fase:<8} langkah {agen.langkah:>7}  "
-              f"{baris_eval(jenis, ev)}  J_E {ema.get('j_e', 0):.3f}  J_n {ema.get('j_n', 0):.3f}{tanda}",
+              f"{baris_eval(ev)}  J_E {ema.get('j_e', 0):.3f}  J_n {ema.get('j_n', 0):.3f}{tanda}",
               flush=True)
         return ev
 
@@ -534,9 +346,9 @@ def latih_model(rid, jenis, args, device):
         st["langkah"] = agen.langkah
         st["waktu"] = dt
         st["eta"] = dt / max(1, agen.langkah) * (total - agen.langkah)
-        if agen.langkah % 200 == 0:
-            agen.sinkron_cpu()
-        return das.perbarui(agen.cpu, st)
+        if args.tampil and agen.langkah % 200 == 0:
+            agen.sinkron_numpy()
+        return das.perbarui(agen.numpy, st)
 
     berhenti = None
     beta = lambda: 0.6 + 0.4 * min(1.0, agen.langkah / max(1, total))  # noqa: E731
@@ -553,13 +365,12 @@ def latih_model(rid, jenis, args, device):
     if args.mandiri > 0 and not berhenti:
         riw["batas_fase"].append(agen.langkah)
         st["fase"] = "latihan sendiri"
-        # Putaran 1: J_n naik terus sejak fase B, dan % tiba naik lalu turun lagi.
         # Return n-langkah dari data eksplorasi bias (off-policy), jadi bobotnya
         # dikurangi dan langkah belajar diperkecil.
         for g in agen.opt.param_groups:
             g["lr"] = args.lr_mandiri
         agen.lam_n = args.lam_n_mandiri
-        agen.sinkron_cpu()
+        agen.sinkron_numpy()
         _, peta_sulit, porsi_jenis = jenis_peta(d)
         sulit_ep = latih_ep[np.array([_jenis(p) for p in d["ep_peta"][latih_ep]]) == peta_sulit]
         kumpulan = RO.KumpulanRollout(pabrik, args.n_slot)
@@ -583,10 +394,10 @@ def latih_model(rid, jenis, args, device):
                 while kumpulan.slot[i] is None:
                     sk = skenario_baru()
                     if sk is not None:
-                        kumpulan.isi(i, sk)          # tidak sah sejak awal: slot tetap kosong, ambil lagi
+                        kumpulan.isi(i, sk)          # tidak sah / serah di pose awal: ambil lagi
             eps = args.eps_awal + (args.eps_akhir - args.eps_awal) * min(1.0, langkah_env / (0.5 * args.mandiri))
             n_aktif = len(kumpulan.aktif())
-            for _, ep in kumpulan.langkah(agen.cpu, eps, rng):
+            for _, ep in kumpulan.langkah(agen.numpy, eps, rng):
                 buf.tambah(RO.transisi_episode(ep["obs"], ep["aksi"], ep["reward"], ep["mask"],
                                                not ep["terpotong"], args.gamma, args.n))
                 tiba_ema = ep["sukses"] * 100.0 if tiba_ema is None else 0.98 * tiba_ema + 2.0 * ep["sukses"]
@@ -604,7 +415,7 @@ def latih_model(rid, jenis, args, device):
                 utang -= 1.0
                 catat(agen.latih_satu(buf, args.batch, beta(), rng))
                 if agen.langkah % 250 == 0:
-                    agen.sinkron_cpu()
+                    agen.sinkron_numpy()
                 if agen.langkah % args.eval_setiap == 0:
                     evaluasi("mandiri")
                 st["mandiri"], st["eps"] = tiba_ema, eps
@@ -613,16 +424,14 @@ def latih_model(rid, jenis, args, device):
     ev = evaluasi("akhir")
     das.tutup()
     agen.simpan(os.path.join(args.keluar, f"{nama}_akhir.pt"), fase="akhir", eval=ev, **meta)
-    print(f"[OK] ID {rid:02d} model {jenis} selesai dalam {(time.time() - t0) / 60:.1f} menit. Model terbaik "
-          f"(skor {terbaik['skor']:.1f}, langkah {terbaik['langkah']}) -> {jalur_model(rid, jenis, args.keluar)}")
+    print(f"[OK] ID {rid:02d} model jauh selesai dalam {(time.time() - t0) / 60:.1f} menit. Model terbaik "
+          f"(skor {terbaik['skor']:.1f}, langkah {terbaik['langkah']}) -> {jalur_model(rid, args.keluar)}")
     return berhenti
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Latih DQfD per robot (model dekat & jauh)")
+    ap = argparse.ArgumentParser(description="Latih model jauh DQfD per robot")
     ap.add_argument("--id", default="1,2")
-    ap.add_argument("--model", default="dekat,jauh",
-                    help="dekat, jauh, atau dekat,jauh (bawaan). Jauh butuh model dekat yang sudah dilatih")
     ap.add_argument("--tampil", action="store_true", help="tampilkan dasbor")
     ap.add_argument("--pra", type=int, default=20000, help="langkah gradien pra-latih")
     ap.add_argument("--mandiri", type=int, default=150000, help="langkah lingkungan latihan sendiri")
@@ -643,41 +452,17 @@ def main():
     ap.add_argument("--eval-setiap", type=int, default=5000, help="langkah gradien antar-evaluasi")
     ap.add_argument("--n-negatif", type=int, default=16)
     ap.add_argument("--fps", type=float, default=6.0)
-    ap.add_argument("--nilai-akhir", default="pendaratan", choices=["pendaratan", "v"],
-                    help="model jauh: imbalan di pose serah = pendaratan sungguhan model dekat "
-                         "(bawaan) atau perkiraan V model dekat (cara lama)")
-    # 2026-10-23: dengan validasi mundur, model jauh ID 01 yang dilatih lanjut tidak
-    # pernah mengalahkan langkah 0 (skor 85,6), padahal di mode gabungan semua
-    # checkpoint-nya lebih baik (langkah 10000: tiba 99,1 -> 99,4%, biaya p90 1,37
-    # -> 1,17x, waktu p90 175 -> 115 ms, 345 rute validasi). Model dipilih dengan
-    # metode yang dipakai saat operasi.
     ap.add_argument("--metode-validasi", default=METODE_BAWAAN, choices=["mundur", "terbaik", "gabungan"],
-                    help="pencarian rute gabungan saat validasi model jauh (bawaan = metode operasional)")
-    ap.add_argument("--metode-pendaratan", default=METODE_BAWAAN, choices=["mundur", "terbaik", "gabungan"],
-                    help="pencarian model dekat untuk --nilai-akhir pendaratan (bawaan = pengujian)")
-    ap.add_argument("--batas-pendaratan", type=float, default=BATAS_DEKAT_S,
-                    help="detik per percobaan pendaratan (bawaan = pengujian). Mis. --metode-pendaratan "
-                         "mundur --batas-pendaratan 0.3: ~4x lebih cepat, lebih pesimis")
-    ap.add_argument("--maks-pendaratan", type=int, default=MAKS_SERAH,
-                    help="percobaan pendaratan per episode fase B, lalu gagal (pengujian: MAKS_SERAH)")
-    ap.add_argument("--transfer", action="store_true", help="ID 02 mulai dari bobot ID 01 (jenis sama)")
-    ap.add_argument("--awal", default=None,
-                    help="folder berisi id0N_<jenis>.pt untuk bobot awal, mis. model_dqn/arsip_v4_dekat_buta: "
-                         "model dekat versi 4 (9 masukan), masukan rintangan baru mulai berbobot nol")
+                    help="pencarian rute saat validasi (bawaan = metode operasional)")
+    ap.add_argument("--transfer", action="store_true", help="ID 02 mulai dari bobot model jauh ID 01")
+    ap.add_argument("--awal", default=None, help="folder berisi id0N_jauh.pt untuk bobot awal")
     ap.add_argument("--data", default=S.DIR_DATA)
     ap.add_argument("--keluar", default=DIR_MODEL)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--perangkat", default="auto", choices=["auto", "cuda", "cpu"],
-                    help="auto = GPU (CUDA) bila ada; cuda = WAJIB GPU, berhenti bila tidak ada")
+                    help="perangkat gradien PyTorch. auto = GPU (CUDA) bila ada; cuda = WAJIB GPU")
     ap.add_argument("--cpu", action="store_true", help="sama dengan --perangkat cpu")
     args = ap.parse_args()
-
-    model = [m.strip() for m in args.model.split(",") if m.strip()]
-    for m in model:
-        if m not in L.JENIS:
-            ap.error(f"--model {m}: pilih dari {', '.join(L.JENIS)}")
-    if "dekat" in model and "jauh" in model:
-        model = ["dekat", "jauh"]           # jauh memakai V model dekat
 
     if args.cpu or args.perangkat == "cpu":
         device = "cpu"
@@ -690,13 +475,12 @@ def main():
                          f"Pasang PyTorch versi CUDA (pytorch.org) atau periksa driver NVIDIA.")
     else:
         device = "cpu"
-        print("[!] GPU tidak terdeteksi - latih di CPU (jauh lebih lambat).")
+        print("[!] GPU tidak terdeteksi - gradien di CPU.")
 
     for rid in [int(t) for t in args.id.split(",") if t.strip()]:
-        for jenis in model:
-            if latih_model(rid, jenis, args, device) == "semua":
-                print("[i] dihentikan (ESC)")
-                return
+        if latih_model(rid, args, device) == "semua":
+            print("[i] dihentikan (ESC)")
+            return
 
 
 if __name__ == "__main__":

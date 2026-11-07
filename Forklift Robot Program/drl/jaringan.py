@@ -1,26 +1,21 @@
 """
-jaringan.py - Dueling DQN untuk DQfD. Susunannya di catatan Obsidian bagian 7.
+jaringan.py - Dueling DQN untuk DQfD (PyTorch, HANYA untuk gradien saat latih).
 
-    input m -> FC1 256 -> FC2 256 -+-> V-hidden 128 -> V(s)   1 -+
-                                   +-> A-hidden 128 -> A(s,a) n  +-> Q = V + A - rata(A)
+    input 47 -> FC1 256 -> FC2 256 -+-> V-hidden 128 -> V(s)    1 -+
+                                    +-> A-hidden 128 -> A(s,a) 14  +-> Q = V + A - rata(A)
 
-m, n = jumlah masukan dan aksi jenis modelnya (lingkungan.n_obs / n_aksi).
-Versi aksi 6 punya DUA model per robot:
-    jauh   meniru Hybrid A*:   m = 47, n = 14  -> 145.807 parameter
-    dekat  memilih kata Reeds-Shepp:
-                               m =  9, n = 88  -> 145.625 parameter
-           (9 masukan RS; 44 kata x 2 titik sambung. Versi 4: 9 / 30, 138.143;
-            versi 5: 47 / 30, 147.871)
-Lapis tersembunyi sama; yang meniru algoritmanya adalah masukan & keluarannya.
-Susunannya sama untuk ID 01 dan ID 02; bobotnya terpisah.
+Satu model per robot: model jauh, meniru Hybrid A* (lingkungan.N_OBS masukan,
+lingkungan.N_AKSI primitif), 145.807 parameter. Susunannya sama untuk ID 01
+dan ID 02; bobotnya terpisah.
+
+ATURAN ver-1-6: forward untuk rollout, evaluasi, dasbor, dan perencana memakai
+drl/jaringan_numpy.JaringanNumpy dengan bobot yang disalin dari jaringan ini.
 
 Q dalam satuan -(biaya-sisa ke tujuan) / SKALA_REWARD, jadi -Q x SKALA_REWARD
-adalah perkiraan biaya A* (satuan sel) dari keadaan itu.
+adalah perkiraan biaya A* (satuan sel) dari keadaan itu, termasuk tembakan RS.
 """
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 
 # Reward = -biaya / SKALA_REWARD (100). Didefinisikan di jaringan_numpy (tanpa
 # torch) supaya perencana operasional bisa memakainya tanpa mengimpor torch.
@@ -39,17 +34,11 @@ class JaringanDQfD(nn.Module):
         self.a1 = nn.Linear(lebar, cabang)
         self.a2 = nn.Linear(cabang, n_aksi)
 
-    def forward(self, x, aktivasi=False):
-        h1 = F.relu(self.fc1(x))
-        h2 = F.relu(self.fc2(h1))
-        hv = F.relu(self.v1(h2))
-        ha = F.relu(self.a1(h2))
-        v = self.v2(hv)
-        a = self.a2(ha)
-        q = v + a - a.mean(dim=1, keepdim=True)
-        if aktivasi:
-            return q, {"fc1": h1, "fc2": h2, "v_hidden": hv, "a_hidden": ha, "v": v, "a": a}
-        return q
+    def forward(self, x):
+        h2 = F.relu(self.fc2(F.relu(self.fc1(x))))
+        v = self.v2(F.relu(self.v1(h2)))
+        a = self.a2(F.relu(self.a1(h2)))
+        return v + a - a.mean(dim=1, keepdim=True)
 
 
 def bermask(q, mask):

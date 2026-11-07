@@ -22,12 +22,11 @@ bisa diulang dengan klik di navigasi.py:
               awal (>= 135 deg): robot harus berbalik / masuk mundur
     3 geser   Rumah, start sudah di dalam 60 cm, tujuan bergeser ke SAMPING
               (|samping| > |maju|) dengan arah hampir sama (<= 30 deg): manuver
-              geser seperti parkir paralel - murni bagian dekat, jadi
-              membandingkan model dekat dengan Reeds-Shepp
+              geser seperti parkir paralel
 
 Diukur per perencana:
     rencana   waktu, panjang, ganti arah maju-mundur, galat pose UJUNG JALUR
-              (Hybrid A* + RS eksak; DQfD <= 1 cm & 2 deg)
+              (keduanya berakhir dengan tembakan RS, jadi eksak)
     eksekusi  tiba, waktu tempuh, galat posisi & arah pose AKHIR robot, jarak
               terdekat badan ke zona
 
@@ -116,7 +115,7 @@ def skenario_bawaan(rid):
         out.append(("balik", "Rumah2", pilih, "arah hadap tujuan berlawanan dengan arah awal"))
     pilih = None
     for peta in ("Rumah", "Rumah2", "Kalibrasi"):
-        k = _kandidat(rid, "demo_dekat_tambahan_id{rid:02d}.npz", peta)
+        k = _kandidat(rid, "demo_jauh_id{rid:02d}.npz", peta)
         pilih = (_median([x for x in k if 20 <= x["jarak"] <= 50 and abs(x["samping"]) > abs(x["maju"])
                           and x["d_arah"] <= 30])
                  or _median([x for x in k if abs(x["samping"]) > abs(x["maju"]) and x["d_arah"] <= 45]))

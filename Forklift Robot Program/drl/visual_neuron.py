@@ -2,20 +2,22 @@
 visual_neuron.py - dasbor pelatihan DQfD: progres, simulasi perencanaan, jaringan.
 
     +-----------------------------+------------------------------------------+
-    | SIMULASI: jaringan menyusun | JARINGAN: input 47, aktivasi FC1/FC2     |
-    | jalur primitif demi         | (16x16), cabang V/A (8x16), Q 32 aksi,   |
-    | primitif; kipas 32 calon    | perkiraan vs kenyataan biaya-sisa        |
-    | diwarnai Q; 32 sinar; A*    |                                          |
+    | SIMULASI: model jauh        | JARINGAN: input 47, aktivasi FC1/FC2     |
+    | menyusun jalur primitif     | (16x16), cabang V/A (8x16), Q 14 aksi,   |
+    | demi primitif lalu tembakan | perkiraan vs kenyataan biaya-sisa        |
+    | RS; kipas 14 calon diwarnai |                                          |
+    | Q; 32 sinar; A* + RS        |                                          |
     +-----------------------------+------------------------------------------+
     | PETA NILAI -V(x,y) di       | PROGRES: fase, langkah, loss, % setuju,  |
     | samping heuristik Dijkstra  | % tiba, rasio biaya DQfD/A*              |
     +-----------------------------+------------------------------------------+
 
 Dipanggil dari latih.py (--tampil). Tombol: q = hentikan robot ini (simpan),
-ESC = hentikan semua, n = rute uji berikutnya, p = jeda/lanjut.
+ESC = hentikan semua, n = rute uji berikutnya, p = jeda/lanjut. Forward
+jaringan memakai JaringanNumpy (aturan ver-1-6), tanpa PyTorch.
 
 Putar ulang checkpoint setelah pelatihan:
-    python -m drl.visual_neuron --putar model_dqn/id01
+    python -m drl.visual_neuron --putar model_dqn/id01_jauh
 """
 import argparse
 import glob
@@ -27,7 +29,6 @@ import time
 
 import cv2
 import numpy as np
-import torch
 
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -36,7 +37,7 @@ if __package__ in (None, ""):
 import konfig                                      # noqa: E402
 from drl import lingkungan as L                    # noqa: E402
 from drl import rollout as RO                      # noqa: E402
-from drl.jaringan import SKALA_REWARD, bermask     # noqa: E402
+from drl.jaringan_numpy import SKALA_REWARD, JaringanNumpy  # noqa: E402
 
 LEBAR, TINGGI = 1500, 900
 LATAR = (28, 28, 30)
@@ -46,7 +47,8 @@ HIJAU, ORANYE, BIRU, MERAH, KUNING = (60, 200, 60), (0, 150, 255), (255, 150, 40
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 LANGKAH_PETA_NILAI = 6            # sel per titik peta nilai
 N_ARAH_PETA_NILAI = 8             # arah hadap yang dicoba per titik; diambil yang termurah
-WARNA_ASTAR = (225, 200, 150)     # biru muda
+WARNA_ASTAR = (225, 200, 150)     # biru muda pucat: pita jalur demo A* + RS
+WARNA_RS_MAJU, WARNA_RS_MUNDUR = (255, 255, 0), (255, 0, 255)   # tembakan RS, sama dengan rencana.py
 
 
 def _teks(img, s, xy, skala=0.45, warna=TEKS, tebal=1):
@@ -106,7 +108,7 @@ def _plot(img, rect, seri, judul, ylim=None, log=False, garis_v=()):
 
 
 class Probe:
-    """Satu rute uji yang dipakai dasbor: skenario, jalur A*, dan grid peta nilai."""
+    """Satu rute uji yang dipakai dasbor: skenario, jalur A* + RS, dan grid peta nilai."""
 
     def __init__(self, sk, pabrik):
         self.sk = sk
@@ -116,7 +118,7 @@ class Probe:
         if sk.aksi_demo:
             e2, _, _ = pabrik.buat(sk)
             for a in sk.aksi_demo:
-                if e2.selesai:          # cek_serah model dekat bisa berhenti lebih awal
+                if e2.selesai:          # serah: lingkungan sudah memasang tembakan RS
                     break
                 e2.step(a)
             self.jalur_astar = e2.jalur()
@@ -151,16 +153,14 @@ class Probe:
                 h.append(hv if ada and np.isfinite(hv) else np.nan)
         self.gshape = (len(ys), len(xs))
         self.gsel = np.array(sel, np.int64)
-        self.gobs = torch.as_tensor(np.array(obs, np.float32)) if obs else None
+        self.gobs = np.array(obs, np.float32) if obs else None
         self.gh = np.array(h, np.float64).reshape(self.gshape)
 
     def biaya_sisa_jaringan(self, net):
         """Biaya-sisa terkecil atas arah hadap yang muat, per titik grid (sel)."""
         out = np.full(self.gshape[0] * self.gshape[1], np.inf)
         if self.gobs is not None:
-            with torch.no_grad():
-                _, akt = net(self.gobs, aktivasi=True)
-            np.minimum.at(out, self.gsel, -akt["v"].squeeze(1).numpy() * SKALA_REWARD)
+            np.minimum.at(out, self.gsel, -net.v_batch(self.gobs) * SKALA_REWARD)
         out[~np.isfinite(out)] = np.nan
         return out.reshape(self.gshape)
 
@@ -199,7 +199,7 @@ class Dasbor:
         pr = self.probe()
         self.env, _, _ = self.pabrik.buat(pr.sk)
         if self.label_aksi is None:
-            self.label_aksi = [b[0] for b in L.tabel_aksi(self.env.planner, self.env.jenis)]
+            self.label_aksi = [b[0] for b in L.tabel_aksi(self.env.planner)]
         self.aksi = []
         self.v_prediksi = []
         self.biaya_langkah = []
@@ -212,20 +212,18 @@ class Dasbor:
         env = self.env
         obs = env.observasi()
         mask = env.mask()
-        with torch.no_grad():
-            q, akt = net(torch.as_tensor(obs[None]), aktivasi=True)
-        q = q[0].numpy()
+        q, akt = net.aktivasi(obs)
         qm = np.where(mask, q, -np.inf)
         a = int(np.argmax(qm))
         demo = self.probe().sk.aksi_demo
         t = len(self.aksi)
         a_astar = demo[t] if demo and self.aksi == demo[:t] and t < len(demo) else None
-        self.frame = {"obs": obs, "mask": mask, "q": q, "akt": {k: v[0].numpy() for k, v in akt.items()},
+        self.frame = {"obs": obs, "mask": mask, "q": q, "akt": akt,
                       "a": a, "a_astar": a_astar,
                       # pose SEBELUM langkah: sinar, kipas calon, dan Q milik pose ini
                       "pose": (env.x, env.y, env.yaw),
                       "calon": [c for c in env._calon]}
-        self.v_prediksi.append(-float(akt["v"][0, 0]) * SKALA_REWARD)
+        self.v_prediksi.append(-float(akt["v"][0]) * SKALA_REWARD)
         _, r, akhir, info = env.step(a)
         self.aksi.append(a)
         self.biaya_langkah.append(-r)
@@ -327,8 +325,13 @@ class Dasbor:
                 cv2.polylines(img, [np.array(pts, np.int32)], False, warna,
                               3 if ai == fr["a"] else 1, cv2.LINE_AA)
         jalur = env.jalur()
-        for p, q in zip(jalur[:-1], jalur[1:]):
-            cv2.line(img, P(p[0], p[1]), P(q[0], q[1]), HIJAU if q[3] > 0 else ORANYE, 2, cv2.LINE_AA)
+        awal_rs = len(jalur) - env.n_titik_rs           # titik pertama ekor tembakan RS
+        for i, (p, q) in enumerate(zip(jalur[:-1], jalur[1:])):
+            if i + 1 >= awal_rs:
+                warna = WARNA_RS_MAJU if q[3] > 0 else WARNA_RS_MUNDUR
+            else:
+                warna = HIJAU if q[3] > 0 else ORANYE
+            cv2.line(img, P(p[0], p[1]), P(q[0], q[1]), warna, 2, cv2.LINE_AA)
         v = env.v
         sk = pr.sk
         gy = sk.tujuan[2] if sk.tujuan[2] is not None else (jalur[-1][2] if jalur else 0.0)
@@ -342,12 +345,11 @@ class Dasbor:
         ref = f"  | A*: {len(sk.aksi_demo)} aksi, biaya {sk.biaya_astar:.0f}" if sk.aksi_demo else ""
         _teks(img, f"SIMULASI  {sk.peta}  margin {sk.margin:.0f} cm", (x0 + 10, y0 + 18), 0.5, KUNING)
         _teks(img, status + ref, (x0 + 10, y0 + 34), 0.42)
-        _teks(img, "hijau/oranye: DQfD maju/mundur   pita biru muda: A*   kipas: calon, warna = Q   ungu: sinar",
+        _teks(img, "hijau/oranye: model jauh maju/mundur   biru muda/magenta: tembakan RS   pita: A* + RS   "
+                   "kipas: calon, warna = Q",
               (x0 + 10, y0 + h - 6), 0.36, REDUP)
 
     def _sinar(self, img, P, env, obs, pose):
-        if env.jenis != "jauh":
-            return                  # model dekat (kata RS) tidak punya sinar
         i0, jangkau = 10, env._jangkau
         x, y, yaw = pose
         off = env._pusat_off
@@ -374,9 +376,8 @@ class Dasbor:
             t = (np.clip(v, -1, 1) + 1) / 2
             warna = tuple(int(u) for u in _cmap(np.array([t]), cv2.COLORMAP_COOL)[0])
             cv2.rectangle(img, (xi + i * sel, yi), (xi + i * sel + sel - 2, yi + 18), warna, -1)
-        kelompok = ((("tujuan", 0, 8), ("prim.", 8, 10), ("32 sinar", 10, 42), ("heur.", 42, 45),
-                     ("margin", 45, 47)) if self.env.jenis == "jauh" else
-                    (("tujuan /R", 0, 2), ("arah", 2, 5), ("dekat.", 5, 7), ("gerak", 7, 9)))
+        kelompok = (("tujuan", 0, 8), ("prim.", 8, 10), ("32 sinar", 10, 42), ("heur.", 42, 45),
+                    ("margin", 45, 47))
         for nama, a, b in kelompok:
             _teks(img, nama, (xi + a * sel, yi + 32), 0.36, REDUP)
             cv2.line(img, (xi + a * sel, yi + 21), (xi + b * sel - 2, yi + 21), REDUP, 1)
@@ -393,9 +394,7 @@ class Dasbor:
         _teks(img, "Q -> biaya-sisa (sel)", (xq, yq - 8), 0.42)
         sah = biaya[mask]
         lo, hi = (sah.min(), sah.max()) if len(sah) else (0, 1)
-        # Model dekat punya 88 aksi: tampilkan hanya yang sah, urut Q, maks 36 baris.
-        tampil = (list(range(len(q))) if len(q) <= 40 else
-                  [int(a) for a in np.argsort(-np.where(mask, q, -np.inf)) if mask[a]][:36])
+        tampil = list(range(len(q)))
         n_aksi = len(tampil)
         baris_px = max(12, min(21, 520 // max(1, n_aksi)))
         for baris, i in enumerate(tampil):
@@ -414,7 +413,7 @@ class Dasbor:
               (xq, yq + n_aksi * baris_px + 10), 0.32, REDUP)
 
         # perkiraan vs kenyataan biaya-sisa sepanjang rollout
-        v_now = fr["akt"]["v"][0] * -SKALA_REWARD
+        v_now = float(fr["akt"]["v"][0]) * -SKALA_REWARD
         _teks(img, f"V(s): perkiraan biaya-sisa {v_now:.0f} sel", (x0 + 15, y0 + 350), 0.45)
         nyata = np.cumsum(self.biaya_langkah[::-1])[::-1] if self.selesai else None
         xs = list(range(len(self.v_prediksi)))
@@ -461,13 +460,12 @@ class Dasbor:
         if ev:
             baris += [
                 f"setuju A* : {ev.get('setuju', 0):.1f} %   (validasi)",
-                f"tiba      : {ev.get('tiba', 0):.1f} % greedy / {ev.get('tiba_mundur', float('nan')):.1f} % mundur",
-                f"rasio p90 (mundur): {ev.get('rasio_p90_mundur', float('nan')):.2f}   skor {ev.get('skor', float('nan')):.1f}",
+                f"tiba      : {ev.get('tiba_greedy', 0):.1f} % greedy / {ev.get('tiba', float('nan')):.1f} % pencarian",
+                f"rasio p90 : {ev.get('rasio_p90', float('nan')):.2f}   skor {ev.get('skor', float('nan')):.1f}",
                 f"rasio biaya median: {ev.get('rasio_median', float('nan')):.3f}",
                 f"negatif buntu : {ev.get('neg_buntu', 0):.0f} %",
-                # A* di sini dari dataset (dibangkitkan 15 proses serempak) - bukan
-                # perbandingan adil; yang adil: python -m drl.evaluasi
-                f"rencana   : {ev.get('ms_dqfd', 0):.0f} ms  (A* dataset {ev.get('ms_astar', 0):.0f} ms*)",
+                # Perbandingan waktu yang adil dengan Hybrid A*: python -m drl.banding_baseline
+                f"rencana   : {ev.get('ms_dqfd', 0):.0f} ms (rute sulit)",
             ]
         if st.get("mandiri"):
             baris.append(f"latihan sendiri: tiba {st['mandiri']:.0f} %  eps {st.get('eps', 0):.3f}")
@@ -482,7 +480,7 @@ class Dasbor:
         ev_h = st.get("eval_riwayat", {})
         xe = ev_h.get("langkah", [])
         _plot(img, (x0 + 610, y0 + 45, 230, 230),
-              [("setuju", xe, ev_h.get("setuju", []), KUNING), ("tiba", xe, ev_h.get("tiba_mundur") or ev_h.get("tiba", []), HIJAU),
+              [("setuju", xe, ev_h.get("setuju", []), KUNING), ("tiba", xe, ev_h.get("tiba", []), HIJAU),
                ("rasio x50", xe, [None if r is None else 50 * r for r in ev_h.get("rasio_median", [])], BIRU)],
               "evaluasi (%)", ylim=(0, 100), garis_v=batas)
 
@@ -490,24 +488,29 @@ class Dasbor:
 # ------------------------------------------------------------ putar ulang
 def putar(dir_model, fps=12.0):
     """Putar ulang checkpoint: tiap checkpoint menyusun rute uji yang sama."""
-    from drl.dqfd import muat_jaringan
+    from drl.dqfd import muat_checkpoint
+    from drl import skenario as S
+
+    def muat(jalur):
+        c = muat_checkpoint(jalur)
+        return JaringanNumpy.dari_state_dict(c["net"]), c
+
     ck = sorted(glob.glob(os.path.join(dir_model, "ckpt_*.pt")))
     if not ck:
         raise SystemExit(f"[!] tidak ada checkpoint di {dir_model}")
     with open(os.path.join(dir_model, "riwayat.json"), encoding="utf-8") as f:
         riw = json.load(f)
-    _, meta = muat_jaringan(ck[0])
+    _, meta = muat(ck[0])
     rid = meta["robot"]
     prof = konfig.profil(rid)
-    pabrik = RO.PabrikEnv(prof, meta.get("jenis", "dekat"))
-    from drl import skenario as S
-    d = RO.muat_gabung([os.path.join(S.DIR_DATA, os.path.basename(p)) for p in meta["data_demo"]])
+    pabrik = RO.PabrikEnv(prof)
+    d = RO.muat_npz(os.path.join(S.DIR_DATA, os.path.basename(meta["data_demo"])))
     probes = [RO.dari_demo(d, e) for e in meta["probe"]]
     das = Dasbor(prof, pabrik, probes, judul=f"Putar ulang DQfD ID {rid:02d}", fps=fps)
     print("[i] n: checkpoint berikutnya, b: sebelumnya, r: rute berikutnya, q: keluar")
     i = 0
     while 0 <= i < len(ck):
-        net, m = muat_jaringan(ck[i])
+        net, m = muat(ck[i])
         das.env = None
         das.i_probe = das.i_probe
         das._mulai(net)
@@ -543,7 +546,7 @@ def putar(dir_model, fps=12.0):
 
 def main():
     ap = argparse.ArgumentParser(description="Dasbor DQfD: putar ulang checkpoint")
-    ap.add_argument("--putar", required=True, help="folder model, mis. model_dqn/id01_dekat")
+    ap.add_argument("--putar", required=True, help="folder model, mis. model_dqn/id01_jauh")
     ap.add_argument("--fps", type=float, default=12.0)
     args = ap.parse_args()
     putar(args.putar, args.fps)

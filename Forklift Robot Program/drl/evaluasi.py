@@ -1,24 +1,21 @@
 """
-evaluasi.py - DQfD dua model (jauh + dekat) vs Hybrid A* + Reeds-Shepp pada SELURUH rute uji.
+evaluasi.py - DQfD (model jauh + tembakan RS) vs Hybrid A* + Reeds-Shepp pada SELURUH rute uji.
 
     python -m drl.evaluasi --id 1,2
-    python -m drl.evaluasi --id 1 --model-jauh model_dqn/id01_jauh/ckpt_0050000.pt
+    python -m drl.evaluasi --id 1 --model model_dqn/id01_jauh/ckpt_0050000.pt
 
-Rute uji:
-    penuh       episode UJI demo_jauh: start di luar radius serah, rute lengkap
-                model jauh -> serah -> model dekat
-    dekat saja  episode UJI demo_dekat_tambahan (bila ada): start di dalam
-                radius, hanya model dekat
+Rute uji: episode UJI demo_jauh_id0N.npz (peta asli dengan rute yang belum
+dilihat, dan peta sintetis yang belum pernah dilihat saat latih).
 
-Tiap rute direncanakan dengan tiga metode (dipakai untuk KEDUA model), satu
-per satu supaya waktunya sebanding, tanpa batas waktu:
-    mundur      greedy berurutan Q, mundur saat buntu
-    terbaik     pencarian terbaik-dulu f = g + c + 2 x h
-    gabungan    terbaik-dulu, mundur bila gagal (metode operasional DQfDPlanner)
-    A* + RS     HybridAStarPlanner dengan batas waktu 2 s seperti di robot
+Tiap rute direncanakan, satu per satu supaya waktunya sebanding:
+    mundur      DQfD greedy berurutan Q, backtracking saat buntu        (tanpa batas waktu)
+    terbaik     DQfD terbaik-dulu f = g + c + w x h                      (tanpa batas waktu)
+    gabungan    DQfD terbaik-dulu, mundur bila gagal (metode DQfDPlanner) (tanpa batas waktu)
+    astar       Hybrid A* + RS standar (peran "astar": w = 2,0, h = max(h_RS, h_D),
+                RS setiap ekspansi ke-4), batas waktu 2 s seperti di robot
 
-Rasio biaya = biaya jalur DQfD (jauh + dekat) / biaya demo A* + RS rute itu.
-Galat pose akhir: A* + RS = 0 (Reeds-Shepp eksak); model dekat <= 1 cm & 2 deg.
+Rasio biaya = biaya jalur / biaya demo (demonstrator Hybrid A* + RS) rute itu.
+Galat pose akhir: tembakan RS berakhir tepat di tujuan, jadi 0 untuk keduanya.
 
 Skenario NEGATIF (A* "tidak ada jalur"): DQfD seharusnya buntu. Bila ternyata
 menemukan jalur, jalurnya diperiksa ulang secara independen.
@@ -40,12 +37,13 @@ if __package__ in (None, ""):
     __package__ = "drl"
 
 import konfig                                   # noqa: E402
-from drl import lingkungan as L                # noqa: E402
+import rencana as R                             # noqa: E402
 from drl import rollout as RO                   # noqa: E402
 from drl import skenario as S                   # noqa: E402
 from drl.adaptor_demo import rencanakan_terekam  # noqa: E402
-from drl.dqfd import muat_jaringan, periksa_profil  # noqa: E402
-from drl.perencana_dqfd import jalur_model, mutu_jalur, rencanakan_dua  # noqa: E402
+from drl.dqfd import muat_checkpoint, periksa_profil  # noqa: E402
+from drl.jaringan_numpy import JaringanNumpy    # noqa: E402
+from drl.perencana_dqfd import jalur_model, mutu_jalur, rencanakan_dqfd  # noqa: E402
 
 AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BATAS_WAKTU_ASTAR = 2.0
@@ -56,7 +54,7 @@ def _jenis(p):
     return p.split(":")[0]
 
 
-def periksa_jalur(env, jalur, sk):
+def periksa_jalur(env, jalur):
     """Periksa jalur secara independen dari mask lingkungan. '' = sah."""
     om, v, pl = env.omap, env.v, env.planner
     if len(jalur) < 2:
@@ -69,8 +67,8 @@ def periksa_jalur(env, jalur, sk):
         if math.hypot(b[0] - a[0], b[1] - a[1]) > langkah_maks:
             return "pose tidak tersambung"
     x, y, yaw = jalur[-1][:3]
-    if not env._tiba(x, y, yaw):
-        return "tidak tiba di tujuan (toleransi model dekat)"
+    if not pl._at_goal(x, y, yaw, env.tujuan):
+        return "tidak tiba di tujuan"
     return ""
 
 
@@ -84,97 +82,93 @@ def _stat(xs):
 
 
 def rute_uji(rid, data):
-    """[(Skenario, 'penuh'/'dekat')] dari episode uji dataset."""
-    out = []
+    """[Skenario] dari episode uji dataset model jauh."""
     p = os.path.join(data, f"demo_jauh_id{rid:02d}.npz")
-    if os.path.exists(p):
-        d = RO.muat_npz(p)
-        out += [(RO.dari_demo(d, e), "penuh") for e in np.flatnonzero(d["ep_uji"])]
-    p = os.path.join(data, f"demo_dekat_tambahan_id{rid:02d}.npz")
-    if os.path.exists(p):
-        d = RO.muat_npz(p)
-        out += [(RO.dari_demo(d, e), "dekat") for e in np.flatnonzero(d["ep_uji"])]
-    return out
+    if not os.path.exists(p):
+        return []
+    d = RO.muat_npz(p)
+    return [RO.dari_demo(d, e) for e in np.flatnonzero(d["ep_uji"])]
 
 
 def evaluasi_robot(rid, args):
     prof = konfig.profil(rid)
-    jj = args.model_jauh or jalur_model(rid, "jauh", args.keluar)
-    jd = args.model_dekat or jalur_model(rid, "dekat", args.keluar)
-    net_j, meta_j = muat_jaringan(jj, jenis="jauh")
-    net_d, meta_d = muat_jaringan(jd, jenis="dekat")
-    periksa_profil(meta_j, prof, jj)
-    periksa_profil(meta_d, prof, jd)
-    pabrik = RO.PabrikEnv(prof, "jauh")
+    jm = args.model or jalur_model(rid, args.keluar)
+    ck = muat_checkpoint(jm)
+    periksa_profil(ck, prof, jm)
+    net = JaringanNumpy.dari_state_dict(ck["net"])
+    pabrik = RO.PabrikEnv(prof)
     uji = rute_uji(rid, args.data)
     if not uji:
         raise SystemExit(f"[!] Tidak ada rute uji ID {rid:02d} di {args.data}")
-    neg = RO.muat_npz(os.path.join(args.data, f"negatif_id{rid:02d}.npz")) \
-        if os.path.exists(os.path.join(args.data, f"negatif_id{rid:02d}.npz")) else None
+    jn = os.path.join(args.data, f"negatif_id{rid:02d}.npz")
+    neg = RO.muat_npz(jn) if os.path.exists(jn) else None
     negatif = []
     if neg is not None:
         ok = np.flatnonzero(neg["alasan"] == "tidak ada jalur")
         pilih = ok[np.linspace(0, len(ok) - 1, min(args.n_neg, len(ok))).astype(int)] if len(ok) else []
         negatif = [RO.dari_negatif(neg, i) for i in pilih]
-    print(f"\n=== ID {rid:02d}: jauh {os.path.relpath(jj, AKAR)} (langkah {meta_j['langkah']}), dekat "
-          f"{os.path.relpath(jd, AKAR)} (langkah {meta_d['langkah']}), {len(uji)} rute uji "
-          f"({sum(j == 'dekat' for _, j in uji)} dekat saja), {len(negatif)} negatif")
+    print(f"\n=== ID {rid:02d}: model {os.path.relpath(jm, AKAR)} (langkah {ck['langkah']}), "
+          f"{len(uji)} rute uji, {len(negatif)} negatif")
 
-    def lingkungan(sk):
-        a = pabrik.arena(sk.peta)
-        return (L.LingkunganRencana(a, prof, margin_cm=sk.margin, jenis="jauh"),
-                L.LingkunganRencana(a, prof, margin_cm=sk.margin, jenis="dekat"))
+    astar = {}
+
+    def perencana_astar(sk):
+        """Hybrid A* standar untuk arena & margin skenario ini (di-cache)."""
+        kunci = (sk.peta, round(sk.margin, 3))
+        if kunci not in astar:
+            a = pabrik.arena(sk.peta)
+            pl = R.buat_perencana(a, R.buat_kendaraan(a, sk.margin, prof.max_steer_rad), "astar")
+            pl.time_limit = BATAS_WAKTU_ASTAR
+            astar[kunci] = pl
+        return astar[kunci]
 
     baris = []
     t0 = time.time()
-    for k, (sk, asal) in enumerate(uji):
+    for k, sk in enumerate(uji):
         cm = pabrik.arena(sk.peta).panjang_ke_cm(1.0)
         om = pabrik.omap(sk)
-        acuan = sk.biaya_astar_total
-        r = {"peta": sk.peta, "jenis": _jenis(sk.peta), "asal": asal, "biaya_astar": acuan}
+        acuan = sk.biaya_astar
+        r = {"peta": sk.peta, "jenis": _jenis(sk.peta), "biaya_demo": acuan}
         for mode in MODE_DQFD:
-            ej, ed = lingkungan(sk)
-            # reset di dalam rencanakan_dua ikut diukur: ia menghitung heuristik
-            # Dijkstra (~3 ms), yang pada Hybrid A* juga terhitung di dalam plan().
-            h = rencanakan_dua(net_j, net_d, ej, ed, sk.awal, sk.tujuan, om, metode=mode)
-            x = {"sukses": h["sukses"], "fase": h["fase"], "alasan": h.get("alasan", ""),
-                 "ms": 1000 * h["waktu_s"], "n_serah": h["n_serah"],
-                 "biaya": h["biaya"] if h["sukses"] else None,
-                 "rasio": h["biaya"] / acuan if h["sukses"] and acuan else None,
-                 "metode_jauh": h["metode_jauh"], "metode_dekat": h["metode_dekat"]}
+            env = pabrik.lingkungan(sk)
+            # reset di dalam rencanakan_dqfd ikut diukur: ia menghitung heuristik
+            # Dijkstra, yang pada Hybrid A* juga terhitung di dalam plan().
+            h = rencanakan_dqfd(net, env, sk.awal, sk.tujuan, om, metode=mode)
+            x = {"sukses": h["sukses"], "alasan": h.get("alasan", ""), "ms": 1000 * h["waktu_s"],
+                 "langkah": h["dicoba"], "biaya": h["biaya"] if h["sukses"] else None,
+                 "rasio": h["biaya"] / acuan if h["sukses"] and acuan else None, "metode": h["metode"]}
             if h["sukses"] and h["jalur"]:
-                x.update(mutu_jalur(h["jalur"], sk.tujuan, ej.radius_serah, cm))
-                x["periksa"] = periksa_jalur(ed, h["jalur"], sk)
+                x.update(mutu_jalur(h["jalur"], sk.tujuan, env.radius_serah, cm))
+                x["periksa"] = periksa_jalur(env, h["jalur"])
             r[mode] = x
-        ej, _ = lingkungan(sk)
-        pl = ej.planner
-        pl.time_limit = BATAS_WAKTU_ASTAR
+        pl = perencana_astar(sk)
         t1 = time.perf_counter()
         jalur, rek = rencanakan_terekam(pl, om, sk.awal, sk.tujuan)
         r["astar"] = {"sukses": bool(jalur), "ms": 1000 * (time.perf_counter() - t1),
-                      "biaya": rek.biaya, "alasan": rek.stats.get("reason", "")}
+                      "node": rek.stats.get("expansions", 0), "biaya": rek.biaya,
+                      "rasio": rek.biaya / acuan if jalur and acuan else None,
+                      "alasan": rek.stats.get("reason", "")}
         if jalur:
-            r["astar"].update(mutu_jalur(jalur, sk.tujuan, ej.radius_serah, cm))
+            r["astar"].update(mutu_jalur(jalur, sk.tujuan, pabrik.lingkungan(sk).radius_serah, cm))
         baris.append(r)
         if (k + 1) % 50 == 0:
             print(f"    {k + 1}/{len(uji)} rute ({time.time() - t0:.0f} s)")
 
     hasil_neg, contoh = [], []
     for sk in negatif:
-        ej, ed = lingkungan(sk)
-        h = rencanakan_dua(net_j, net_d, ej, ed, sk.awal, sk.tujuan, pabrik.omap(sk), metode="gabungan",
-                           batas_waktu=args.batas_negatif)
+        env = pabrik.lingkungan(sk)
+        h = rencanakan_dqfd(net, env, sk.awal, sk.tujuan, pabrik.omap(sk), metode="gabungan",
+                            batas_waktu=args.batas_negatif)
         x = {"jenis": _jenis(sk.peta), "sukses": h["sukses"], "alasan": h.get("alasan", ""),
              "ms": 1000 * h["waktu_s"]}
         if h["sukses"] and h["jalur"]:
-            x["periksa"] = periksa_jalur(ed, h["jalur"], sk)
+            x["periksa"] = periksa_jalur(env, h["jalur"])
             if len(contoh) < 6:
-                contoh.append((sk, h["jalur"], ed))
+                contoh.append((sk, h["jalur"], env))
         hasil_neg.append(x)
 
     ring = ringkas(baris, hasil_neg)
-    ring.update(robot=rid, model_jauh=os.path.relpath(jj, AKAR), model_dekat=os.path.relpath(jd, AKAR),
-                langkah_jauh=meta_j["langkah"], langkah_dekat=meta_d["langkah"], waktu_eval_s=time.time() - t0)
+    ring.update(robot=rid, model=os.path.relpath(jm, AKAR), langkah=ck["langkah"], waktu_eval_s=time.time() - t0)
     cetak(ring)
     keluar = os.path.join(args.keluar, f"evaluasi_id{rid:02d}.json")
     with open(keluar, "w", encoding="utf-8") as f:
@@ -188,25 +182,24 @@ def evaluasi_robot(rid, args):
 
 
 def ringkas(baris, neg):
-    out = {"per_jenis": {}, "per_asal": {}}
-    kelompok = [("semua", None, None)] + [("per_jenis", j, "jenis") for j in sorted({r["jenis"] for r in baris})] \
-        + [("per_asal", a, "asal") for a in sorted({r["asal"] for r in baris})]
-    for tempat, j, kunci in kelompok:
-        b = [r for r in baris if kunci is None or r[kunci] == j]
+    out = {"per_jenis": {}}
+    kelompok = [("semua", None)] + [("per_jenis", j) for j in sorted({r["jenis"] for r in baris})]
+    for tempat, j in kelompok:
+        b = [r for r in baris if j is None or r["jenis"] == j]
         if not b:
             continue
         blok = {"n": len(b)}
         for mode in (*MODE_DQFD, "astar"):
             tiba = [r for r in b if r[mode]["sukses"]]
-            m = {"tiba_pct": 100.0 * len(tiba) / len(b), "ms": _stat([r[mode]["ms"] for r in b])}
+            m = {"tiba_pct": 100.0 * len(tiba) / len(b), "ms": _stat([r[mode]["ms"] for r in b]),
+                 "rasio": _stat([r[mode]["rasio"] for r in b])}
             for k in ("ganti_arah", "ganti_arah_dekat", "galat_posisi_cm", "galat_arah_deg"):
                 m[k] = _stat([r[mode].get(k) for r in tiba])
             if mode != "astar":
-                m["gagal_jauh_pct"] = 100.0 * sum(r[mode]["fase"] == "gagal_jauh" for r in b) / len(b)
-                m["gagal_dekat_pct"] = 100.0 * sum(r[mode]["fase"] == "gagal_dekat" for r in b) / len(b)
-                m["rasio"] = _stat([r[mode]["rasio"] for r in b])
-                m["serah_dicoba"] = _stat([r[mode]["n_serah"] for r in b])
+                m["langkah"] = _stat([r[mode]["langkah"] for r in b])
                 m["tidak_sah"] = sum(1 for r in tiba if r[mode].get("periksa"))
+            else:
+                m["node"] = _stat([r[mode]["node"] for r in b])
             blok[mode] = m
         if tempat == "semua":
             out["semua"] = blok
@@ -225,18 +218,18 @@ def ringkas(baris, neg):
 
 def cetak(r):
     g = lambda s, k="rata": s.get(k, float("nan"))  # noqa: E731
-    print("    peta          n    TIBA mundur/terbaik/GABUNGAN/A*   gagal jauh/dekat (gab.)   rasio p90 "
-          "mun|terb|GAB   balik total/<60cm GAB | A*   galat akhir GAB cm/deg (p90)   ms med/p90 GAB | A*")
-    daftar = [("SEMUA", r["semua"]), *r["per_jenis"].items(), *[(f"[{a}]", b) for a, b in r["per_asal"].items()]]
+    print("    peta          n    TIBA mundur/terbaik/GABUNGAN/A*   rasio p90 mun|terb|GAB|A*   "
+          "balik total/<60cm GAB | A*   ms med/p90 GAB | A*   langkah/node median GAB | A*")
+    daftar = [("SEMUA", r["semua"]), *r["per_jenis"].items()]
     for j, b in daftar:
         m, t, c, a = b["mundur"], b["terbaik"], b["gabungan"], b["astar"]
         print(f"    {j:<11} {b['n']:>4}   {m['tiba_pct']:5.1f} / {t['tiba_pct']:5.1f} / {c['tiba_pct']:5.1f} / "
-              f"{a['tiba_pct']:5.1f}       {c['gagal_jauh_pct']:4.1f} / {c['gagal_dekat_pct']:4.1f}            "
-              f"{g(m['rasio'], 'p90'):5.2f}|{g(t['rasio'], 'p90'):5.2f}|{g(c['rasio'], 'p90'):5.2f}     "
+              f"{a['tiba_pct']:5.1f}       {g(m['rasio'], 'p90'):5.2f}|{g(t['rasio'], 'p90'):5.2f}|"
+              f"{g(c['rasio'], 'p90'):5.2f}|{g(a['rasio'], 'p90'):5.2f}     "
               f"{g(c['ganti_arah']):4.2f} / {g(c['ganti_arah_dekat']):4.2f} | {g(a['ganti_arah']):4.2f} / "
-              f"{g(a['ganti_arah_dekat']):4.2f}     {g(c['galat_posisi_cm']):4.2f} / {g(c['galat_arah_deg']):4.2f} "
-              f"({g(c['galat_arah_deg'], 'p90'):4.2f})       {g(c['ms'], 'median'):5.0f} / {g(c['ms'], 'p90'):5.0f} | "
-              f"{g(a['ms'], 'median'):4.0f} / {g(a['ms'], 'p90'):5.0f}")
+              f"{g(a['ganti_arah_dekat']):4.2f}     {g(c['ms'], 'median'):5.0f} / {g(c['ms'], 'p90'):5.0f} | "
+              f"{g(a['ms'], 'median'):4.0f} / {g(a['ms'], 'p90'):5.0f}     "
+              f"{g(c['langkah'], 'median'):5.0f} | {g(a['node'], 'median'):5.0f}")
     tidak = {m: r["semua"][m]["tidak_sah"] for m in MODE_DQFD}
     if any(tidak.values()):
         print(f"    [!] jalur DQfD yang tiba tapi TIDAK sah menurut pemeriksaan independen: {tidak}")
@@ -269,10 +262,9 @@ def gambar_contoh(contoh, keluar):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Evaluasi DQfD dua model vs Hybrid A* + RS pada seluruh rute uji")
+    ap = argparse.ArgumentParser(description="Evaluasi DQfD (model jauh + RS) vs Hybrid A* + RS pada seluruh rute uji")
     ap.add_argument("--id", default="1,2")
-    ap.add_argument("--model-jauh", default=None, help="checkpoint; bawaan model_dqn/id0N_jauh.pt")
-    ap.add_argument("--model-dekat", default=None, help="checkpoint; bawaan model_dqn/id0N_dekat.pt")
+    ap.add_argument("--model", default=None, help="checkpoint; bawaan model_dqn/id0N_jauh.pt")
     ap.add_argument("--n-neg", type=int, default=150)
     ap.add_argument("--batas-negatif", type=float, default=5.0,
                     help="batas waktu (s) per skenario negatif - tanpa batas, pencarian buntu bisa lama")

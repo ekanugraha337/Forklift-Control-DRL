@@ -11,20 +11,20 @@ Adil karena:
   - lewat jalur kode yang SAMA dengan navigasi.py: Perencana.rencanakan(),
     termasuk mundur ke margin cadangan;
   - tiap rute direncanakan --ulang kali, yang dilaporkan MEDIANNYA (derau
-    penjadwal Windows), setelah pemanasan. Memuat model PyTorch dan
-    perencanaan pertama dilaporkan terpisah - itu ongkos sekali saat
-    navigasi.py dimulai, bukan ongkos tiap rencana.
+    penjadwal Windows), setelah pemanasan. Memuat model dan perencanaan
+    pertama dilaporkan terpisah - itu ongkos sekali saat navigasi.py
+    dimulai, bukan ongkos tiap rencana.
 
 Yang diukur per rute: waktu jam (ms), berhasil,
 perencana yang akhirnya menghasilkan jalur, dan rinciannya:
     Hybrid A*   jumlah ekspansi simpul
-    DQfD        langkah pencarian, forward jaringan, dan porsi waktu di jaringan
-                vs sisanya (pemeriksaan tabrakan, Reeds-Shepp, observasi)
+    DQfD        langkah pencarian, forward jaringan (numpy), dan porsi waktu di
+                jaringan vs sisanya (pemeriksaan tabrakan, tembakan RS, observasi)
 
-Perencana yang dibandingkan:
-    astar       Hybrid A* (bawaan navigasi.py)
-    dqfd        DQfD terbaik-dulu + gerbang mutu + Hybrid A* cadangan (operasional)
-    dqfd-murni  DQfD saja - komputasi DQfD sendirian
+Perencana yang dibandingkan (aturan ver-1-6):
+    astar       Hybrid A* + RS standar (bawaan navigasi.py)
+    dqfd        model jauh DQfD + tembakan RS + gerbang mutu + Hybrid A* cadangan
+    dqfd-murni  model jauh DQfD + tembakan RS saja - komputasi DQfD sendirian
 
 Jangan jalankan bersamaan dengan pelatihan/uji lain: yang diukur waktu.
 Keluaran: model_dqn/banding_komputasi_<peta>.json dan .png
@@ -64,24 +64,24 @@ def rute_uji(rid, peta, n):
         poli = d["ep_rintangan"][e]
         out.append({"e": int(e), "awal": a, "tujuan": (tc[0], tc[1], None if np.isnan(t[2]) else tc[2]),
                     "rintangan": [] if np.isnan(poli).any() else [poli],
-                    "margin": float(d["ep_margin"][e]), "biaya_astar": float(d["ep_biaya_astar"][e])})
+                    "margin": float(d["ep_margin"][e]), "biaya_astar": float(d["ep_biaya"][e])})
     return ar, out
 
 
 class PenghitungForward:
-    """Membungkus forward jaringan untuk menghitung jumlah & waktunya."""
+    """Membungkus forward JaringanNumpy (qv; q memanggil qv) untuk menghitung jumlah & waktunya."""
 
     def __init__(self, net):
         self.net, self.n, self.t = net, 0, 0.0
-        self._asli = net.forward
+        self._asli = net.qv
 
-        def forward(*a, **k):
+        def qv(*a, **k):
             t0 = time.perf_counter()
             r = self._asli(*a, **k)
             self.t += time.perf_counter() - t0
             self.n += 1
             return r
-        net.forward = forward
+        net.qv = qv
 
     def nol(self):
         self.n, self.t = 0, 0.0
@@ -99,8 +99,8 @@ def ukur(rid, peta, n, ulang, perencana=PERENCANA):
         t_bangun = time.perf_counter() - t0
         hit = None
         if jenis != "astar":
-            from drl.perencana_dqfd import muat_model
-            hit = PenghitungForward(muat_model(rid))
+            from drl.perencana_dqfd import muat_model_numpy
+            hit = PenghitungForward(muat_model_numpy(rid))
         # pemanasan: rute pertama, tidak dihitung
         t0 = time.perf_counter()
         per.rencanakan(rute[0]["awal"], rute[0]["tujuan"], rute[0]["rintangan"])

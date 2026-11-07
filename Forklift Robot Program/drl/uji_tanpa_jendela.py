@@ -1,6 +1,6 @@
 """Jalankan drl.uji_robot_nyata tanpa jendela OpenCV (simulasi di latar belakang).
 
-    cd "Forklift Robot Program" && python drl/uji_tanpa_jendela.py --skenario uji_nyata/Gudang.json --simulasi --tanpa-konfirmasi --ulang 2 --perencana astar,astar-rs,dqfd-murni
+    cd "Forklift Robot Program" && python drl/uji_tanpa_jendela.py --skenario uji_nyata/Gudang.json --simulasi --tanpa-konfirmasi --ulang 2 --perencana astar,dqfd-murni
 
 cv2.waitKey diganti tidur selama waktu yang sama, jadi loop 20 Hz tetap berjalan
 pada laju yang sama; tidak ada tombol yang ditekan (mode --simulasi --tanpa-konfirmasi

@@ -1,19 +1,17 @@
 """
-skenario.py - pembangkit skenario + dataset demonstrasi Hybrid A* + Reeds-Shepp untuk DQfD.
+skenario.py - pembangkit skenario + dataset demonstrasi Hybrid A* + Reeds-Shepp untuk model jauh DQfD.
 
 Satu skenario = (peta, robot, margin, rintangan tambahan, awal, tujuan). Untuk
-tiap skenario Hybrid A* dijalankan dengan parameter operasional
-(konfig.PARAM_RENCANA, Reeds-Shepp hanya < analytic_dist dari tujuan), jalurnya
-diurai menjadi aksi dan diputar ulang di lingkungan (adaptor_demo). Bagian A*
-harus identik (biaya = g-cost A*); ekor Reeds-Shepp diurai menjadi primitif
-penuh + pendek (full DQfD, lihat lingkungan.py), dan episode yang ekornya
-menyentuh margin setelah diurai ditolak - dihitung terpisah, bukan galat.
+tiap skenario Hybrid A* peran "demonstrator" dijalankan (konfig.PARAM_RENCANA
++ konfig.ATURAN_RS["demonstrator"]: w = 2,0, h = max(h_RS, h_D), RS di setiap
+node < 60 cm dari tujuan), jalurnya diurai menjadi primitif dan diputar ulang
+di lingkungan model jauh (adaptor_demo.demo_jauh). Jalur hasil putar ulang
+(primitif + tembakan RS) harus IDENTIK dengan jalur A* dan biayanya = g-cost A*.
 
 SATU PENGECUALIAN: batas WAKTU A* (time_limit 2 s) dilepas; yang membatasi
 hanya max_expansions (30000). Batas waktu membuat hasilnya bergantung beban
-CPU - dengan 15 pekerja berebut inti, pencarian yang di robot selesai 1,5 s
-ikut terpotong, dan dataset tidak bisa dibangkitkan ulang persis. Batas
-ekspansi deterministik.
+CPU - dengan banyak pekerja berebut inti, pencarian ikut terpotong, dan
+dataset tidak bisa dibangkitkan ulang persis. Batas ekspansi deterministik.
 
 PETA
     peta constraint asli       SEMUA berkas di Camera/peta_constraint/ (atau
@@ -21,45 +19,36 @@ PETA
     sintetis:<seed>            peta acak meniru pola peta asli - dinding tepi,
                                blok persegi 12-60 cm, blok sudut, kadang dinding
                                sekat yang membentuk koridor. Supaya DQfD belajar
-                               membaca sinar, bukan menghafal tiga peta.
+                               membaca sinar, bukan menghafal peta.
 
 VARIASI per skenario
     margin      8 cm (80%) atau cadangan 6 cm (20%) - dua-duanya dipakai Perencana
     rintangan   30%: badan robot lain parkir di pose acak (Perencana.peta_dengan)
     tujuan      30% heading bebas
-    jarak       15%: 15-60 cm (penyesuaian parkir), sisanya 40-300 cm
+    jarak       15%: 15-60 cm (rute pendek), sisanya 40-300 cm
 
-KEGAGALAN A* disimpan terpisah sebagai SET UJI NEGATIF (tahap 1-2 menunjukkan
-kegagalan di Rumah seluruhnya "tidak ada jalur", bukan batas waktu): DQfD harus
-ikut buntu dengan cepat, bukan memaksakan jalur.
+KEGAGALAN A* disimpan terpisah sebagai SET UJI NEGATIF: DQfD harus ikut buntu
+dengan cepat, bukan memaksakan jalur.
 
 PEMBAGIAN UJI per tugas (satu tugas = satu peta, 20 skenario): setiap tugas
 ke-10 masuk set uji. Untuk peta sintetis artinya petanya sendiri belum pernah
 dilihat saat latihan.
 
-DUA MODEL (versi aksi 4, ver-1-2). Tiap demo A* + RS dipotong di titik serah -
-tepat saat demonstrator beralih ke Reeds-Shepp (adaptor_demo.pisah_demo) -
-menjadi episode model JAUH (primitif A*) dan episode model DEKAT (segmen RS).
-Demo yang tidak bisa dipotong dibuang dengan kode alasan (adaptor_demo.TOLAK). --hanya-dekat membangkitkan skenario yang start-nya sudah
-di dalam radius (15-60 cm dari tujuan): demo tambahan khusus model dekat.
+Demo yang tidak bisa dipakai dibuang dengan kode alasan (adaptor_demo.TOLAK),
+termasuk "rs_di_awal": A* langsung menembak RS dari pose awal, sehingga tidak
+ada langkah model jauh.
 
 KELUARAN (drl/data/)
     demo_jauh_id01.npz   episode model jauh: transisi (obs, aksi, reward,
                          obs_next, selesai, mask, mask_next) + tabel episode
-                         (ep_*), termasuk ep_obs_serah / ep_mask_serah:
-                         observasi model dekat di pose serah, untuk nilai akhir
-                         saat latih (reward di sini TANPA nilai itu)
-    demo_dekat_id01.npz  episode model dekat, ep_awal = pose serah, ep_d0/ep_k0
-    demo_dekat_tambahan_id01.npz   (--hanya-dekat)
-    demo_dekat_dagger_id01.npz     (python -m drl.dagger: demo RS dari pose serah
-                         yang dicapai model jauh terlatih)
+                         (ep_*). Reward langkah terakhir memuat biaya tembakan RS;
+                         ep_biaya = g-cost A* seluruh jalur
     negatif_id01.npz     skenario yang gagal di A*
     ringkasan_id01.json
 
 Jalankan dari folder "Forklift Robot Program":
     python -m drl.skenario --id 1,2 --n 5000
     python -m drl.skenario --id 1,2 --n 5000 --peta Kalibrasi,RuangA --porsi-sintetis 0.3
-    python -m drl.skenario --id 1,2 --n 5000 --hanya-dekat   # demo tambahan model dekat
     python -m drl.skenario --id 1 --n 200 --keluar drl/data/coba
     python -m drl.skenario --pratinjau          # gambar peta sintetis + jalur demo
     python -m drl.skenario --periksa            # integritas + rekonstruksi dari metadata
@@ -84,7 +73,7 @@ import konfig                         # noqa: E402
 import rencana as R                   # noqa: E402
 from forklift_planner import ObstacleMap  # noqa: E402
 from drl import lingkungan as L       # noqa: E402
-from drl.adaptor_demo import (AC, TOLAK, pisah_demo, putar_ulang,  # noqa: E402
+from drl.adaptor_demo import (AC, TOLAK, demo_jauh, putar_ulang,  # noqa: E402
                               rencanakan_terekam, urai_aksi)
 
 PORSI_SINTETIS = 0.3
@@ -94,7 +83,6 @@ def buat_komposisi(peta_asli=None, porsi_sintetis=PORSI_SINTETIS):
     """Porsi episode SUKSES per jenis peta: peta asli dibagi rata, sisanya sintetis.
 
     peta_asli None = semua peta di Camera/peta_constraint/. Tidak ditulis mati:
-    peta yang dipakai berubah (Rumah dan Rumah2 dihapus 2026-10-20), dan
     dataset mencatat komposisinya sendiri di ringkasan_id0N.json.
     """
     peta_asli = list(AC.daftar_peta() if peta_asli is None else peta_asli)
@@ -113,11 +101,10 @@ TUGAS_UJI_SETIAP = 10
 PELUANG_MARGIN_CADANGAN = 0.2
 PELUANG_RINTANGAN = 0.3
 PELUANG_HEADING_BEBAS = 0.3
-PELUANG_DEKAT = 0.15
-JARAK_DEKAT_CM = (15.0, 60.0)
-JARAK_JAUH_CM = (40.0, 300.0)
-# Batas percobaan per jenis peta, kelipatan kuota. ID 02 di Rumah hanya ~24%
-# pasangan acak yang punya jalur, jadi 20x masih longgar.
+PELUANG_PENDEK = 0.15
+JARAK_PENDEK_CM = (15.0, 60.0)
+JARAK_PANJANG_CM = (40.0, 300.0)
+# Batas percobaan per jenis peta, kelipatan kuota.
 MAKS_PERCOBAAN_X = 20
 
 DIR_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -217,23 +204,17 @@ def _pose_bebas(omap, v, rng, percobaan=2000):
     return None
 
 
-def acak_pasangan(env, omap, rng, peluang_dekat=None):
-    """(awal, tujuan) dalam sel, badan bebas dengan margin env. None bila tak ketemu.
-
-    peluang_dekat: peluang jarak di cincin JARAK_DEKAT_CM; None = PELUANG_DEKAT.
-    Dikirim lewat argumen, bukan global: pekerja multiprocessing (spawn) memuat
-    ulang modul, jadi global yang diubah main() tidak sampai ke sana.
-    """
+def acak_pasangan(env, omap, rng):
+    """(awal, tujuan) dalam sel, badan bebas dengan margin env. None bila tak ketemu."""
     s = env.arena.panjang_ke_sel
-    p = PELUANG_DEKAT if peluang_dekat is None else peluang_dekat
-    lo, hi = JARAK_DEKAT_CM if rng.random() < p else JARAK_JAUH_CM
+    lo, hi = JARAK_PENDEK_CM if rng.random() < PELUANG_PENDEK else JARAK_PANJANG_CM
     lo, hi = s(lo), s(hi)
     for _ in range(200):
         awal = _pose_bebas(omap, env.v, rng)
         if awal is None:
             return None
         # Tujuan diambil di cincin jarak [lo, hi] dari awal, bukan seragam di
-        # seluruh peta lalu disaring - untuk rentang dekat itu hampir selalu gagal.
+        # seluruh peta lalu disaring - untuk rentang pendek itu hampir selalu gagal.
         r = math.sqrt(rng.uniform(lo * lo, hi * hi))
         a = rng.uniform(-math.pi, math.pi)
         gx, gy = awal[0] + r * math.cos(a), awal[1] + r * math.sin(a)
@@ -245,14 +226,13 @@ def acak_pasangan(env, omap, rng, peluang_dekat=None):
     return None
 
 
-def acak_satu(arena, per, env, rng, peluang_dekat=None):
+def acak_satu(arena, per, env, rng):
     """Satu skenario acak: margin, rintangan robot lain, lalu pasangan awal-tujuan.
 
     env: {margin_cm: LingkunganRencana}; per: Perencana arena ini (untuk
     peta_dengan). Kembalian (margin, omap, poli_cm atau None, (awal, tujuan)
     atau None). Dipakai pembangkit dataset DAN latihan sendiri DQfD, supaya
-    sebaran skenario keduanya sama. Urutan pemanggilan rng jangan diubah -
-    dataset yang sudah ada bergantung padanya.
+    sebaran skenario keduanya sama.
     """
     cadangan = konfig.MARGIN_CADANGAN_CM[0]
     margin = cadangan if rng.random() < PELUANG_MARGIN_CADANGAN else konfig.SAFETY_MARGIN_CM
@@ -264,7 +244,7 @@ def acak_satu(arena, per, env, rng, peluang_dekat=None):
             xc, yc = arena.ke_cm(lain[0], lain[1])
             poli = np.asarray(A.jejak_badan(xc, yc, math.degrees(lain[2])), np.float64)
             omap = per.peta_dengan([poli])
-    return margin, omap, poli, acak_pasangan(e, omap, rng, peluang_dekat)
+    return margin, omap, poli, acak_pasangan(e, omap, rng)
 
 
 # ---------------------------------------------------------------- pekerja
@@ -272,17 +252,15 @@ def kerja(tugas):
     """Satu tugas = satu peta, SKENARIO_PER_TUGAS skenario. Dijalankan di proses pekerja.
 
     Satu catatan per demo A* yang tersimpan: metadata skenario + episode model
-    jauh dan/atau model dekat (adaptor_demo.pisah_demo).
+    jauh (adaptor_demo.demo_jauh).
     """
     rid, spek, seed = tugas["id"], tugas["peta"], tugas["seed"]
     arena = _arena(spek)
     prof = konfig.profil(rid)
     per = R.Perencana(arena, prof)
     rng = np.random.default_rng([seed, rid])
-    env = {m: L.LingkunganRencana(arena, prof, margin_cm=m, jenis="jauh")
+    env = {m: L.LingkunganRencana(arena, prof, margin_cm=m)
            for m in (konfig.SAFETY_MARGIN_CM, *konfig.MARGIN_CADANGAN_CM)}
-    dekat = {m: L.LingkunganRencana(arena, prof, margin_cm=m, jenis="dekat", planner=e.planner)
-             for m, e in env.items()}
     for e in env.values():
         e.planner.time_limit = float("inf")      # lihat docstring modul
 
@@ -290,7 +268,7 @@ def kerja(tugas):
              "waktu_s": 0.0}
     t_mulai = time.perf_counter()
     for i in range(SKENARIO_PER_TUGAS):
-        margin, omap, poli, pasangan = acak_satu(arena, per, env, rng, tugas.get("peluang_dekat"))
+        margin, omap, poli, pasangan = acak_satu(arena, per, env, rng)
         if pasangan is None:
             continue
         e = env[margin]
@@ -311,33 +289,21 @@ def kerja(tugas):
         except ValueError as ex:
             hasil["galat"].append(f"{spek} #{i}: urai: {ex}")
             continue
-        h = pisah_demo(e, dekat[margin], awal, tujuan, aksi_jauh, ekor, omap)
+        h = demo_jauh(e, awal, tujuan, aksi_jauh, ekor, omap)
         if h["galat"]:
             hasil["galat"].append(f"{spek} #{i}: {h['galat']}")
             continue
         if h["tolak"]:
             hasil["tolak"][h["tolak"]] += 1
-            # Bagian jauh tetap berguna bila hanya pendaratannya yang ditolak.
-            if h["jauh"] is None:
-                continue
-        meta["biaya_astar"] = rek.biaya
-        if h["jauh"] is not None:
-            # Model dekat tanpa observasi sah di pose serah (mis. badan menempel
-            # rintangan robot lain): mask kosong = latih.py memberi biaya buntu.
-            obs_s = h["obs_serah"] if h["obs_serah"] is not None else np.zeros(L.n_obs("dekat"), np.float32)
-            mask_s = h["mask_serah"] if h["mask_serah"] is not None else np.zeros(L.n_aksi("dekat"), bool)
-            meta["jauh"] = {"ep": h["jauh"], "biaya": e.biaya, "obs_serah": obs_s, "mask_serah": mask_s}
-        if h["dekat"] is not None:
-            d0, k0 = (h["serah"][3], h["serah"][4]) if h["serah"] else (0, 0.0)
-            mulai = h["serah"][:3] if h["serah"] else awal
-            meta["dekat"] = {"ep": h["dekat"], "biaya": dekat[margin].biaya, "awal": mulai,
-                             "d0": d0, "k0": k0}
-        if "jauh" not in meta and "dekat" not in meta:
             continue
+        if abs(e.biaya - rek.biaya) > 1e-6 * max(1.0, rek.biaya):
+            hasil["galat"].append(f"{spek} #{i}: biaya episode {e.biaya:.6f} != g-cost A* {rek.biaya:.6f}")
+            continue
+        meta["biaya_astar"] = rek.biaya
+        meta["jauh"] = {"ep": h["ep"], "biaya": e.biaya}
         if tugas.get("jalur"):
-            j = e.jalur() if "jauh" in meta else []
-            jd = dekat[margin].jalur() if "dekat" in meta else []
-            meta["jalur"] = j + jd[1 if j else 0:]
+            meta["jalur"] = e.jalur()
+            meta["titik_serah"] = meta["jalur"][len(e._pose)]
         hasil["episode"].append(meta)
     hasil["waktu_s"] = time.perf_counter() - t_mulai
     return hasil
@@ -348,12 +314,11 @@ def _nan3(p):
     return [np.nan] * 3 if p is None else [p[0], p[1], np.nan if p[2] is None else p[2]]
 
 
-def _kolom_meta(daftar, awal=None):
+def _kolom_meta(daftar):
     return {
         "peta": np.array([m["peta"] for m in daftar], dtype=np.str_),
         "margin": np.array([m["margin"] for m in daftar], np.float32),
-        "awal": np.array([_nan3(a) for a in (awal or [m["awal"] for m in daftar])],
-                         np.float64).reshape(-1, 3),
+        "awal": np.array([_nan3(m["awal"]) for m in daftar], np.float64).reshape(-1, 3),
         "tujuan": np.array([_nan3(m["tujuan"]) for m in daftar], np.float64).reshape(-1, 3),
         "rintangan": np.array([np.full((4, 2), np.nan) if m["rintangan"] is None else m["rintangan"]
                                for m in daftar], np.float64).reshape(-1, 4, 2),
@@ -362,12 +327,12 @@ def _kolom_meta(daftar, awal=None):
     }
 
 
-def _simpan_episode(jalur, daftar, jenis, **tambahan):
-    """Episode satu jenis model -> larik transisi + tabel episode (ep_*)."""
+def _simpan_episode(jalur, daftar):
+    """Episode model jauh -> larik transisi + tabel episode (ep_*)."""
     obs, obs2, aksi, rew, sel, mask, mask2, ep_id, t_ke, mulai = [], [], [], [], [], [], [], [], [], []
     n = 0
     for k, m in enumerate(daftar):
-        ep = m[jenis]["ep"]
+        ep = m["jauh"]["ep"]
         T = len(ep["aksi"])
         obs.append(ep["obs"][:-1])
         obs2.append(ep["obs"][1:])
@@ -380,10 +345,10 @@ def _simpan_episode(jalur, daftar, jenis, **tambahan):
         t_ke.append(np.arange(T, dtype=np.int16))
         mulai.append(n)
         n += T
-    meta = _kolom_meta(daftar, [m["dekat"]["awal"] for m in daftar] if jenis == "dekat" else None)
     np.savez_compressed(
         jalur,
-        jenis=np.array(jenis),
+        jenis=np.array(L.JENIS),
+        versi_aksi=np.array(L.VERSI_AKSI),
         obs=np.concatenate(obs).astype(np.float32),
         obs_next=np.concatenate(obs2).astype(np.float32),
         aksi=np.concatenate(aksi).astype(np.int8),
@@ -394,39 +359,24 @@ def _simpan_episode(jalur, daftar, jenis, **tambahan):
         ep_id=np.concatenate(ep_id),
         t=np.concatenate(t_ke),
         ep_mulai=np.array(mulai, np.int64),
-        ep_langkah=np.array([len(m[jenis]["ep"]["aksi"]) for m in daftar], np.int16),
-        ep_biaya=np.array([m[jenis]["biaya"] for m in daftar], np.float64),
-        ep_biaya_astar=np.array([m["biaya_astar"] for m in daftar], np.float64),
-        **{f"ep_{k}": v for k, v in meta.items()},
-        **tambahan,
+        ep_langkah=np.array([len(m["jauh"]["ep"]["aksi"]) for m in daftar], np.int16),
+        ep_biaya=np.array([m["jauh"]["biaya"] for m in daftar], np.float64),
+        **{f"ep_{k}": v for k, v in _kolom_meta(daftar).items()},
     )
     return n
 
 
-def simpan(rid, episode, negatif, dir_keluar, hanya_dekat=False):
-    """Pisahkan catatan menjadi dataset model jauh dan model dekat, lalu simpan."""
+def simpan(rid, episode, negatif, dir_keluar):
+    """Simpan dataset model jauh dan set negatif."""
     episode = sorted(episode, key=lambda m: (m["tugas"], m["i"]))
     negatif = sorted(negatif, key=lambda m: (m["tugas"], m["i"]))
     os.makedirs(dir_keluar, exist_ok=True)
-    keluar, n_trans = [], {}
-    jauh = [m for m in episode if "jauh" in m]
-    dekat = [m for m in episode if "dekat" in m]
-    if jauh and not hanya_dekat:
+    keluar, n_trans = [], 0
+    if episode:
         p = os.path.join(dir_keluar, f"demo_jauh_id{rid:02d}.npz")
-        n_trans["jauh"] = _simpan_episode(
-            p, jauh, "jauh",
-            ep_obs_serah=np.array([m["jauh"]["obs_serah"] for m in jauh], np.float32),
-            ep_mask_serah=np.array([m["jauh"]["mask_serah"] for m in jauh], bool))
+        n_trans = _simpan_episode(p, episode)
         keluar.append(p)
-    if dekat:
-        nama = "demo_dekat_tambahan" if hanya_dekat else "demo_dekat"
-        p = os.path.join(dir_keluar, f"{nama}_id{rid:02d}.npz")
-        n_trans["dekat"] = _simpan_episode(
-            p, dekat, "dekat",
-            ep_d0=np.array([m["dekat"]["d0"] for m in dekat], np.int8),
-            ep_k0=np.array([m["dekat"]["k0"] for m in dekat], np.float64))
-        keluar.append(p)
-    if negatif and not hanya_dekat:
+    if negatif:
         p = os.path.join(dir_keluar, f"negatif_id{rid:02d}.npz")
         np.savez_compressed(
             p,
@@ -443,7 +393,7 @@ def _jenis(spek):
     return "sintetis" if spek.startswith("sintetis:") else spek
 
 
-def bangkitkan(ids, n_target, dir_keluar, seed, pekerja, hanya_dekat=False):
+def bangkitkan(ids, n_target, dir_keluar, seed, pekerja):
     """Bagikan tugas ke proses pekerja sampai kuota episode sukses tiap jenis peta terpenuhi."""
     import multiprocessing as mp
 
@@ -463,7 +413,6 @@ def bangkitkan(ids, n_target, dir_keluar, seed, pekerja, hanya_dekat=False):
         no = k * 16 + list(KOMPOSISI).index(jenis)
         spek = f"sintetis:{seed * 100000 + rid * 10000 + k}" if jenis == "sintetis" else jenis
         return {"id": rid, "peta": spek, "seed": seed * 1000003 + no, "no": no, "k": k,
-                "peluang_dekat": PELUANG_DEKAT,
                 "uji": k % TUGAS_UJI_SETIAP == TUGAS_UJI_SETIAP - 1}
 
     def perlu(kunci):
@@ -509,10 +458,9 @@ def bangkitkan(ids, n_target, dir_keluar, seed, pekerja, hanya_dekat=False):
 
     for rid in ids:
         h = hasil[rid]
-        keluar, n_trans = simpan(rid, h["episode"], h["negatif"], dir_keluar, hanya_dekat)
+        keluar, n_trans = simpan(rid, h["episode"], h["negatif"], dir_keluar)
         ring = ringkas(rid, h, kuota, sukses, ditemukan, percobaan, n_trans, time.time() - t0)
-        nama = "ringkasan_dekat_tambahan" if hanya_dekat else "ringkasan"
-        with open(os.path.join(dir_keluar, f"{nama}_id{rid:02d}.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(dir_keluar, f"ringkasan_id{rid:02d}.json"), "w", encoding="utf-8") as f:
             json.dump(ring, f, indent=2, ensure_ascii=False)
         cetak_ringkasan(ring)
         for p in keluar:
@@ -563,34 +511,30 @@ def ringkas(rid, h, kuota, sukses, ditemukan, percobaan, n_trans, dt):
     for j in KOMPOSISI:
         e = [m for m in ep if _jenis(m["peta"]) == j]
         g = [m for m in neg if _jenis(m["peta"]) == j]
-        lj = [len(m["jauh"]["ep"]["aksi"]) for m in e if "jauh" in m] or [0]
-        ld = [len(m["dekat"]["ep"]["aksi"]) for m in e if "dekat" in m] or [0]
+        lj = [len(m["jauh"]["ep"]["aksi"]) for m in e] or [0]
         per_jenis[j] = {
             "sukses": sukses[(rid, j)], "kuota": kuota[(rid, j)], "percobaan": percobaan[(rid, j)],
             "ditemukan": ditemukan[(rid, j)],
             "negatif": len(g), "alasan_negatif": dict(Counter(m["alasan"] for m in g)),
-            "jauh": sum("jauh" in m for m in e), "dekat": sum("dekat" in m for m in e),
-            "langkah_jauh_rata": float(np.mean(lj)), "langkah_dekat_rata": float(np.mean(ld)),
-            "langkah_maks": int(max(lj + ld)),
+            "langkah_rata": float(np.mean(lj)), "langkah_maks": int(max(lj)),
             "astar_ms_rata_sukses": float(1000 * np.mean([m["waktu_astar"] for m in e])) if e else 0.0,
             "astar_ms_rata_gagal": float(1000 * np.mean([m["waktu_astar"] for m in g])) if g else 0.0,
         }
-    hist = {}
-    for jenis in L.JENIS:
-        a = [m[jenis]["ep"]["aksi"] for m in ep if jenis in m]
-        semua = np.concatenate(a) if a else np.zeros(0, int)
-        hist[jenis] = [int(x) for x in np.bincount(semua, minlength=L.n_aksi(jenis))]
+    a = [m["jauh"]["ep"]["aksi"] for m in ep]
+    semua = np.concatenate(a) if a else np.zeros(0, int)
     return {
-        "robot": rid, "episode": len(ep), "transisi": {k: int(v) for k, v in n_trans.items()},
-        "episode_jauh": sum("jauh" in m for m in ep), "episode_dekat": sum("dekat" in m for m in ep),
+        "robot": rid, "episode": len(ep), "transisi": int(n_trans),
         "episode_uji": int(sum(m["uji"] for m in ep)), "negatif": len(neg),
         "galat_putar_ulang": h["galat"][:20], "jumlah_galat": len(h["galat"]),
         "ditolak": {k: int(h["tolak"].get(k, 0)) for k in TOLAK},
-        "komposisi": KOMPOSISI, "radius_serah_paksa_cm": L.RADIUS_SERAH_PAKSA_CM,
-        "versi_aksi": L.VERSI_AKSI, "radius_serah_cm": konfig.PARAM_RENCANA["analytic_dist"],
-        "toleransi_dekat": [L.TOL_DEKAT_CM, L.TOL_DEKAT_DEG],
+        "komposisi": KOMPOSISI, "versi_aksi": L.VERSI_AKSI,
+        "demonstrator": {**{k: konfig.PARAM_RENCANA[k] for k in ("h_weight",)},
+                         "heuristik": "max(h_RS, h_D)", **konfig.ATURAN_RS["demonstrator"]},
+        "radius_serah_cm": konfig.ATURAN_RS["demonstrator"]["analytic_dist"],
+        "radius_serah_paksa_cm": L.RADIUS_SERAH_PAKSA_CM,
         "waktu_dinding_s": dt, "waktu_cpu_s": h["waktu_s"],
-        "per_jenis": per_jenis, "histogram_aksi": hist,
+        "per_jenis": per_jenis,
+        "histogram_aksi": [int(x) for x in np.bincount(semua, minlength=L.N_AKSI)],
         "margin_cadangan": int(sum(m["margin"] < konfig.SAFETY_MARGIN_CM for m in ep)),
         "dengan_rintangan": int(sum(m["rintangan"] is not None for m in ep)),
         "heading_bebas": int(sum(m["tujuan"][2] is None for m in ep)),
@@ -598,29 +542,19 @@ def ringkas(rid, h, kuota, sukses, ditemukan, percobaan, n_trans, dt):
 
 
 def cetak_ringkasan(r):
-    print(f"\n=== ID {r['robot']:02d}: {r['episode']} demo A* -> episode jauh {r['episode_jauh']}, "
-          f"dekat {r['episode_dekat']} ({r['episode_uji']} uji), transisi {r['transisi']}, "
-          f"{r['negatif']} negatif, galat putar-ulang {r['jumlah_galat']}")
+    print(f"\n=== ID {r['robot']:02d}: {r['episode']} episode model jauh ({r['episode_uji']} uji), "
+          f"{r['transisi']} transisi, {r['negatif']} negatif, galat putar-ulang {r['jumlah_galat']}")
     print("    ditolak: " + ", ".join(f"{k} {v}" for k, v in r["ditolak"].items()))
-    print("    peta        sukses/kuota  percobaan  A* ketemu  jauh/dekat   langkah jauh/dekat  "
-          "A* ms sukses/gagal  alasan gagal")
+    print("    peta        sukses/kuota  percobaan  A* ketemu  langkah rata/maks  A* ms sukses/gagal  alasan gagal")
     for j, s in r["per_jenis"].items():
         laju = s["ditemukan"] / s["percobaan"] if s["percobaan"] else 0.0
         print(f"    {j:<10} {s['sukses']:>6}/{s['kuota']:<6} {s['percobaan']:>9}  {100 * laju:4.0f}%  "
-              f"{s['jauh']:>5}/{s['dekat']:<5}  {s['langkah_jauh_rata']:7.1f} / {s['langkah_dekat_rata']:<6.1f} "
-              f"{s['astar_ms_rata_sukses']:7.0f} / {s['astar_ms_rata_gagal']:<7.0f}  {s['alasan_negatif']}")
-    for jenis, h in r["histogram_aksi"].items():
-        h = np.array(h, float)
-        p = 100 * h / max(1.0, h.sum())
-        if jenis == "jauh":
-            teks = (f"    aksi jauh  (%)  maju " + " ".join(f"{x:4.1f}" for x in p[:7]) +
-                    " | mundur " + " ".join(f"{x:4.1f}" for x in p[7:14]))
-        else:
-            # kata RS: 44 jenis x 2 titik sambung - tampilkan yang paling sering
-            urut = np.argsort(-p)[:8]
-            teks = ("    kata RS (%)     " + "  ".join(f"{L.nama_kata(a)} {p[a]:.1f}" for a in urut if p[a] > 0)
-                    + f" | masuk mundur {p[L.N_KATA_RS:].sum():.1f}")
-        print(teks)
+              f"{s['langkah_rata']:9.1f} / {s['langkah_maks']:<5} {s['astar_ms_rata_sukses']:7.0f} / "
+              f"{s['astar_ms_rata_gagal']:<7.0f}  {s['alasan_negatif']}")
+    h = np.array(r["histogram_aksi"], float)
+    p = 100 * h / max(1.0, h.sum())
+    print(f"    aksi (%)  maju " + " ".join(f"{x:4.1f}" for x in p[:7]) +
+          " | mundur " + " ".join(f"{x:4.1f}" for x in p[7:14]))
     print(f"    variasi: margin 6 cm {r['margin_cadangan']}, rintangan robot lain {r['dengan_rintangan']}, "
           f"heading bebas {r['heading_bebas']}")
     for g in r["galat_putar_ulang"][:5]:
@@ -628,40 +562,35 @@ def cetak_ringkasan(r):
 
 
 # ---------------------------------------------------------------- periksa
-def berkas_demo(dir_data, rid, jenis):
-    """Dataset model jenis ini: [demo_jauh] atau [demo_dekat, demo_dekat_tambahan,
-    demo_dekat_dagger (drl.dagger) - yang ada]."""
-    nama = [f"demo_{jenis}_id{rid:02d}.npz"]
-    if jenis == "dekat":
-        nama += [f"demo_dekat_tambahan_id{rid:02d}.npz", f"demo_dekat_dagger_id{rid:02d}.npz"]
-    return [os.path.join(dir_data, n) for n in nama if os.path.exists(os.path.join(dir_data, n))]
+def berkas_demo(dir_data, rid):
+    """Dataset model jauh robot ini: [demo_jauh_id0N.npz] bila ada, else []."""
+    p = os.path.join(dir_data, f"demo_jauh_id{rid:02d}.npz")
+    return [p] if os.path.exists(p) else []
 
 
 def periksa(rid, dir_data, n_sampel=200, seed=0):
-    """Periksa integritas dataset kedua model. True bila semua lulus.
+    """Periksa integritas dataset model jauh. True bila lulus.
 
     Konsistensi larik: aksi selalu lolos mask, reward negatif, obs_next[t] =
     obs[t+1] di dalam episode, 'selesai' hanya di langkah terakhir.
     Rekonstruksi: n_sampel episode diputar ulang HANYA dari metadata tersimpan
-    (peta, margin, rintangan, awal, tujuan, d0/k0, aksi) - obs, reward, dan
-    mask harus sama persis. Membuktikan dataset berdiri sendiri, tanpa A* lagi.
+    (peta, margin, rintangan, awal, tujuan, aksi) - obs, reward, mask, dan
+    biaya harus sama persis. Membuktikan dataset berdiri sendiri, tanpa A* lagi.
     """
-    lulus = True
-    for jenis in L.JENIS:
-        daftar = berkas_demo(dir_data, rid, jenis)
-        if not daftar:
-            print(f"[!] ID {rid:02d}: dataset model {jenis} tidak ada di {dir_data}")
-            lulus = False
-        for jalur in daftar:
-            lulus &= _periksa_satu(rid, jalur, jenis, n_sampel, seed)
-    return lulus
+    daftar = berkas_demo(dir_data, rid)
+    if not daftar:
+        print(f"[!] ID {rid:02d}: dataset model jauh tidak ada di {dir_data}")
+        return False
+    return all(_periksa_satu(rid, jalur, n_sampel, seed) for jalur in daftar)
 
 
-def _periksa_satu(rid, jalur, jenis, n_sampel, seed):
+def _periksa_satu(rid, jalur, n_sampel, seed):
     with np.load(jalur) as f:
         d = {k: f[k] for k in f.files}      # np.load terkompresi mendekompres ulang tiap akses
     prof = konfig.profil(rid)
     galat = []
+    if int(d.get("versi_aksi", 0)) != L.VERSI_AKSI:
+        galat.append(f"versi aksi dataset {int(d.get('versi_aksi', 0))} != program {L.VERSI_AKSI}")
     N, E = len(d["aksi"]), len(d["ep_mulai"])
     idx = np.arange(N)
     if not d["mask"][idx, d["aksi"]].all():
@@ -676,15 +605,15 @@ def _periksa_satu(rid, jalur, jenis, n_sampel, seed):
         galat.append("obs_next tidak bersambung dengan obs berikutnya")
     if d["mask_next"][akhir].any():
         galat.append("mask_next langkah terakhir tidak kosong")
-    if d["mask"].shape[1] != L.n_aksi(jenis):
-        galat.append(f"lebar mask {d['mask'].shape[1]} != {L.n_aksi(jenis)} aksi model {jenis}")
+    if d["mask"].shape[1] != L.N_AKSI:
+        galat.append(f"lebar mask {d['mask'].shape[1]} != {L.N_AKSI} aksi")
 
     rng = np.random.default_rng(seed)
     per_cache = {}
     for e in rng.choice(E, size=min(n_sampel, E), replace=False):
         spek, margin = str(d["ep_peta"][e]), float(d["ep_margin"][e])
         arena = _arena(spek)
-        env = L.LingkunganRencana(arena, prof, margin_cm=margin, jenis=jenis)
+        env = L.LingkunganRencana(arena, prof, margin_cm=margin)
         omap = arena.omap
         poli = d["ep_rintangan"][e]
         if not np.isnan(poli).any():
@@ -696,9 +625,7 @@ def _periksa_satu(rid, jalur, jenis, n_sampel, seed):
         tujuan = (t[0], t[1], None if np.isnan(t[2]) else t[2])
         s0, T = d["ep_mulai"][e], d["ep_langkah"][e]
         aksi = [int(a) for a in d["aksi"][s0:s0 + T]]
-        d0 = int(d["ep_d0"][e]) if "ep_d0" in d else 0
-        k0 = float(d["ep_k0"][e]) if "ep_k0" in d else 0.0
-        ep, g = putar_ulang(env, awal, tujuan, aksi, omap, d0=d0, k0=k0)
+        ep, g = putar_ulang(env, awal, tujuan, aksi, omap)
         if g:
             galat.append(f"episode {e} ({spek}): {g}")
         elif not (np.array_equal(ep["obs"][:-1], d["obs"][s0:s0 + T])
@@ -718,23 +645,21 @@ def _periksa_satu(rid, jalur, jenis, n_sampel, seed):
 
 # --------------------------------------------------------------- pratinjau
 def gambar_episode(arena, meta, jalur, v):
-    """Occupancy + rintangan + jalur (hijau maju, oranye mundur) + badan awal/tujuan."""
+    """Occupancy + rintangan + jalur (hijau maju, oranye mundur) + badan awal/tujuan + titik serah."""
     img = cv2.cvtColor(255 - arena.occ, cv2.COLOR_GRAY2BGR)
     if meta["rintangan"] is not None:
         cv2.fillPoly(img, [arena.sel_poligon(meta["rintangan"])], (160, 160, 160))
     for a, b in zip(jalur[:-1], jalur[1:]):
         warna = (0, 170, 0) if b[3] > 0 else (0, 140, 255)
         cv2.line(img, (int(a[0]), int(a[1])), (int(b[0]), int(b[1])), warna, 2, cv2.LINE_AA)
-    if "jauh" in meta and "dekat" in meta:
-        sx, sy = meta["dekat"]["awal"][:2]
+    if meta.get("titik_serah") is not None:
+        sx, sy = meta["titik_serah"][:2]
         cv2.circle(img, (int(sx), int(sy)), 5, (200, 0, 200), 2, cv2.LINE_AA)
     awal, tuj = meta["awal"], meta["tujuan"]
     cv2.polylines(img, [v.footprint(*awal)], True, (255, 90, 0), 2)
     gyaw = tuj[2] if tuj[2] is not None else jalur[-1][2]
     cv2.polylines(img, [v.footprint(tuj[0], tuj[1], gyaw)], True, (0, 0, 220), 2)
-    nj = len(meta["jauh"]["ep"]["aksi"]) if "jauh" in meta else 0
-    nd = len(meta["dekat"]["ep"]["aksi"]) if "dekat" in meta else 0
-    teks = f"{meta['peta']} m{meta['margin']:.0f} jauh {nj} + dekat {nd} aksi (ungu: serah)"
+    teks = f"{meta['peta']} m{meta['margin']:.0f} model jauh {len(meta['jauh']['ep']['aksi'])} aksi (ungu: serah)"
     cv2.putText(img, teks, (22, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1, cv2.LINE_AA)
     return img
 
@@ -763,7 +688,7 @@ def pratinjau(rid, n_peta, seed, keluar):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Dataset demonstrasi Hybrid A* + Reeds-Shepp untuk DQfD")
+    ap = argparse.ArgumentParser(description="Dataset demonstrasi Hybrid A* + Reeds-Shepp untuk model jauh DQfD")
     ap.add_argument("--id", default="1,2")
     ap.add_argument("--n", type=int, default=5000, help="episode sukses per robot")
     ap.add_argument("--seed", type=int, default=1)
@@ -772,8 +697,6 @@ def main():
     ap.add_argument("--peta", default=None,
                     help="peta asli, dipisah koma; bawaan semua di Camera/peta_constraint/")
     ap.add_argument("--porsi-sintetis", type=float, default=PORSI_SINTETIS)
-    ap.add_argument("--hanya-dekat", action="store_true",
-                    help="skenario start di dalam radius serah (15-60 cm): demo tambahan model dekat")
     ap.add_argument("--pratinjau", action="store_true", help="gambar 6 peta sintetis + jalur demo")
     ap.add_argument("--periksa", action="store_true", help="periksa integritas dataset di --keluar")
     args = ap.parse_args()
@@ -789,15 +712,9 @@ def main():
         for rid in ids:
             pratinjau(rid, 6, args.seed, os.path.join(args.keluar, f"pratinjau_id{rid:02d}.png"))
         return
-    if args.hanya_dekat:
-        # Semua skenario di cincin dekat. Seed digeser supaya skenarionya tidak
-        # mengulang skenario dataset utama.
-        global PELUANG_DEKAT
-        PELUANG_DEKAT = 1.0
-        args.seed += 500
     print(f"[i] {args.n} episode sukses per robot, komposisi {KOMPOSISI}, "
-          f"{args.pekerja} pekerja, seed {args.seed}" + (" - HANYA DEKAT" if args.hanya_dekat else ""))
-    bangkitkan(ids, args.n, args.keluar, args.seed, args.pekerja, args.hanya_dekat)
+          f"{args.pekerja} pekerja, seed {args.seed}")
+    bangkitkan(ids, args.n, args.keluar, args.seed, args.pekerja)
 
 
 if __name__ == "__main__":

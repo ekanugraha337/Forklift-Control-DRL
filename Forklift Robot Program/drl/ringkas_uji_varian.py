@@ -15,8 +15,8 @@ sys.path.insert(0, os.getcwd())
 import arena as A        # noqa: E402
 import wasit as W        # noqa: E402
 
-URUT = ("astar", "astar-rs", "dqfd-murni")
-NAMA = {"astar": "A0 Hybrid A*", "astar-rs": "A3 Hybrid A* RS w2", "dqfd-murni": "D0 DQfD"}
+URUT = ("astar", "dqfd", "dqfd-murni")
+NAMA = {"astar": "Hybrid A* + RS", "dqfd": "DQfD + cadangan A*", "dqfd-murni": "DQfD"}
 
 
 def mundur_tengah(jalur_cm, tujuan, r=60.0):

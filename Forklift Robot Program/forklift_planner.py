@@ -21,7 +21,7 @@ Isi modul:
     VehicleModel        geometri & footprint kendaraan
     ObstacleMap         peta jarak ke rintangan (distance transform)
     reeds_shepp_paths   semua jalur Reeds-Shepp (maju+mundur, radius belok minimum)
-    HybridAStarPlanner  Hybrid A* + ekspansi analitik Reeds-Shepp
+    HybridAStarPlanner  Hybrid A* + ekspansi analitik Reeds-Shepp, h = max(h_RS, h_D)
     PathTracker         pure pursuit per segmen maju/mundur, dengan jeda di titik ganti arah
 """
 import heapq
@@ -326,16 +326,18 @@ class HybridAStarPlanner:
                  xy_reso=12.0, yaw_reso=math.radians(10.0), step=18.0, n_steer=7, sample_ds=6.0,
                  reverse_cost=2.0, switch_cost=80.0, steer_cost=0.3, steer_change_cost=6.0,
                  clearance_pref=15.0, clearance_cost=0.8,
-                 h_weight=1.3, h_reso=12, approach_len=80.0,
+                 h_weight=2.0, h_reso=12, approach_len=80.0,
                  goal_pos_tol=8.0, goal_yaw_tol=math.radians(12.0),
-                 analytic_every=4, analytic_dist=250.0,
+                 analytic_every=4, analytic_dist=0.0,
                  time_limit=2.0, max_expansions=30000,
-                 h_rs=None, serah_saring=False, serah_paksa=0.0):
-        """h_rs: heuristik_rs.TabelRS atau None. Bila ada, heuristik pencarian =
-        max(biaya RS tanpa rintangan, Dijkstra) seperti Dolgov dkk.; None = Dijkstra saja.
-        serah_saring: tembakan RS hanya dicoba bila peta Dijkstra tidak memaksa
-        memutar (biaya = jarak oktil) atau titik acuan < serah_paksa - saringan
-        handover yang sama dengan model jauh DQfD. False = setiap node < analytic_dist."""
+                 h_rs=None):
+        """h_rs: heuristik_rs.TabelRS. Heuristik pencarian = max(biaya RS tanpa
+        rintangan, Dijkstra) seperti Dolgov dkk. rencana.buat_perencana selalu
+        memasangnya; None hanya untuk uji mandiri modul ini (Dijkstra saja).
+
+        Tembakan Reeds-Shepp dicoba di setiap ekspansi ke-analytic_every, dan di
+        setiap node yang titik acuannya < analytic_dist dari tujuan. Aturan per
+        peran perencana ada di konfig.ATURAN_RS."""
         self.v = vehicle
         # Perencana memakai sebagian sudut kemudi saja; sisanya cadangan untuk koreksi pelacak
         self.kappa_max = math.tan(vehicle.max_steer * plan_steer_ratio) / vehicle.L
@@ -356,7 +358,6 @@ class HybridAStarPlanner:
         self.analytic_every, self.analytic_dist = analytic_every, analytic_dist
         self.time_limit, self.max_expansions = time_limit, max_expansions
         self.h_rs = h_rs
-        self.serah_saring, self.serah_paksa = serah_saring, serah_paksa
         self.last_stats = {}
 
     # ---- heuristik 2D sadar-rintangan (Dijkstra dari tujuan) ----
@@ -393,26 +394,13 @@ class HybridAStarPlanner:
         return v if v != float('inf') else math.hypot(gx - x, gy - y)
 
     def _h_cari(self, x, y, yaw, goal):
-        """Heuristik pencarian: Dijkstra, atau max(Dijkstra, RS tanpa rintangan) bila h_rs ada.
-        _h() tetap Dijkstra saja karena juga dipakai sebagai observasi model DQfD."""
+        """Heuristik pencarian: max(Dijkstra, RS tanpa rintangan). RS butuh arah hadap
+        tujuan, jadi tujuan tanpa arah memakai Dijkstra saja. _h() tetap Dijkstra
+        saja karena juga dipakai sebagai observasi model jauh DQfD."""
         hd = self._h(x, y, goal[0], goal[1])
         if self.h_rs is None or goal[2] is None:
             return hd
         return max(hd, self.h_rs.h(x, y, yaw, goal[0], goal[1], goal[2]))
-
-    def _serah_ok(self, x, y, gx, gy):
-        """Saringan handover: < serah_paksa, atau biaya Dijkstra = jarak oktil grid (tidak memutar).
-        Sama dengan LingkunganRencana.bebas_ke_tujuan / _boleh_coba_serah."""
-        if math.hypot(gx - x, gy - y) < self.serah_paksa:
-            return True
-        r = self.h_reso
-        H = self._hcost
-        ny, nx = len(H), len(H[0])
-        ix, iy = min(nx - 1, max(0, int(x // r))), min(ny - 1, max(0, int(y // r)))
-        tx, ty = min(nx - 1, max(0, int(gx // r))), min(ny - 1, max(0, int(gy // r)))
-        dx, dy = abs(ix - tx), abs(iy - ty)
-        oktil = r * (max(dx, dy) + (math.sqrt(2.0) - 1.0) * min(dx, dy))
-        return H[iy][ix] <= oktil + 1e-6
 
     def _key(self, x, y, yaw):
         return (int(x // self.xy_reso), int(y // self.xy_reso), int((yaw % TWO_PI) // self.yaw_reso))
@@ -546,8 +534,7 @@ class HybridAStarPlanner:
                 break
             in_col = node[8]
             if not in_col and (math.hypot(gx - x, gy - y) < self.analytic_dist
-                               or expansions % self.analytic_every == 0) \
-                    and (not self.serah_saring or self._serah_ok(x, y, gx, gy)):
+                               or expansions % self.analytic_every == 0):
                 rs = self._analytic(omap, node, goal)
                 if rs is not None:
                     result = (idx, rs[0])

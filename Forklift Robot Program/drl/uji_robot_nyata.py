@@ -58,7 +58,7 @@ Keluaran (folder uji_nyata/<tanggal>_<peta>/):
     hasil.jsonl     satu baris per percobaan (ditulis segera - aman bila terputus)
     lintasan.csv    pose setiap siklus 20 Hz, semua robot, semua fase
     (--ringkas)     ringkasan.json, ringkasan_tabel.tex, lintasan_<skenario>.png,
-                    rincian_tabel.tex (waktu perencanaan: Hybrid A*, RS, DQfD jauh, DQfD dekat)
+                    rincian_tabel.tex (waktu perencanaan: Hybrid A*, RS, DQfD model jauh)
     (--rinci)       rincian_ulang.json - setiap perencanaan yang tercatat diulang
                     offline untuk mengukur rinciannya (data lama tanpa rincian_ms)
 """
@@ -83,9 +83,8 @@ import konfig                       # noqa: E402
 AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIR_HASIL = os.path.join(AKAR, "uji_nyata")
 PERENCANA_UJI = ("astar", "dqfd-murni")
-NAMA = {"astar": "Hybrid A* + RS", "astar-rs": "Hybrid A* RS w2", "dqfd": "DQfD + cadangan A*",
-        "dqfd-murni": "DQfD murni"}
-WARNA_PLOT = {"astar": "#1f77b4", "astar-rs": "#9467bd", "dqfd": "#2ca02c", "dqfd-murni": "#d62728"}
+NAMA = {"astar": "Hybrid A* + RS", "dqfd": "DQfD + cadangan A*", "dqfd-murni": "DQfD murni"}
+WARNA_PLOT = {"astar": "#1f77b4", "dqfd": "#2ca02c", "dqfd-murni": "#d62728"}
 
 TENANG_S = 1.0          # robot dianggap diam sekian detik setelah SELESAI; pose diukur di sini
 GAGAL_RENCANA_S = 1.0   # SIAP tanpa jalur selama ini setelah tujuan diberikan = perencanaan gagal
@@ -100,7 +99,7 @@ PULANG, KONFIRMASI, UJI, OPERATOR, TAMAT = "PULANG", "KONFIRMASI", "UJI", "OPERA
 LABEL_FASE = {PULANG: "GO HOME", UJI: "CRUISE"}
 
 # Bagian waktu perencanaan (kunci info["rincian_s"] dari rencana.Perencana).
-BAGIAN = (("astar", "Hybrid A*"), ("rs", "RS"), ("dqfd_jauh", "DQfD jauh"), ("dqfd_dekat", "DQfD dekat"),
+BAGIAN = (("astar", "Hybrid A*"), ("rs", "RS"), ("dqfd_jauh", "DQfD model jauh"),
           ("gerbang", "gerbang mutu"), ("lain", "lain"))
 
 
@@ -1009,7 +1008,7 @@ def ringkas(dir_hasil):
     if not semua:
         print("[i] belum ada percobaan tercatat.")
         return
-    perencana = [p for p in ("astar", "astar-rs", "dqfd", "dqfd-murni") if any(h["perencana"] == p for h in semua)]
+    perencana = [p for p in ("astar", "dqfd", "dqfd-murni") if any(h["perencana"] == p for h in semua)]
     ids = sorted({int(r) for h in semua for r in h["robot"]})
     skenario = sorted({h["skenario"] for h in semua})
     out = {"dir": dir_hasil, "per_perencana": {}}
@@ -1117,16 +1116,16 @@ def _cetak_rincian(r, judul):
 
 
 def _tabel_rincian_latex(dir_hasil, r):
-    """Baris tabel rincian waktu perencanaan: Hybrid A* | RS | DQfD jauh | DQfD dekat | jumlah (ms)."""
+    """Baris tabel rincian waktu perencanaan: Hybrid A* | RS | DQfD model jauh | jumlah (ms)."""
     def f(v):
         return "--" if v is None else f"{v:.1f}".replace(".", "{,}")
     baris = ["% dibuat drl.uji_robot_nyata --ringkas " + os.path.basename(dir_hasil),
-             "% perencana & robot & Hybrid A* & RS & DQfD jauh & DQfD dekat & jumlah (ms, median rencana pertama)"]
+             "% perencana & robot & Hybrid A* & RS & DQfD model jauh & jumlah (ms, median rencana pertama)"]
     for per, o in r.items():
         nama = NAMA.get(per, per).replace("*", "\\textsuperscript{*}")
         for rid, ro in o.items():
             m = ro["pertama_median_ms"]
-            sel = " & ".join(f(m.get(k)) for k in ("astar", "rs", "dqfd_jauh", "dqfd_dekat"))
+            sel = " & ".join(f(m.get(k)) for k in ("astar", "rs", "dqfd_jauh"))
             baris.append(f"{nama} & ID {rid:02d} & {sel} & {f(sum(m.values()))} \\\\")
     p = os.path.join(dir_hasil, "rincian_tabel.tex")
     with open(p, "w", encoding="utf-8") as fh:
