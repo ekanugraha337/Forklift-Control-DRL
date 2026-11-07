@@ -3,7 +3,7 @@ skenario.py - pembangkit skenario + dataset demonstrasi Hybrid A* + Reeds-Shepp 
 
 Satu skenario = (peta, robot, margin, rintangan tambahan, awal, tujuan). Untuk
 tiap skenario Hybrid A* peran "demonstrator" dijalankan (konfig.PARAM_RENCANA
-+ konfig.ATURAN_RS["demonstrator"]: w = 2,0, h = max(h_RS, h_D), RS di setiap
++ konfig.ATURAN_RS["demonstrator"]: w = 2,0, h = max(h_D, h_RS), RS di setiap
 node < 60 cm dari tujuan), jalurnya diurai menjadi primitif dan diputar ulang
 di lingkungan model jauh (adaptor_demo.demo_jauh). Jalur hasil putar ulang
 (primitif + tembakan RS) harus IDENTIK dengan jalur A* dan biayanya = g-cost A*.
@@ -24,7 +24,10 @@ PETA
 VARIASI per skenario
     margin      8 cm (80%) atau cadangan 6 cm (20%) - dua-duanya dipakai Perencana
     rintangan   30%: badan robot lain parkir di pose acak (Perencana.peta_dengan)
-    tujuan      30% heading bebas
+    tujuan      30% tanpa arah hadap - diselesaikan dengan sapuan arah hadap yang
+                sama dengan Perencana (adaptor_demo.rencanakan_terekam_sapu):
+                arah pertama yang menghasilkan jalur menjadi arah tujuan demo,
+                jadi demonstrator selalu memakai h = max(h_D, h_RS)
     jarak       15%: 15-60 cm (rute pendek), sisanya 40-300 cm
 
 KEGAGALAN A* disimpan terpisah sebagai SET UJI NEGATIF: DQfD harus ikut buntu
@@ -73,8 +76,8 @@ import konfig                         # noqa: E402
 import rencana as R                   # noqa: E402
 from forklift_planner import ObstacleMap  # noqa: E402
 from drl import lingkungan as L       # noqa: E402
-from drl.adaptor_demo import (AC, TOLAK, demo_jauh, putar_ulang,  # noqa: E402
-                              rencanakan_terekam, urai_aksi)
+from drl.adaptor_demo import (AC, TOLAK, arah_sapuan, demo_jauh, putar_ulang,  # noqa: E402
+                              rencanakan_terekam_sapu, urai_aksi)
 
 PORSI_SINTETIS = 0.3
 
@@ -274,14 +277,18 @@ def kerja(tugas):
         e = env[margin]
         awal, tujuan = pasangan
         meta = {"peta": spek, "margin": margin, "awal": awal, "tujuan": tujuan,
-                "rintangan": poli, "tugas": tugas["no"], "i": i, "uji": tugas["uji"]}
+                "rintangan": poli, "tugas": tugas["no"], "i": i, "uji": tugas["uji"],
+                "arah_bebas": tujuan[2] is None}
 
         t0 = time.perf_counter()
-        jalur, rek = rencanakan_terekam(e.planner, omap, awal, tujuan)
+        jalur, rek, tujuan = rencanakan_terekam_sapu(e.planner, omap, awal, tujuan)
         meta["waktu_astar"] = time.perf_counter() - t0
+        meta["tujuan"] = tujuan
         if not jalur:
             meta["alasan"] = rek.stats.get("reason", "")
             meta["ekspansi"] = rek.stats.get("expansions", 0)
+            if tujuan[2] is None:          # semua arah gagal: simpan dengan arah sapuan pertama
+                meta["tujuan"] = (tujuan[0], tujuan[1], arah_sapuan(awal, tujuan)[0])
             hasil["negatif"].append(meta)
             continue
         try:
@@ -529,7 +536,9 @@ def ringkas(rid, h, kuota, sukses, ditemukan, percobaan, n_trans, dt):
         "ditolak": {k: int(h["tolak"].get(k, 0)) for k in TOLAK},
         "komposisi": KOMPOSISI, "versi_aksi": L.VERSI_AKSI,
         "demonstrator": {**{k: konfig.PARAM_RENCANA[k] for k in ("h_weight",)},
-                         "heuristik": "max(h_RS, h_D)", **konfig.ATURAN_RS["demonstrator"]},
+                         "heuristik": "max(h_D, h_RS)", "arah_bebas": "sapuan arah hadap",
+                         **konfig.ATURAN_RS["demonstrator"]},
+        "masukan_heuristik_model": "max(h_D, h_RS)",
         "radius_serah_cm": konfig.ATURAN_RS["demonstrator"]["analytic_dist"],
         "radius_serah_paksa_cm": L.RADIUS_SERAH_PAKSA_CM,
         "waktu_dinding_s": dt, "waktu_cpu_s": h["waktu_s"],
@@ -537,7 +546,7 @@ def ringkas(rid, h, kuota, sukses, ditemukan, percobaan, n_trans, dt):
         "histogram_aksi": [int(x) for x in np.bincount(semua, minlength=L.N_AKSI)],
         "margin_cadangan": int(sum(m["margin"] < konfig.SAFETY_MARGIN_CM for m in ep)),
         "dengan_rintangan": int(sum(m["rintangan"] is not None for m in ep)),
-        "heading_bebas": int(sum(m["tujuan"][2] is None for m in ep)),
+        "arah_bebas_disapu": int(sum(m["arah_bebas"] for m in ep)),
     }
 
 
@@ -556,7 +565,7 @@ def cetak_ringkasan(r):
     print(f"    aksi (%)  maju " + " ".join(f"{x:4.1f}" for x in p[:7]) +
           " | mundur " + " ".join(f"{x:4.1f}" for x in p[7:14]))
     print(f"    variasi: margin 6 cm {r['margin_cadangan']}, rintangan robot lain {r['dengan_rintangan']}, "
-          f"heading bebas {r['heading_bebas']}")
+          f"tujuan arah bebas (disapu) {r['arah_bebas_disapu']}")
     for g in r["galat_putar_ulang"][:5]:
         print(f"    [!] {g}")
 

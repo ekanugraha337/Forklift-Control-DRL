@@ -3,7 +3,7 @@ Struktur **model jauh DQfD** per robot, versi aksi 6, branch `ver-1-4`, 2026-10-
 > [!warning] Dibersihkan 2026-11-07 (aturan ver-1-6)
 > Semua bagian model dekat, hasil model lama, dan keputusan terbuka yang sudah usang dihapus. Aturan yang berlaku sekarang (branch `ver-1-6`):
 > - **Hybrid A\* + RS (`astar`):** w = 2,0, h = max(h_RS, h_D), tembakan RS dicoba setiap ekspansi ke-4.
-> - **DQfD:** hanya model jauh, dilatih dari demo Hybrid A\* dengan w = 2,0, dan pencarian DQfD juga w = 2,0. Tembakan RS dicoba bila < 60 cm dari tujuan dan tidak ada halangan. Tidak ada model dekat.
+> - **DQfD:** hanya model jauh, dilatih dari demo Hybrid A\* dengan w = 2,0 dan h = max(h_D, h_RS), dan pencarian DQfD juga w = 2,0. Masukan heuristik model jauh juga h = max(h_D, h_RS). Tembakan RS dicoba bila < 60 cm dari tujuan dan tidak ada halangan. Tidak ada model dekat.
 > - **Pelatihan:** gradien dengan PyTorch, forward dengan NumPy, 32 sinar dengan Numba.
 
 > [!note] Inti
@@ -21,7 +21,7 @@ Struktur **model jauh DQfD** per robot, versi aksi 6, branch `ver-1-4`, 2026-10-
 | Meniru | Hybrid A\* |
 | Bekerja | posisi awal → titik serah |
 | Tugas | navigasi memutari rintangan |
-| Melihat rintangan? | ya: 32 sinar + peta Dijkstra |
+| Melihat rintangan? | ya: 32 sinar + heuristik h = max(h_D, h_RS) |
 | Masukan | **47** angka |
 | Keluaran | **14** primitif |
 | Satu episode | banyak langkah, sampai serah |
@@ -59,6 +59,8 @@ Di dataset, model jauh berhenti **tepat** di titik demonstrator beralih ke Reeds
 jalur demo = [awal] + (4 pose per primitif A*) × N + (pose ekor Reeds-Shepp)
 aksi jauh  = primitif A*, diurai PERSIS (1 kelompok 4 pose = 1 primitif)
 ```
+
+Tujuan tanpa arah hadap disapu seperti `Perencana` (searah garis awal–tujuan dulu, lalu ±30°, ±60°, … ±180°); arah pertama yang menghasilkan jalur menjadi arah tujuan demo. Jadi demonstrator selalu memakai h = max(h_D, h_RS).
 
 Demo yang tidak bisa dipakai dibuang dengan kode alasan (`adaptor_demo.TOLAK`):
 
@@ -113,8 +115,8 @@ Kerangka robot (x maju, y samping).
 | 8 | 1 | Arah gerak terakhir | +1 / −1 / 0 |
 | 9 | 1 | Kelengkungan kemudi terakhir | κ/κmax |
 | 10–41 | 32 | **Sinar**: jarak tepi badan ke zona, setiap 11,25°, dari pusat badan | 0 = menempel, 1 = ≥ 100 cm |
-| 42 | 1 | **Heuristik Dijkstra**: biaya tempuh ke tujuan memutari rintangan | ÷ 300 cm |
-| 43–44 | 2 | Arah turun heuristik (cos, sin) | kerangka robot |
+| 42 | 1 | **Heuristik h = max(h_D, h_RS)**: Dijkstra 2D memutari rintangan dan biaya Reeds-Shepp tanpa rintangan, sama dengan heuristik demonstrator | ÷ 300 cm |
+| 43–44 | 2 | Arah turun h = max(h_D, h_RS) ke tetangga 8 grid heuristik (cos, sin) | kerangka robot |
 | 45 | 1 | Margin keselamatan yang dipakai | 8 cm = 1,0 |
 | 46 | 1 | Jarak bebas badan sekarang | ÷ 20 cm, dipotong −1…1 |
 

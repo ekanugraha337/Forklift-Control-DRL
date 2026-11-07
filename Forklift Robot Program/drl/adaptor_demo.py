@@ -2,7 +2,10 @@
 adaptor_demo.py - jalur Hybrid A* -> episode demonstrasi (s, a, r, s') untuk model jauh DQfD.
 
 Demonstratornya Hybrid A* + Reeds-Shepp peran "demonstrator" (rencana.buat_perencana:
-w = 2,0, h = max(h_RS, h_D), RS dicoba di setiap node < 60 cm dari tujuan).
+w = 2,0, h = max(h_D, h_RS), RS dicoba di setiap node < 60 cm dari tujuan).
+Tujuan tanpa arah hadap diselesaikan dengan SAPUAN ARAH HADAP yang sama dengan
+rencana.Perencana (rencanakan_terekam_sapu): arah pertama yang menghasilkan
+jalur menjadi arah tujuan demo, jadi h_RS selalu ikut di heuristik.
 Karena lingkungan perencanaan deterministik dan memakai aritmetika A* sendiri,
 aksi demonstrator tidak perlu ditebak - ia DIREKONSTRUKSI tepat dari jalur:
 
@@ -21,6 +24,7 @@ UJI PENERIMAAN:
     python -m drl.adaptor_demo --uji                      # ID 01 & 02, semua peta
     python -m drl.adaptor_demo --uji --id 2 --peta Kalibrasi --n 30
 
+    Tujuan tanpa arah hadap disapu seperti pembangkit demo (rencanakan_terekam_sapu).
     Lulus bila, untuk SETIAP jalur yang ditemukan A*:
       1. episode jauh lolos mask, SERAH tepat setelah primitif A* terakhir, dan
          jalurnya (primitif + ekor RS) IDENTIK dengan jalur A*;
@@ -55,6 +59,45 @@ TOL_BIAYA = 1e-6
 
 
 # ----------------------------------------------------------------- perekam
+# Sapuan arah hadap untuk tujuan tanpa arah - urutan sama dengan Perencana._sekali:
+# searah garis awal->tujuan dulu, lalu menyimpang +-30 derajat bertahap. +-180
+# adalah arah yang sama, jadi dicoba sekali.
+ARAH_SAPU_DEG = (0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180)
+
+
+def arah_sapuan(awal, tujuan):
+    """Daftar arah hadap tujuan (radian) yang dicoba untuk tujuan tanpa arah."""
+    b = math.atan2(tujuan[1] - awal[1], tujuan[0] - awal[0])
+    return [b + math.radians(d) for d in ARAH_SAPU_DEG]
+
+
+def rencanakan_terekam_sapu(planner, omap, awal, tujuan):
+    """rencanakan_terekam + sapuan arah hadap untuk tujuan tanpa arah (seperti Perencana).
+
+    Kembalian (jalur, rekaman, tujuan_dipakai). Tujuan berarah direncanakan
+    langsung. Tujuan tanpa arah: arah dari arah_sapuan() dicoba berurutan, yang
+    pertama menghasilkan jalur dipakai - tujuan_dipakai = tujuan dengan arah itu.
+    Gagal semua: jalur None, rekaman percobaan pertama dengan jumlah ekspansi
+    seluruh sapuan, alasan "tidak ada jalur" bila salah satu percobaan begitu.
+    """
+    if tujuan[2] is not None:
+        jalur, rek = rencanakan_terekam(planner, omap, awal, tujuan)
+        return jalur, rek, tujuan
+    pertama, ekspansi, alasan = None, 0, []
+    for yaw in arah_sapuan(awal, tujuan):
+        t = (tujuan[0], tujuan[1], yaw)
+        jalur, rek = rencanakan_terekam(planner, omap, awal, t)
+        ekspansi += int(rek.stats.get("expansions", 0) or 0)
+        alasan.append(rek.stats.get("reason", ""))
+        if jalur:
+            rek.stats["expansions"] = ekspansi
+            return jalur, rek, t
+        pertama = pertama or rek
+    pertama.stats = dict(pertama.stats, expansions=ekspansi,
+                         reason="tidak ada jalur" if "tidak ada jalur" in alasan else alasan[0])
+    return None, pertama, tujuan
+
+
 def rencanakan_terekam(planner, omap, awal, tujuan):
     """planner.plan() + g-cost simpul akhir dan ekor Reeds-Shepp-nya.
 
@@ -250,7 +293,7 @@ def uji(ids, peta, n, seed):
     """
     aturan = konfig.ATURAN_RS["demonstrator"]
     print(f"[i] uji penerimaan model jauh: {n} skenario per robot per peta, seed {seed}")
-    print(f"[i] demonstrator: w {konfig.PARAM_RENCANA['h_weight']}, h = max(h_RS, h_D), RS di setiap node "
+    print(f"[i] demonstrator: w {konfig.PARAM_RENCANA['h_weight']}, h = max(h_D, h_RS), RS di setiap node "
           f"< {aturan['analytic_dist']:.0f} cm; serah = < {aturan['analytic_dist']:.0f} cm + peta Dijkstra bebas "
           f"(atau < {L.RADIUS_SERAH_PAKSA_CM} cm) + tembakan RS bebas; toleransi jalur {TOL_JALUR_SEL} sel")
     ringkas = []
@@ -268,7 +311,7 @@ def uji(ids, peta, n, seed):
                                 n_jauh=[], n_rs=[], tolak={})
             for awal, tujuan in acak_skenario(env, rng, n):
                 s.n += 1
-                jalur, rek = rencanakan_terekam(pl, arena.omap, awal, tujuan)
+                jalur, rek, tujuan = rencanakan_terekam_sapu(pl, arena.omap, awal, tujuan)
                 if not jalur:
                     continue
                 s.ditemukan += 1

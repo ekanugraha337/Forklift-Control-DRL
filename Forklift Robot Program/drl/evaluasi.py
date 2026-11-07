@@ -40,7 +40,7 @@ import konfig                                   # noqa: E402
 import rencana as R                             # noqa: E402
 from drl import rollout as RO                   # noqa: E402
 from drl import skenario as S                   # noqa: E402
-from drl.adaptor_demo import rencanakan_terekam  # noqa: E402
+from drl.adaptor_demo import rencanakan_terekam_sapu  # noqa: E402
 from drl.dqfd import muat_checkpoint, periksa_profil  # noqa: E402
 from drl.jaringan_numpy import JaringanNumpy    # noqa: E402
 from drl.perencana_dqfd import jalur_model, mutu_jalur, rencanakan_dqfd  # noqa: E402
@@ -143,7 +143,7 @@ def evaluasi_robot(rid, args):
             r[mode] = x
         pl = perencana_astar(sk)
         t1 = time.perf_counter()
-        jalur, rek = rencanakan_terekam(pl, om, sk.awal, sk.tujuan)
+        jalur, rek, _ = rencanakan_terekam_sapu(pl, om, sk.awal, sk.tujuan)
         r["astar"] = {"sukses": bool(jalur), "ms": 1000 * (time.perf_counter() - t1),
                       "node": rek.stats.get("expansions", 0), "biaya": rek.biaya,
                       "rasio": rek.biaya / acuan if jalur and acuan else None,
