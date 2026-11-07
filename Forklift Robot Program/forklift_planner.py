@@ -394,11 +394,11 @@ class HybridAStarPlanner:
         return v if v != float('inf') else math.hypot(gx - x, gy - y)
 
     def _h_cari(self, x, y, yaw, goal):
-        """Heuristik pencarian h = max(Dijkstra, RS tanpa rintangan) - juga masukan
-        heuristik model jauh DQfD (drl/lingkungan.py). RS butuh arah hadap tujuan;
-        pembangkit demo dan Perencana selalu memberi tujuan berarah (sapuan arah
-        hadap), jadi cabang "Dijkstra saja" hanya untuk pemanggil lain. _h() =
-        bagian Dijkstra saja."""
+        """Heuristik pencarian h = max(Dijkstra, RS tanpa rintangan). RS butuh arah
+        hadap tujuan; pembangkit demo dan Perencana selalu memberi tujuan berarah
+        (sapuan arah hadap), jadi cabang "Dijkstra saja" hanya untuk pemanggil
+        lain. _h() = bagian Dijkstra saja - itulah masukan heuristik model jauh
+        DQfD (drl/lingkungan.py, indeks 42)."""
         hd = self._h(x, y, goal[0], goal[1])
         if self.h_rs is None or goal[2] is None:
             return hd

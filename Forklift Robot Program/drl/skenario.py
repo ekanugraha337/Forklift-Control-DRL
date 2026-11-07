@@ -538,7 +538,7 @@ def ringkas(rid, h, kuota, sukses, ditemukan, percobaan, n_trans, dt):
         "demonstrator": {**{k: konfig.PARAM_RENCANA[k] for k in ("h_weight",)},
                          "heuristik": "max(h_D, h_RS)", "arah_bebas": "sapuan arah hadap",
                          **konfig.ATURAN_RS["demonstrator"]},
-        "masukan_heuristik_model": "max(h_D, h_RS)",
+        "masukan_heuristik_model": "h_D",
         "radius_serah_cm": konfig.ATURAN_RS["demonstrator"]["analytic_dist"],
         "radius_serah_paksa_cm": L.RADIUS_SERAH_PAKSA_CM,
         "waktu_dinding_s": dt, "waktu_cpu_s": h["waktu_s"],

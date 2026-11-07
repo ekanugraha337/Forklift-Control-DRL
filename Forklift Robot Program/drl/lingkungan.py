@@ -6,10 +6,11 @@ Hybrid A* (demonstrator: Hybrid A* + Reeds-Shepp peran "demonstrator", w = 2,0,
 h = max(h_RS, h_D), lihat rencana.buat_perencana):
 
     masukan  pose awal & tujuan + PETA RINTANGAN: 47 angka (tujuan relatif,
-             32 sinar, heuristik h = max(h_D, h_RS) dan arah turunnya, margin,
-             gerak terakhir). h sama persis dengan heuristik demonstrator
-             (HybridAStarPlanner._h_cari): Dijkstra 2D dengan rintangan dan
-             biaya Reeds-Shepp tanpa rintangan, diambil yang terbesar.
+             32 sinar, heuristik Dijkstra h_D dan arah turunnya, margin, gerak
+             terakhir). Demonstratornya sendiri mencari dengan h = max(h_D, h_RS);
+             masukan model sengaja h_D saja: h_RS ditentukan pose tujuan relatif
+             yang sudah jadi masukan, sedangkan h_D membawa informasi rintangan
+             global yang tidak terlihat oleh sinar.
     keluaran 14 primitif (7 tingkat kemudi x maju/mundur), 7,3 cm
 
 SERAH (akhir episode). Model jauh berhenti begitu titik acuan di dalam 60 cm
@@ -60,11 +61,12 @@ N_AKSI = 2 * N_KEMUDI         # 14 primitif
 N_OBS = 47
 N_SINAR = 32
 # Dicatat di checkpoint (dqfd.meta_model): model dengan versi lain ditolak.
-# 8 = ver-1-6: satu model (jauh), demonstrator Hybrid A* w = 2,0, h = max(h_D, h_RS)
+# 9 = ver-1-6: satu model (jauh), demonstrator Hybrid A* w = 2,0, h = max(h_D, h_RS)
 #     (tujuan tanpa arah hadap diselesaikan dengan sapuan arah hadap, jadi h_RS
 #     selalu ikut), serah = < 60 cm + saringan Dijkstra + tembakan RS bebas,
-#     imbalan akhir = biaya RS; masukan heuristik model = h = max(h_D, h_RS).
-VERSI_AKSI = 8
+#     imbalan akhir = biaya RS; masukan heuristik model = h_D (indeks 42) dan
+#     arah turun h_D (indeks 43-44).
+VERSI_AKSI = 9
 
 # Saringan serah: di dalam jarak ini (cm) peta Dijkstra tidak lagi disyaratkan
 # bebas - untuk tujuan yang mepet rintangan. Tembakan RS tetap harus bebas.
@@ -495,7 +497,7 @@ class LingkunganRencana:
         return self._obs_c.copy()
 
     def _obs_jauh(self):
-        """47 angka = masukan Hybrid A*: tujuan, peta rintangan (sinar), heuristik h = max(h_D, h_RS), margin."""
+        """47 angka: tujuan, peta rintangan (sinar + heuristik Dijkstra h_D), margin."""
         o = np.zeros(N_OBS, dtype=np.float32)
         pl = self.planner
         x, y, yaw = self.x, self.y, self.yaw
@@ -517,7 +519,7 @@ class LingkunganRencana:
         o[8] = self.d
         o[9] = self.k / pl.kappa_max
         o[10:10 + N_SINAR] = self._sinar()
-        o[42] = pl._h_cari(x, y, yaw, self.tujuan) / J       # h = max(h_D, h_RS), sama dengan demonstrator
+        o[42] = pl._h(x, y, gx, gy) / J                      # heuristik Dijkstra h_D
         o[43], o[44] = self._arah_heuristik()
         o[45] = self.margin_cm / konfig.SAFETY_MARGIN_CM
         m = self.omap.pose_margin(self.v, x, y, yaw)
@@ -536,38 +538,23 @@ class LingkunganRencana:
         t = _sinar_inti(dist, cx, cy, ux, uy, batas, _SINAR_ITERASI)
         return np.clip((np.minimum(t, batas) - self._tepi) / self._jangkau, 0.0, 1.0)
 
-    def _h_sel(self, ix, iy):
-        """h = max(h_D, h_RS) di pusat sel grid heuristik (ix, iy), dengan arah hadap sekarang.
-
-        h_D dari grid Dijkstra (tak hingga = sel tertutup), h_RS dari tabel RS
-        di pusat sel. Tujuan tanpa arah hadap: h_D saja, sama dengan _h_cari."""
-        pl = self.planner
-        hd = self._hgrid[iy, ix]
-        gx, gy, gyaw = self.tujuan
-        if gyaw is None or pl.h_rs is None or not np.isfinite(hd):
-            return hd
-        r = pl.h_reso
-        return max(hd, pl.h_rs.h((ix + 0.5) * r, (iy + 0.5) * r, self.yaw, gx, gy, gyaw))
-
     def _arah_heuristik(self):
-        """(cos, sin) arah turun heuristik h = max(h_D, h_RS), dalam kerangka robot.
+        """(cos, sin) arah turun heuristik Dijkstra h_D, dalam kerangka robot.
 
-        Arah ke tetangga 8 (grid heuristik, arah hadap sekarang) yang h-nya
-        terkecil - bukan gradien beda-hingga, karena sel tertutup bernilai tak
-        hingga dan gradien di tepinya tidak terdefinisi. Tanpa tetangga yang
-        lebih murah: arah garis lurus ke tujuan.
+        Arah ke tetangga 8 yang biayanya terkecil - bukan gradien beda-hingga,
+        karena sel tertutup bernilai tak hingga dan gradien di tepinya tidak
+        terdefinisi. Tanpa tetangga yang lebih murah: arah garis lurus ke tujuan.
         """
         r = self.planner.h_reso
-        ny, nx = self._hgrid.shape
+        H = self._hgrid
+        ny, nx = H.shape
         ix = min(nx - 1, max(0, int(self.x // r)))
         iy = min(ny - 1, max(0, int(self.y // r)))
-        terbaik, arah = self._h_sel(ix, iy), None
+        terbaik, arah = H[iy, ix], None
         for ddx, ddy in _TETANGGA:
             xx, yy = ix + ddx, iy + ddy
-            if 0 <= xx < nx and 0 <= yy < ny:
-                h = self._h_sel(xx, yy)
-                if h < terbaik:
-                    terbaik, arah = h, (ddx, ddy)
+            if 0 <= xx < nx and 0 <= yy < ny and H[yy, xx] < terbaik:
+                terbaik, arah = H[yy, xx], (ddx, ddy)
         if arah is None:
             arah = (self.tujuan[0] - self.x, self.tujuan[1] - self.y)
             if arah == (0.0, 0.0):
