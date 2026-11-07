@@ -83,8 +83,9 @@ import konfig                       # noqa: E402
 AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIR_HASIL = os.path.join(AKAR, "uji_nyata")
 PERENCANA_UJI = ("astar", "dqfd-murni")
-NAMA = {"astar": "Hybrid A* + RS", "dqfd": "DQfD + cadangan A*", "dqfd-murni": "DQfD murni"}
-WARNA_PLOT = {"astar": "#1f77b4", "dqfd": "#2ca02c", "dqfd-murni": "#d62728"}
+NAMA = {"astar": "Hybrid A* + RS", "astar-rs": "Hybrid A* RS w2", "dqfd": "DQfD + cadangan A*",
+        "dqfd-murni": "DQfD murni"}
+WARNA_PLOT = {"astar": "#1f77b4", "astar-rs": "#9467bd", "dqfd": "#2ca02c", "dqfd-murni": "#d62728"}
 
 TENANG_S = 1.0          # robot dianggap diam sekian detik setelah SELESAI; pose diukur di sini
 GAGAL_RENCANA_S = 1.0   # SIAP tanpa jalur selama ini setelah tujuan diberikan = perencanaan gagal
@@ -1008,7 +1009,7 @@ def ringkas(dir_hasil):
     if not semua:
         print("[i] belum ada percobaan tercatat.")
         return
-    perencana = [p for p in ("astar", "dqfd", "dqfd-murni") if any(h["perencana"] == p for h in semua)]
+    perencana = [p for p in ("astar", "astar-rs", "dqfd", "dqfd-murni") if any(h["perencana"] == p for h in semua)]
     ids = sorted({int(r) for h in semua for r in h["robot"]})
     skenario = sorted({h["skenario"] for h in semua})
     out = {"dir": dir_hasil, "per_perencana": {}}

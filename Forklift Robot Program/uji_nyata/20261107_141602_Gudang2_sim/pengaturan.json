@@ -1,0 +1,27 @@
+{
+ "id": "1,2",
+ "peta": null,
+ "buat": null,
+ "skenario": "uji_nyata/Gudang2.json",
+ "ringkas": null,
+ "rinci": null,
+ "lanjut": null,
+ "perencana": [
+  "astar",
+  "astar-rs",
+  "dqfd-murni"
+ ],
+ "perencana_pulang": "astar",
+ "jadwal": "uji_nyata/Gudang2_jadwal_tahap11.json",
+ "ulang": 2,
+ "toleransi_cm": 5.0,
+ "toleransi_deg": 10.0,
+ "coba_pulang": 3,
+ "batas_uji": 180.0,
+ "batas_pulang": 180.0,
+ "tanpa_konfirmasi": true,
+ "simulasi": true,
+ "derau": 0.0,
+ "url": null,
+ "host": null
+}
