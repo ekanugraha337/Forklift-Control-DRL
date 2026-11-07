@@ -46,6 +46,13 @@ dengan A*), jadi biaya episode = g-cost A* seluruh jalur. Episode berakhir bila
 SERAH (sukses), buntu (semua aksi ter-mask, + BIAYA_BUNTU_CM), atau MAKS_LANGKAH
 (terpotong, bukan gagal - untuk DQN itu bukan keadaan terminal).
 
+JALAN PINTAS RUANG TERBUKA (pintas_terbuka, mati bawaan). Bila margin pose sekarang
+melebihi ambang_terbuka, ke-14 primitif PASTI bebas tabrakan dan penalti jarak-bebasnya
+PASTI nol (lihat _terbuka), jadi _ekspansi dijalankan tanpa cek tabrakan - hasilnya
+sama persis dengan yang dicek. calon_malas() dan siapkan_aksi() melayani pencarian
+lazy (perencana_dqfd.rencanakan_terbaik_malas): 14 primitif tidak disimulasi di muka,
+hanya aksi yang diambil dari heap yang dicek tabrakannya.
+
 SINAR (32 arah) dihitung dengan numba - wajib (ver-1-6), tanpa cadangan numpy.
 """
 import math
@@ -81,6 +88,12 @@ MAKS_LANGKAH = 300           # x 7,3 cm = 22 m, jauh di atas rute terpanjang di 
 # Harus lebih mahal dari jalur mana pun, kalau tidak agen yang menghadapi rute
 # mahal "memilih" buntu.
 BIAYA_BUNTU_CM = 5000.0
+
+# Jalan pintas ruang terbuka (_terbuka). Mati bawaan; DQfDPlanner bisa menyalakannya.
+# Rasio jarak chamfer 5x5 OpenCV (bobot 1; 1,4; 2,1969) terhadap jarak Euclid
+# antar-piksel paling besar ~1,02; dipakai 1,05 supaya ada sisa aman.
+PINTAS_TERBUKA_BAWAAN = False
+_FAKTOR_CHAMFER = 1.05
 
 # Iterasi maksimum sphere tracing per sinar. Langkah terkecil 0,5 sel, jadi
 # sinar yang menyusur dinding pun sampai ke ujung jangkauannya.
@@ -221,6 +234,14 @@ class LingkunganRencana:
         self._rs_calon = None
         self._obs_c = None          # cache observasi(), lihat di sana
 
+        # Ambang jalan pintas ruang terbuka (lihat _terbuka). Titik badan mana pun
+        # bergeser paling jauh step x sqrt(1 + (offset x kappa)^2) dalam satu primitif.
+        p = self.planner
+        off_maks = max(abs(o) for o in v.circle_offsets)
+        self.gerak_maks = p.step * math.sqrt(1.0 + (off_maks * p.kappa_max) ** 2)
+        self.ambang_terbuka = p.clearance_pref + _FAKTOR_CHAMFER * (self.gerak_maks + math.sqrt(2.0))
+        self.pintas_terbuka = PINTAS_TERBUKA_BAWAAN
+
     # ------------------------------------------------------------ episode
     def reset(self, awal, tujuan, omap=None):
         """awal = (gx, gy, yaw); tujuan = (gx, gy, yaw atau None). Dalam SEL.
@@ -290,9 +311,12 @@ class LingkunganRencana:
     def mask(self):
         return self._mask.copy()
 
-    def step(self, a):
+    def step(self, a, hitung_calon=True):
         """Kembalian (obs, reward, selesai, info). reward = -biaya langkah ini
-        (+ biaya tembakan RS bila langkah ini berakhir serah)."""
+        (+ biaya tembakan RS bila langkah ini berakhir serah).
+
+        hitung_calon=False (pencarian lazy): calon keadaan baru TIDAK dihitung -
+        pemanggil memakai calon_malas() / siapkan_aksi(); buntu tidak dideteksi di sini."""
         if self.selesai:
             raise RuntimeError("episode sudah selesai - panggil reset()")
         a = int(a)
@@ -316,8 +340,13 @@ class LingkunganRencana:
             reward -= self.biaya_rs
             info["alasan"] = "serah"
         else:
-            self._hitung_calon()
-            if not self._mask.any():
+            if hitung_calon:
+                self._hitung_calon()
+                buntu = not self._mask.any()
+            else:
+                self._kosongkan_calon()
+                buntu = False
+            if buntu:
                 self.selesai = True
                 reward -= self.biaya_buntu
                 info["alasan"] = "buntu"
@@ -338,7 +367,8 @@ class LingkunganRencana:
         return (self.x, self.y, self.yaw, self.d, self.k, self.in_col,
                 len(self._pose), self.biaya, self.langkah_ke)
 
-    def pulihkan_keadaan(self, s):
+    def pulihkan_keadaan(self, s, hitung_calon=True):
+        """hitung_calon=False (pencarian lazy): calon tidak dihitung ulang."""
         self._obs_c = None
         (self.x, self.y, self.yaw, self.d, self.k, self.in_col,
          n, self.biaya, self.langkah_ke) = s
@@ -346,7 +376,10 @@ class LingkunganRencana:
         self.selesai = self.sukses = False
         self.ekor_rs = None
         self.biaya_rs = 0.0
-        self._hitung_calon()      # mask baru: sel yang dikunjungi sejak itu ikut tertutup
+        if hitung_calon:
+            self._hitung_calon()      # mask baru: sel yang dikunjungi sejak itu ikut tertutup
+        else:
+            self._kosongkan_calon()
 
     def jalur(self):
         """Jalur yang sudah ditempuh, format plan(): [(x, y, yaw, arah), ...] dalam sel.
@@ -421,15 +454,17 @@ class LingkunganRencana:
 
     # -------------------------------------------------------------- calon
     def _hitung_calon(self):
-        """Hitung semua aksi dari keadaan sekarang: hasil + mask. Dipakai ulang step()."""
+        """Hitung semua aksi dari keadaan sekarang: hasil + mask. Dipakai ulang step().
+        Di ruang terbuka (_terbuka) tanpa cek tabrakan - hasilnya sama persis."""
         pl = self.planner
+        cek = not self._terbuka()
         self._calon = [None] * N_AKSI
         self._mask = np.zeros(N_AKSI, dtype=bool)
         for a in range(N_AKSI):
             nd, nk, _ = aksi_info(pl, a)
             if nd < 0 and not self.boleh_mundur:
                 continue
-            hasil = self._ekspansi(nd, nk)
+            hasil = self._ekspansi(nd, nk, cek)
             if hasil is None:
                 continue
             px, py, pyaw = hasil[0][-1][:3]
@@ -438,17 +473,21 @@ class LingkunganRencana:
             self._calon[a] = hasil
             self._mask[a] = True
 
-    def _ekspansi(self, nd, nk):
+    def _ekspansi(self, nd, nk, cek=True):
         """Satu primitif dari keadaan sekarang -> (poses, biaya, masih_menempel) atau None.
 
         SALINAN aritmetika loop ekspansi HybridAStarPlanner.plan(), dengan urutan
         operasi yang sama - supaya jalur dan biaya sama sampai bit terakhir,
         bukan hanya mirip.
+
+        cek=False: tanpa cek tabrakan dan tanpa penalti jarak-bebas, tidak pernah
+        None. Sama persis dengan cek=True bila _terbuka(); selain itu perkiraan
+        (pencarian lazy).
         """
         pl, omap, v = self.planner, self.omap, self.v
         x, y, yaw = self.x, self.y, self.yaw
         in_col = self.in_col
-        m0 = omap.pose_margin(v, x, y, yaw) if in_col else 0.0
+        m0 = omap.pose_margin(v, x, y, yaw) if (cek and in_col) else 0.0
         panjang, n_sub = pl.step, pl.n_sub
         ds = nd * panjang / n_sub
         px, py, pyaw = x, y, yaw
@@ -463,13 +502,14 @@ class LingkunganRencana:
                 px += (math.sin(nyaw) - math.sin(pyaw)) / nk
                 py -= (math.cos(nyaw) - math.cos(pyaw)) / nk
                 pyaw = nyaw
-            m = omap.pose_margin(v, px, py, pyaw)
-            if m > 0:
-                col = False
-                min_m = min(min_m, m)
-            elif not (col and m >= last_m - 0.5):
-                return None
-            last_m = m
+            if cek:
+                m = omap.pose_margin(v, px, py, pyaw)
+                if m > 0:
+                    col = False
+                    min_m = min(min_m, m)
+                elif not (col and m >= last_m - 0.5):
+                    return None
+                last_m = m
             poses.append((px, py, pyaw, nd))
         cost = panjang * (1.0 if nd > 0 else pl.reverse_cost)
         cost += pl.steer_cost * panjang * abs(nk) / pl.kappa_max
@@ -479,6 +519,73 @@ class LingkunganRencana:
         if min_m != float("inf"):
             cost += pl._clearance_penalty(min_m, panjang)
         return poses, cost, col
+
+    def _kosongkan_calon(self):
+        self._calon = [None] * N_AKSI
+        self._mask = np.zeros(N_AKSI, dtype=bool)
+
+    def _terbuka(self):
+        """Ruang terbuka: ke-14 primitif dari pose sekarang PASTI bebas tabrakan dan
+        penalti jarak-bebasnya PASTI nol, tanpa mensimulasi satu pun.
+
+        Dalam satu primitif, pusat lingkaran badan mana pun bergeser paling jauh
+        gerak_maks. Nilai peta jarak (chamfer OpenCV) di titik yang bergeser d
+        turun paling banyak FAKTOR x (d + sqrt 2); sqrt 2 dari pembulatan ke piksel.
+        Jadi bila margin sekarang >= clearance_pref + FAKTOR x (gerak_maks + sqrt 2),
+        setiap sub-titik bermargin >= clearance_pref: tidak menabrak, dan penalti
+        jarak-bebasnya tepat 0. Badan yang sedang menempel tidak pernah terbuka.
+        """
+        if not self.pintas_terbuka or self.in_col:
+            return False
+        return self.omap.pose_margin(self.v, self.x, self.y, self.yaw) >= self.ambang_terbuka
+
+    def calon_malas(self):
+        """Pencarian lazy: [(aksi, biaya, terbuka), ...] dari keadaan sekarang, untuk
+        aksi yang sel ujungnya belum dikunjungi. Pose ujung dari aritmetika gerak saja.
+
+        terbuka=True (_terbuka): pasti bebas tabrakan dan biayanya tepat; aksi langsung
+        siap untuk step(). terbuka=False: tabrakan belum dicek dan biayanya tanpa
+        penalti jarak-bebas - siapkan_aksi() memeriksanya saat aksi diambil dari heap.
+        """
+        pl = self.planner
+        terbuka = self._terbuka()
+        self._kosongkan_calon()
+        out = []
+        for a in range(N_AKSI):
+            nd, nk, _ = aksi_info(pl, a)
+            if nd < 0 and not self.boleh_mundur:
+                continue
+            hasil = self._ekspansi(nd, nk, cek=False)
+            px, py, pyaw = hasil[0][-1][:3]
+            if (pl._key(px, py, pyaw), nd) in self.dikunjungi:
+                continue
+            if terbuka:
+                self._calon[a] = hasil
+                self._mask[a] = True
+            out.append((a, hasil[1], terbuka))
+        return out
+
+    def siapkan_aksi(self, a, tanpa_cek=False):
+        """Pencarian lazy: siapkan aksi a dari keadaan sekarang untuk step(a).
+
+        tanpa_cek=True hanya untuk calon dari keadaan terbuka (aritmetika gerak saja);
+        selain itu simulasi penuh dengan cek tabrakan. Kembalian (poses, biaya,
+        menempel), atau None bila menabrak atau sel ujungnya sudah dikunjungi
+        (cabang lain bisa memasukinya sejak calon dibuat).
+        """
+        pl = self.planner
+        nd, nk, _ = aksi_info(pl, a)
+        hasil = self._ekspansi(nd, nk, cek=False)
+        px, py, pyaw = hasil[0][-1][:3]
+        if (pl._key(px, py, pyaw), nd) in self.dikunjungi:
+            return None
+        if not tanpa_cek:
+            hasil = self._ekspansi(nd, nk, cek=True)
+            if hasil is None:
+                return None
+        self._calon[a] = hasil
+        self._mask[a] = True
+        return hasil
 
     # ---------------------------------------------------------- observasi
     def observasi(self):
