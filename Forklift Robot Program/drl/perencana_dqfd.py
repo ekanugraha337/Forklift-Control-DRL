@@ -297,7 +297,8 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_BAWAAN, batas_waktu=None, bob
             "waktu_s": time.perf_counter() - t0, "jarak_min": jarak_min}
 
 
-def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, terima=None, mulai_ulang=None):
+def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, terima=None, mulai_ulang=None,
+         bobot=BOBOT_TERBAIK):
     """Satu model, satu metode. env sudah di-reset. Kembalian dict rencanakan() + 'metode'.
 
     gabungan: terbaik-dulu (PORSI_WAKTU_TERBAIK dari batas waktu), lalu mundur
@@ -321,7 +322,7 @@ def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, terima=None, mulai_ul
         return h
     bt = None if batas_waktu is None else (PORSI_WAKTU_TERBAIK * batas_waktu if metode == "gabungan"
                                            else batas_waktu)
-    h = rencanakan_terbaik(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=BOBOT_TERBAIK,
+    h = rencanakan_terbaik(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=bobot,
                            terima=terima)
     h["metode"] = "terbaik"
     if h["sukses"] or metode == "terbaik":
@@ -405,7 +406,8 @@ def buat_cek_pendaratan(net_dekat, metode=METODE_BAWAAN, batas_waktu=BATAS_DEKAT
 
 
 def rencanakan_dua(net_jauh, net_dekat, env_jauh, env_dekat, awal, tujuan, omap=None,
-                   metode=METODE_BAWAAN, batas_waktu=None, batas_dekat=BATAS_DEKAT_S, catat=None):
+                   metode=METODE_BAWAAN, batas_waktu=None, batas_dekat=BATAS_DEKAT_S, catat=None,
+                   bobot=BOBOT_TERBAIK):
     """Model jauh sampai serah, lalu model dekat. Tanpa Reeds-Shepp, tanpa A*.
 
     Model jauh berhenti di dalam 60 cm bila TIDAK ADA HALANGAN untuk mendarat,
@@ -472,7 +474,7 @@ def rencanakan_dua(net_jauh, net_dekat, env_jauh, env_dekat, awal, tujuan, omap=
             hasil.update(fase="gagal_dekat" if st["n_serah"] else "gagal_jauh", alasan=info["alasan"])
         else:
             hj = cari(net_jauh, env_jauh, metode, batas_waktu=sisa(),
-                      mulai_ulang=lambda: env_jauh.reset(awal, tujuan, omap)[0])
+                      mulai_ulang=lambda: env_jauh.reset(awal, tujuan, omap)[0], bobot=bobot)
             hasil.update(sukses=hj["sukses"], metode_jauh=hj["metode"], dicoba=hj["dicoba"],
                          alasan=hj["alasan"] if not hj["sukses"] else "")
             if hj["sukses"]:
@@ -566,11 +568,16 @@ class DQfDPlanner:
     """
 
     def __init__(self, astar, arena, profil, margin_cm, cadangan=True,
-                 anggaran=None, dir_model=None, gerbang_k=None, metode=METODE_BAWAAN):
+                 anggaran=None, dir_model=None, gerbang_k=None, metode=METODE_BAWAAN,
+                 bobot=BOBOT_TERBAIK, saring_serah=True):
+        """Opsi varian (benchmark Tahap 1.1): bobot = w terbaik-dulu; metode "gabungan"
+        = dengan cadangan backtracking, "terbaik" = tanpa; saring_serah False = model
+        dekat mencoba mendarat di SETIAP pose < 60 cm, tanpa saringan peta Dijkstra."""
         if metode not in ("terbaik", "mundur", "gabungan"):
             raise ValueError(f"metode DQfD '{metode}' tidak dikenal")
         self.astar = astar
         self.metode = metode
+        self.bobot = float(bobot)
         # Gerbang hanya bermakna bila ada cadangan; tanpa cadangan menolak
         # jalur yang sah hanya membuat robot diam.
         self.gerbang_k = (GERBANG_K if gerbang_k is None else gerbang_k) if cadangan else None
@@ -582,6 +589,7 @@ class DQfDPlanner:
         pustaka = copy.copy(astar)
         self.env_jauh = L.LingkunganRencana(arena, profil, margin_cm=margin_cm, planner=pustaka,
                                             jenis="jauh")
+        self.env_jauh.saring_serah = bool(saring_serah)
         self.env_dekat = L.LingkunganRencana(arena, profil, margin_cm=margin_cm, planner=pustaka,
                                              jenis="dekat")
         self.last_stats = {}
@@ -608,7 +616,8 @@ class DQfDPlanner:
         perkiraan = self._perkiraan(omap, start, goal) if self.gerbang_k is not None else None
         t_gerbang = time.perf_counter() - t0
         h = rencanakan_dua(self.net_jauh, self.net_dekat, self.env_jauh, self.env_dekat,
-                           start, goal, omap, metode=self.metode, batas_waktu=self.time_limit)
+                           start, goal, omap, metode=self.metode, batas_waktu=self.time_limit,
+                           bobot=self.bobot)
         # Rincian waktu (detik) per bagian, dijumlahkan Perencana.rencanakan().
         rincian = {"dqfd_jauh": h["waktu_s"] - h["waktu_dekat_s"], "dqfd_dekat": h["waktu_dekat_s"]}
         if perkiraan is not None:

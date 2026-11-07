@@ -8,6 +8,8 @@ jalur yang dihasilkan kembali ke cm.
 
 PERENCANA BISA DITUKAR (Perencana(..., jenis=...)):
     "astar"       Hybrid A* (bawaan)
+    "astar-rs"    Hybrid A* dengan heuristik max(RS, Dijkstra) dan w = 2,0 (A3,
+                  Tahap 1.1) - hanya untuk uji, bukan bawaan robot
     "dqfd"        jaringan DQfD robot itu (model_dqn/id0N.pt), Hybrid A* sebagai
                   cadangan bila DQfD gagal
     "dqfd-murni"  DQfD saja, tanpa cadangan - untuk menilai DQfD sendirian
@@ -40,7 +42,10 @@ from forklift_planner import HybridAStarPlanner, ObstacleMap, VehicleModel
 konfig.pasang_path_kamera()
 import area_constraint as AC          # noqa: E402
 
-JENIS_PERENCANA = ("astar", "dqfd", "dqfd-murni")
+JENIS_PERENCANA = ("astar", "astar-rs", "dqfd", "dqfd-murni")
+# Varian Hybrid A* yang dipilih lewat nama jenis (uji closed-loop Tahap 1.1):
+# "astar-rs" = A3, heuristik max(RS tanpa rintangan, Dijkstra) dengan w = 2,0.
+OPSI_JENIS = {"astar-rs": {"heuristik": "rs", "h_weight": 2.0}}
 
 
 def _buat_jam_cpu_thread():
@@ -140,10 +145,19 @@ class HybridAStarBertanda(HybridAStarPlanner):
         return jalur
 
 
-def buat_perencana(arena, kendaraan):
+def buat_perencana(arena, kendaraan, opsi=None):
+    """HybridAStarBertanda dari konfig.PARAM_RENCANA.
+
+    opsi (varian baseline, benchmark Tahap 1.1; None = konfigurasi robot):
+      h_weight      bobot heuristik (bawaan PARAM_RENCANA, 1,3)
+      heuristik     "dijkstra" (bawaan) | "rs": max(biaya RS tanpa rintangan, Dijkstra)
+      saring_serah  True = tembakan RS hanya bila peta Dijkstra tidak memaksa memutar
+                    (atau < 25 cm), saringan handover yang sama dengan model jauh DQfD
+    """
     p = konfig.PARAM_RENCANA
     s = arena.panjang_ke_sel
-    return HybridAStarBertanda(
+    opsi = opsi or {}
+    planner = HybridAStarBertanda(
         kendaraan,
         plan_steer_ratio=konfig.PLAN_STEER_RATIO,
         allow_reverse=konfig.ALLOW_REVERSE,
@@ -172,6 +186,16 @@ def buat_perencana(arena, kendaraan):
         time_limit=p["time_limit"],
         max_expansions=p["max_expansions"],
     )
+    if "h_weight" in opsi:
+        planner.h_weight = float(opsi["h_weight"])
+    if opsi.get("heuristik", "dijkstra") == "rs":
+        import heuristik_rs
+        planner.h_rs = heuristik_rs.tabel_untuk(planner)
+    if opsi.get("saring_serah"):
+        from drl.lingkungan import RADIUS_SERAH_PAKSA_CM
+        planner.serah_saring = True
+        planner.serah_paksa = s(RADIUS_SERAH_PAKSA_CM)
+    return planner
 
 
 class Perencana:
@@ -182,12 +206,16 @@ class Perencana:
     jenis: salah satu JENIS_PERENCANA, lihat docstring modul.
     """
 
-    def __init__(self, arena, profil=None, jenis="astar"):
+    def __init__(self, arena, profil=None, jenis="astar", opsi=None):
+        """opsi: varian perencana untuk benchmark (None = konfigurasi robot).
+        jenis "astar": lihat buat_perencana(). jenis DQfD: bobot, saring_serah,
+        metode ("gabungan" = dengan backtracking, "terbaik" = tanpa) - lihat DQfDPlanner."""
         if jenis not in JENIS_PERENCANA:
             raise SystemExit(f"[!] Perencana '{jenis}' tidak dikenal. Yang ada: {', '.join(JENIS_PERENCANA)}")
         self.arena = arena
         self.p = profil or konfig.profil()
         self.jenis = jenis
+        self.opsi = {**OPSI_JENIS.get(jenis, {}), **(opsi or {})}
         self._cache = {}
         self.kendaraan, self.planner = self._untuk(konfig.SAFETY_MARGIN_CM)
         # Margin & kendaraan yang BENAR-BENAR dipakai jalur terakhir. Bisa lebih
@@ -202,13 +230,15 @@ class Perencana:
         kunci = round(float(margin_cm), 3)
         if kunci not in self._cache:
             k = buat_kendaraan(self.arena, kunci, self.p.max_steer_rad)
-            planner = buat_perencana(self.arena, k)
-            if self.jenis != "astar":
+            if not self.jenis.startswith("dqfd"):
+                planner = buat_perencana(self.arena, k, self.opsi)
+            else:
                 # Diimpor di sini, bukan di atas: tanpa DQfD, rencana.py (dan
                 # navigasi.py) tidak perlu PyTorch sama sekali.
                 from drl.perencana_dqfd import DQfDPlanner
-                planner = DQfDPlanner(planner, self.arena, self.p, kunci,
-                                      cadangan=self.jenis == "dqfd")
+                # Hybrid A* di dalam DQfD (pustaka gerak + cadangan) selalu konfigurasi robot.
+                planner = DQfDPlanner(buat_perencana(self.arena, k), self.arena, self.p, kunci,
+                                      cadangan=self.jenis == "dqfd", **self.opsi)
             self._cache[kunci] = (k, planner)
         return self._cache[kunci]
 

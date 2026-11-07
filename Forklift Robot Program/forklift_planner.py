@@ -329,7 +329,13 @@ class HybridAStarPlanner:
                  h_weight=1.3, h_reso=12, approach_len=80.0,
                  goal_pos_tol=8.0, goal_yaw_tol=math.radians(12.0),
                  analytic_every=4, analytic_dist=250.0,
-                 time_limit=2.0, max_expansions=30000):
+                 time_limit=2.0, max_expansions=30000,
+                 h_rs=None, serah_saring=False, serah_paksa=0.0):
+        """h_rs: heuristik_rs.TabelRS atau None. Bila ada, heuristik pencarian =
+        max(biaya RS tanpa rintangan, Dijkstra) seperti Dolgov dkk.; None = Dijkstra saja.
+        serah_saring: tembakan RS hanya dicoba bila peta Dijkstra tidak memaksa
+        memutar (biaya = jarak oktil) atau titik acuan < serah_paksa - saringan
+        handover yang sama dengan model jauh DQfD. False = setiap node < analytic_dist."""
         self.v = vehicle
         # Perencana memakai sebagian sudut kemudi saja; sisanya cadangan untuk koreksi pelacak
         self.kappa_max = math.tan(vehicle.max_steer * plan_steer_ratio) / vehicle.L
@@ -349,6 +355,8 @@ class HybridAStarPlanner:
         self.goal_pos_tol, self.goal_yaw_tol = goal_pos_tol, goal_yaw_tol
         self.analytic_every, self.analytic_dist = analytic_every, analytic_dist
         self.time_limit, self.max_expansions = time_limit, max_expansions
+        self.h_rs = h_rs
+        self.serah_saring, self.serah_paksa = serah_saring, serah_paksa
         self.last_stats = {}
 
     # ---- heuristik 2D sadar-rintangan (Dijkstra dari tujuan) ----
@@ -383,6 +391,28 @@ class HybridAStarPlanner:
         row = self._hcost[min(len(self._hcost) - 1, max(0, int(y // r)))]
         v = row[min(len(row) - 1, max(0, int(x // r)))]
         return v if v != float('inf') else math.hypot(gx - x, gy - y)
+
+    def _h_cari(self, x, y, yaw, goal):
+        """Heuristik pencarian: Dijkstra, atau max(Dijkstra, RS tanpa rintangan) bila h_rs ada.
+        _h() tetap Dijkstra saja karena juga dipakai sebagai observasi model DQfD."""
+        hd = self._h(x, y, goal[0], goal[1])
+        if self.h_rs is None or goal[2] is None:
+            return hd
+        return max(hd, self.h_rs.h(x, y, yaw, goal[0], goal[1], goal[2]))
+
+    def _serah_ok(self, x, y, gx, gy):
+        """Saringan handover: < serah_paksa, atau biaya Dijkstra = jarak oktil grid (tidak memutar).
+        Sama dengan LingkunganRencana.bebas_ke_tujuan / _boleh_coba_serah."""
+        if math.hypot(gx - x, gy - y) < self.serah_paksa:
+            return True
+        r = self.h_reso
+        H = self._hcost
+        ny, nx = len(H), len(H[0])
+        ix, iy = min(nx - 1, max(0, int(x // r))), min(ny - 1, max(0, int(y // r)))
+        tx, ty = min(nx - 1, max(0, int(gx // r))), min(ny - 1, max(0, int(gy // r)))
+        dx, dy = abs(ix - tx), abs(iy - ty)
+        oktil = r * (max(dx, dy) + (math.sqrt(2.0) - 1.0) * min(dx, dy))
+        return H[iy][ix] <= oktil + 1e-6
 
     def _key(self, x, y, yaw):
         return (int(x // self.xy_reso), int(y // self.xy_reso), int((yaw % TWO_PI) // self.yaw_reso))
@@ -492,7 +522,7 @@ class HybridAStarPlanner:
 
         # node = (x, y, yaw, arah, kappa, g, parent, poses, masih_menempel)
         nodes = [(sx, sy, syaw, 0, 0.0, 0.0, -1, [], start_in_col)]
-        heap = [(self.h_weight * self._h(sx, sy, gx, gy), 0)]
+        heap = [(self.h_weight * self._h_cari(sx, sy, syaw, goal), 0)]
         best_g = {self._key(sx, sy, syaw): 0.0}
         closed = set()
         expansions = 0
@@ -516,7 +546,8 @@ class HybridAStarPlanner:
                 break
             in_col = node[8]
             if not in_col and (math.hypot(gx - x, gy - y) < self.analytic_dist
-                               or expansions % self.analytic_every == 0):
+                               or expansions % self.analytic_every == 0) \
+                    and (not self.serah_saring or self._serah_ok(x, y, gx, gy)):
                 rs = self._analytic(omap, node, goal)
                 if rs is not None:
                     result = (idx, rs[0])
@@ -565,7 +596,7 @@ class HybridAStarPlanner:
                         continue
                     best_g[nkey] = ng
                     nodes.append((px, py, pyaw, nd, nk, ng, idx, poses, col))
-                    heapq.heappush(heap, (ng + self.h_weight * self._h(px, py, gx, gy), len(nodes) - 1))
+                    heapq.heappush(heap, (ng + self.h_weight * self._h_cari(px, py, pyaw, goal), len(nodes) - 1))
 
         self.last_stats["expansions"] = expansions
         self.last_stats["time"] = time.time() - t0

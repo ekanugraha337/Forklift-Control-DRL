@@ -562,10 +562,16 @@ class LingkunganRencana:
         oktil = r * (max(dx, dy) + (math.sqrt(2.0) - 1.0) * min(dx, dy))
         return bool(H[iy, ix] <= oktil + 1e-6)
 
+    # False = tanpa saringan peta Dijkstra: setiap pose < 60 cm dicoba didaratkan
+    # (ablasi benchmark Tahap 1.1, DQfDPlanner(saring_serah=False)).
+    saring_serah = True
+
     def _boleh_coba_serah(self, x, y):
         """Saringan cepat: di dalam 60 cm, dan peta Dijkstra bebas (atau < radius paksa)."""
         if not self._di_radius(x, y):
             return False
+        if not self.saring_serah:
+            return True
         if math.hypot(self.tujuan[0] - x, self.tujuan[1] - y) < self.radius_paksa:
             return True
         return self.bebas_ke_tujuan(x, y)
