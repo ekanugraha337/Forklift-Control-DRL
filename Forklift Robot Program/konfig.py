@@ -745,15 +745,25 @@ PARAM_RENCANA = dict(
     max_expansions=30000,
 )
 # Aturan tembakan Reeds-Shepp per peran Hybrid A* (rencana.buat_perencana):
-#   "astar"         perencana pembanding (--perencana astar): RS dicoba di setiap
-#                   ekspansi ke-4, berapa pun jaraknya ke tujuan.
+#   "astar"         perencana pembanding (--perencana astar), sejak 2026-11-08
+#                   SAMA dengan aturan serah DQfD murni supaya perbandingan adil:
+#                   RS dicoba di setiap node < 60 cm dari tujuan, hanya bila peta
+#                   Dijkstra tidak memaksa memutar atau sudah < RADIUS_SERAH_PAKSA_CM
+#                   (saring_serah, = drl/lingkungan._boleh_coba_serah).
+#   "astar-standar" Hybrid A* standar (aturan "astar" sampai 2026-11-08): RS dicoba
+#                   di setiap ekspansi ke-4, berapa pun jaraknya ke tujuan.
 #   "demonstrator"  demonstrator model jauh DQfD dan pustaka geraknya: RS dicoba
 #                   di setiap node yang titik acuannya < 60 cm dari tujuan. Batas
 #                   ini juga batas serah model jauh (drl/lingkungan.py).
 ATURAN_RS = {
-    "astar": dict(analytic_every=4, analytic_dist=0.0),
+    "astar": dict(analytic_every=None, analytic_dist=60.0, saring_serah=True),
+    "astar-standar": dict(analytic_every=4, analytic_dist=0.0),
     "demonstrator": dict(analytic_every=None, analytic_dist=60.0),
 }
+# Saringan serah (cm): di dalam jarak ini peta Dijkstra tidak lagi disyaratkan
+# bebas - untuk tujuan yang mepet rintangan. Tembakan RS tetap harus bebas.
+# Dipakai model jauh DQfD (drl/lingkungan.py) dan Hybrid A* peran "astar".
+RADIUS_SERAH_PAKSA_CM = 25.0
 ALLOW_REVERSE = True
 
 # ===========================================================================

@@ -31,6 +31,8 @@ import time
 import cv2
 import numpy as np
 
+import cepat as _cepat
+
 TWO_PI = 2.0 * math.pi
 
 
@@ -364,11 +366,18 @@ class HybridAStarPlanner:
     def _holonomic_heuristic(self, omap, gx, gy):
         r = self.h_reso
         centers = omap.dist[r // 2::r, r // 2::r]
-        blocked = (centers < self.v.half_width).tolist()
         ny, nx = centers.shape
+        cx, cy = min(nx - 1, max(0, int(gx // r))), min(ny - 1, max(0, int(gy // r)))
+        if _cepat.ADA_NUMBA:
+            # Kernel numba (cepat.dijkstra_grid): loop dan pemecah seri heap yang sama, hasil identik.
+            # Larik numpy-nya disimpan untuk drl/lingkungan.py (masukan h_D DQfD), daftar untuk _h().
+            arr = _cepat.dijkstra_grid(centers < self.v.half_width, cx, cy, r, r * math.sqrt(2.0))
+            self._hcost_np = arr
+            return arr.tolist()
+        self._hcost_np = None
+        blocked = (centers < self.v.half_width).tolist()
         inf = float('inf')
         cost = [[inf] * nx for _ in range(ny)]
-        cx, cy = min(nx - 1, max(0, int(gx // r))), min(ny - 1, max(0, int(gy // r)))
         cost[cy][cx] = 0.0
         heap = [(0.0, cx, cy)]
         diag = r * math.sqrt(2.0)
@@ -470,6 +479,20 @@ class HybridAStarPlanner:
         cands.sort(key=lambda c: c[0])
 
         best = None
+        if _cepat.ADA_NUMBA:
+            # Kernel numba (cepat.rs_periksa): sampling + cek tabrakan + penalti yang sama, hasil identik.
+            offs = getattr(self.v, "_offs_np", None)
+            if offs is None:
+                offs = self.v._offs_np = np.array(self.v.circle_offsets, dtype=np.float64)
+            for cost, segs in cands[:6]:
+                if best is not None and cost >= best[1]:
+                    break
+                poses, cost = _cepat.rs_periksa(x, y, yaw, segs, self.radius, self.sample_ds, omap.dist, offs,
+                                                self.v.circle_radius, self.clearance_cost, self.clearance_pref,
+                                                self.step, cost)
+                if poses is not None and (best is None or cost < best[1]):
+                    best = (poses, cost)
+            return best
         for cost, segs in cands[:6]:
             if best is not None and cost >= best[1]:
                 break

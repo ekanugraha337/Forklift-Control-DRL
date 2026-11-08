@@ -1,0 +1,52 @@
+{
+ "dibuat": "2026-11-08 11:02:37",
+ "skenario": "uji_nyata/Gudang2.json",
+ "peta": "Gudang2",
+ "jarak_cm": 15.0,
+ "penyangga_cm": 10.0,
+ "jadwal": {
+  "S1": {
+   "dqfd-murni": {
+    "mengalah": 1,
+    "lewat": 2,
+    "tahan": [
+     68.03,
+     103.89,
+     57.4
+    ],
+    "konflik_di": [
+     73.2,
+     113.5
+    ],
+    "lepas_di": null,
+    "tunggu_sampai_tiba": true,
+    "tempuh_cm": {
+     "lewat": 244.8,
+     "mengalah": 222.7,
+     "mengalah_sampai_tunggu": 76.6,
+     "lewat_sampai_lepas": 244.8
+    },
+    "makespan_cm": 390.9,
+    "tanpa_jadwal": null,
+    "pilihan": {
+     "1": {
+      "makespan_cm": 390.9,
+      "tahan": [
+       68.03,
+       103.89,
+       57.4
+      ]
+     },
+     "2": {
+      "makespan_cm": 390.9,
+      "tahan": [
+       179.16,
+       107.55,
+       128.04
+      ]
+     }
+    }
+   }
+  }
+ }
+}

@@ -574,3 +574,52 @@ Dikerjakan 2026-11-08 di laptop robot (RTX 5050), dengan prosedur yang sama deng
 | **Model P terpisah** | **0,996** | **0,980** | **98,8 / 5,2%** | 99,7 / 9,3% |
 
 Hasil ini sejalan dengan ID 01 (§13). Sekarang **ID 01 dan ID 02 sama-sama memakai `belajar-periksa` dengan model P terpisah**. Di laptop robot, keduanya mencapai 15/15 rute uji, semuanya dengan "jalur belajar lolos periksa".
+
+## 18. Tabel kelayakan: Hybrid A\* konvensional vs DQfD
+
+Tujuan penelitian: apakah DQfD layak diimplementasikan dibanding Hybrid A\* konvensional.
+
+**Cara ukur** (Mac, 2026-11-08, commit `def8410`):
+- **Perencana yang dibandingkan.** Hybrid A\* + RS standar (`astar`). DQfD `dqfd-murni` = bawaan robot `belajar-periksa` dengan model P terpisah, model ID 01 dan ID 02 yang baru.
+- **Perencanaan.** Semua rute uji: ID 01 470 rute, ID 02 473 rute. Waktu CPU, median 3 ulangan. `python -m drl.ukur_node --id N --uji waktu`.
+- **Makespan.** Simulasi navigasi waktu nyata (`navigasi.py` tanpa jendela, pelacak pure pursuit, derau pose 1,2 cm, wasit aktif): 50 rute satu robot (25 ID 01 + 25 ID 02) dan 10 pasangan ID 01 + ID 02 yang jalurnya berpotongan. `python -m drl.uji_navigasi --id 1,2 --perencana astar,dqfd-murni --n 5`.
+- **Definisi makespan.** Satu robot: dari tujuan diberikan sampai tiba (merencanakan + berjalan). Pasangan: sampai kedua robot tiba.
+- **Data.** `model_dqn/tabel_performa_waktu_id01.json`, `…_id02.json`, `…_navigasi.json`.
+
+| # | Kriteria | Ukuran | Hybrid A\* | DQfD | DQfD / A\* | Keputusan |
+|---|---|---|---:|---:|---:|---|
+| 1 | **Waktu proses per node** | Total CPU ÷ total node | 0,189 ms | **0,126 ms** | 0,67× | **Layak**: lebih singkat |
+| | | Kemiringan regresi | 0,187 ms | **0,107 ms** | 0,57× | |
+| 2 | **Waktu proses per rute** | Median | **3,3 ms** | 4,9 ms | 1,48× | A\* lebih singkat (+1,6 ms) |
+| | | p90 | 56,2 ms | **25,4 ms** | 0,45× | **Layak** |
+| | | Rata-rata | 47,9 ms | **21,7 ms** | 0,45× | **Layak** |
+| | | Maksimum | 4.019 ms | **715 ms** | 0,18× | **Layak** |
+| 3 | **Panjang jalur** | Median | **163,3 cm** | 166,8 cm | 1,02× | Hampir setara |
+| | | Rata-rata | **175,2 cm** | 191,3 cm | 1,09× | DQfD lebih panjang |
+| | | Rasio per rute, median / p90 / maks | – | – | 1,014 / 1,228 / 7,73 | 22,5% rute > 10% lebih panjang; 3,4% > 50% |
+| 4 | **Tingkat tiba** | Perencanaan (943 rute) | 99,8% | 99,8% | – | **Setara** |
+| | | Simulasi navigasi (70 robot) | 69/70 | 69/70 | – | **Setara** |
+| 5 | **Makespan** | Satu robot, median / rata-rata | 16,6 / 17,2 s | **15,9 / 16,3 s** | 0,95× (median per skenario) | **Layak**: DQfD lebih singkat di 58% skenario |
+| | | Dua robot, median / rata-rata | **16,4 / 19,4 s** | 21,5 / 25,8 s | 1,15× (median per skenario) | A\* lebih singkat: DQfD lebih singkat hanya di 20% skenario |
+| – | Keselamatan (syarat) | Badan masuk zona / kontak antar-robot | 0 / 0 | 0 / 0 | – | Setara |
+| | | Estop zona (pose terukur) / jarak robot terdekat | 1 / 6,3 cm | 0 / 7,4 cm | – | |
+
+Per robot, polanya sama:
+
+| | Waktu per node A\* / DQfD | Waktu per rute (median / p90 / rata-rata), A\* → DQfD | Rasio panjang (median / p90) | Tiba A\* / DQfD |
+|---|---|---|---|---|
+| ID 01 | 0,189 / 0,124 ms | 3,4 / 68,0 / 61,9 → 5,1 / 25,9 / 23,3 ms | 1,009 / 1,215 | 99,6 / 99,8% |
+| ID 02 | 0,189 / 0,129 ms | 3,3 / 44,7 / 33,9 → 4,8 / 23,4 / 20,1 ms | 1,020 / 1,249 | 100 / 99,8% |
+
+**Kesimpulan:**
+- **Komputasi: DQfD layak.**
+  - Per node 33% lebih singkat.
+  - Per rute, rata-rata dan p90 sekitar 2,2× lebih singkat, dan kasus terburuknya 5,6× lebih singkat (0,7 vs 4,0 s).
+  - A\* hanya menang di median per rute, karena tembakan RS di ekspansi ke-4 langsung tembus di rute mudah. Selisihnya 1,6 ms, sekitar 0,01% dari makespan, jadi tidak terasa.
+- **Tingkat tiba dan keselamatan: setara.**
+- **Makespan satu robot: DQfD sedikit lebih singkat** (median −4%).
+- **Panjang jalur dan makespan dua robot: DQfD belum layak.** Keduanya bersumber dari hal yang sama: tahap cadangan **backtracking** (`terbaik -> mundur`) menghasilkan jalur memutar yang sangat panjang.
+  - Contohnya rute Rumah #1713: 21 m, padahal A\* 3,5 m, dan habis waktu.
+  - Di pasangan dua robot, rute yang dihitung ulang memutari robot lain sering jatuh ke backtracking. Contohnya Gudang2 #1685/#1671 (31 vs 13 s) dan Rumah2 #3514/#1725 (45 vs 28 s). Skenario tanpa rencana ulang hampir setara.
+- **Perbaikan yang paling menjanjikan:** ganti backtracking dengan Hybrid A\* sebagai cadangan bila DQfD gagal. Ini mode `dqfd`, yang juga punya gerbang mutu 1,3 × perkiraan V. Hasilnya perlu diukur dengan tabel yang sama.
+- **Catatan sampel:** 10 pasangan dua robot masih sedikit.

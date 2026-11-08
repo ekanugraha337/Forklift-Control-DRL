@@ -77,10 +77,13 @@ ANGGARAN_TERBAIK = 1200
 # menabrak atau mode B gagal, rencana ulang dengan lazy (mode A), lalu backtracking.
 PENCARIAN = ("eager", "lazy", "belajar", "selektif", "belajar-periksa")
 PENCARIAN_BAWAAN = "eager"
-# Robot (2026-11-08, catatan Obsidian 20 §15-§16): mode B + periksa jalur akhir + cadangan lazy,
-# dengan P dari model P terpisah (model_dqn/id0N_kepala_p.pt) dan ambang AMBANG_BELAJAR. Model
-# tanpa P (mis. ID 02 versi lama) memakai PENCARIAN_TANPA_P.
-PENCARIAN_ROBOT = "belajar-periksa"
+# Robot sejak 2026-11-08 (siang): lazy (mode A) dengan P dari model P terpisah
+# (model_dqn/id0N_kepala_p.pt) untuk urutan heap (P >= AMBANG_TABRAK di belakang) dan forward
+# Q+P gabungan (jaringan_numpy.NetDenganP). Per node lebih mahal daripada "belajar-periksa"
+# (Mac 0,143 vs 0,125 ms), tetapi node total 38% lebih sedikit, jadi per rute lebih cepat:
+# median 4,5 vs 4,9 ms, p90 17,5 vs 24,6 ms, rata-rata 15,2 vs 21,4 ms (943 rute uji ID 01+02;
+# laptop robot p90 30,4 vs 38,3 ms). Sebelumnya (pagi 2026-11-08) robot memakai "belajar-periksa".
+PENCARIAN_ROBOT = "lazy"
 PENCARIAN_TANPA_P = "lazy"
 # Kepala kelayakan: aksi dengan P(menabrak) >= AMBANG_TABRAK diprediksi menabrak.
 # lazy: tetap masuk heap tetapi di belakang semua aksi lain (f + URUTAN_BELAKANG), jadi

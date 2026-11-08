@@ -59,6 +59,7 @@ import math
 
 import numpy as np
 
+import cepat as _cepat
 import konfig
 import rencana as R
 
@@ -77,7 +78,8 @@ VERSI_AKSI = 9
 
 # Saringan serah: di dalam jarak ini (cm) peta Dijkstra tidak lagi disyaratkan
 # bebas - untuk tujuan yang mepet rintangan. Tembakan RS tetap harus bebas.
-RADIUS_SERAH_PAKSA_CM = 25.0
+# Nilainya di konfig karena Hybrid A* peran "astar" memakai saringan yang sama.
+RADIUS_SERAH_PAKSA_CM = konfig.RADIUS_SERAH_PAKSA_CM
 
 # Normalisasi observasi (cm). Arena 300 x 270 cm -> sekitar [-1, 1].
 JARAK_NORM_CM = 300.0
@@ -244,6 +246,15 @@ class LingkunganRencana:
         self.ambang_terbuka = p.clearance_pref + _FAKTOR_CHAMFER * (self.gerak_maks + math.sqrt(2.0))
         self.pintas_terbuka = PINTAS_TERBUKA_BAWAAN
 
+        # Aksi yang boleh (mundur dilarang -> hanya maju), untuk kernel cepat.calon_aritmetika.
+        self._aksi_sah = [a for a in range(N_AKSI) if aksi_info(p, a)[0] > 0 or self.boleh_mundur]
+        self._nd_sah = [aksi_info(p, a)[0] for a in self._aksi_sah]
+        self._nds = np.array(self._nd_sah, dtype=np.int64)
+        self._nks = np.array([aksi_info(p, a)[1] for a in self._aksi_sah], dtype=np.float64)
+        # Untuk kernel cepat.obs_isi: batas sinar (sama dengan _sinar) dan offset lingkaran badan.
+        self._batas = self._tepi + self._jangkau
+        self._offs = np.array(v.circle_offsets, dtype=np.float64)
+
     # ------------------------------------------------------------ episode
     def reset(self, awal, tujuan, omap=None):
         """awal = (gx, gy, yaw); tujuan = (gx, gy, yaw atau None). Dalam SEL.
@@ -280,7 +291,8 @@ class LingkunganRencana:
 
         # Keadaan bersama di objek perencana, diisi persis seperti plan().
         pl._hcost = pl._holonomic_heuristic(self.omap, gx, gy)
-        self._hgrid = np.array(pl._hcost, dtype=np.float64)
+        hnp = getattr(pl, "_hcost_np", None)          # larik dari kernel numba = isi _hcost
+        self._hgrid = hnp if hnp is not None else np.array(pl._hcost, dtype=np.float64)
         pl._approach_dirs = pl._feasible_approach_dirs(self.omap, self.tujuan)
 
         self.x, self.y, self.yaw = sx, sy, syaw
@@ -583,6 +595,14 @@ class LingkunganRencana:
         pl = self.planner
         terbuka = self._terbuka()
         self._kosongkan_calon()
+        if _cepat.ADA_NUMBA and not terbuka:
+            # Kernel numba: aritmetika _ekspansi(cek=False) yang sama untuk semua aksi sekaligus.
+            _, kunci, biaya = _cepat.calon_aritmetika(
+                self.x, self.y, self.yaw, self._nds, self._nks, pl.step, pl.n_sub, pl.xy_reso, pl.yaw_reso,
+                pl.reverse_cost, pl.steer_cost, pl.steer_change_cost, pl.kappa_max, pl.switch_cost, self.k, self.d)
+            kl, bl, dk = kunci.tolist(), biaya.tolist(), self.dikunjungi
+            return [(a, bl[i], False) for i, a in enumerate(self._aksi_sah)
+                    if ((kl[i][0], kl[i][1], kl[i][2]), self._nd_sah[i]) not in dk]
         out = []
         for a in range(N_AKSI):
             nd, nk, _ = aksi_info(pl, a)
@@ -637,7 +657,29 @@ class LingkunganRencana:
         return self._obs_c.copy()
 
     def _obs_jauh(self):
-        """47 angka: tujuan, peta rintangan (sinar + heuristik Dijkstra h_D), margin."""
+        """47 angka: tujuan, peta rintangan (sinar + heuristik Dijkstra h_D), margin.
+        Dengan numba: satu kernel (cepat.obs_isi) yang isinya salinan kode Python di bawah;
+        cos/sin sudut sinar (numpy) dan hypot (Python) tetap dihitung di sini."""
+        if _cepat.ADA_NUMBA:
+            return self._obs_jauh_cepat()
+        return self._obs_jauh_python()
+
+    def _obs_jauh_cepat(self):
+        o = np.empty(N_OBS, dtype=np.float32)
+        pl = self.planner
+        x, y, yaw = self.x, self.y, self.yaw
+        gx, gy, gyaw = self.tujuan
+        off = self._pusat_off
+        ang = yaw + self._sudut
+        _cepat.obs_isi(o, x, y, yaw, gx, gy, 0.0 if gyaw is None else gyaw, gyaw is not None,
+                       1.0 in pl._approach_dirs, -1.0 in pl._approach_dirs, self.d, self.k, pl.kappa_max,
+                       self._jarak_norm, math.hypot(gx - x, gy - y), self._hgrid, pl.h_reso, self.omap.dist,
+                       x + off * math.cos(yaw), y + off * math.sin(yaw), np.cos(ang), np.sin(ang), self._tepi,
+                       self._batas, self._jangkau, _SINAR_ITERASI, self._offs, self.v.circle_radius,
+                       self.margin_cm / konfig.SAFETY_MARGIN_CM, self._bebas_norm)
+        return o
+
+    def _obs_jauh_python(self):
         o = np.zeros(N_OBS, dtype=np.float32)
         pl = self.planner
         x, y, yaw = self.x, self.y, self.yaw

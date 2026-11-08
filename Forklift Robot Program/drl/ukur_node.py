@@ -67,6 +67,7 @@ import rencana as R                             # noqa: E402
 from drl import banding_baseline as BB          # noqa: E402
 from drl import lingkungan as L                 # noqa: E402
 from drl import perencana_dqfd as PD            # noqa: E402
+from drl import jaringan_numpy as JN            # noqa: E402
 from drl.jaringan_numpy import jalur_cache      # noqa: E402
 
 AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -383,7 +384,8 @@ def uji_waktu(args):
             cat = BB.PencatatNode(per)
             if jenis != "astar":
                 pl0 = per.planner
-                pencarian_dipakai[jenis] = f"{pl0.pencarian}, P {type(pl0.net).__name__}"
+                pencarian_dipakai[jenis] = (f"{pl0.pencarian}, P {type(pl0.net).__name__}"
+                                            + (", forward gabungan" if getattr(pl0.net, "gabung", False) else ""))
             r0 = rute[0]
             per.rencanakan(r0["awal"], r0["tujuan"], r0["rintangan"])            # pemanasan
             for r in rute:
@@ -686,10 +688,16 @@ def uji_rincian(args):
     n_ob = sum(v for k, v in N.items() if "|obs<-" in k)
     si, n_si = cocok("|sinar")
     ah, n_ah = cocok("|arah_hD")
-    obs_us = {"total": 1e6 * ob / n_ob, "sinar_32": 1e6 * si / n_si, "arah_turun_hD": 1e6 * ah / n_ah}
-    obs_us["sisa"] = obs_us["total"] - (1e6 * si + 1e6 * ah) / n_ob
-    print(f"  observasi per panggilan {obs_us['total']:.1f} us = 32 sinar {obs_us['sinar_32']:.1f} us + arah turun h_D "
-          f"{obs_us['arah_turun_hD']:.1f} us + sisa {obs_us['sisa']:.1f} us")
+    if n_si and n_ah:
+        obs_us = {"total": 1e6 * ob / n_ob, "sinar_32": 1e6 * si / n_si, "arah_turun_hD": 1e6 * ah / n_ah}
+        obs_us["sisa"] = obs_us["total"] - (1e6 * si + 1e6 * ah) / n_ob
+        print(f"  observasi per panggilan {obs_us['total']:.1f} us = 32 sinar {obs_us['sinar_32']:.1f} us + arah turun "
+              f"h_D {obs_us['arah_turun_hD']:.1f} us + sisa {obs_us['sisa']:.1f} us")
+    else:
+        # Kernel numba (cepat.obs_isi): sinar dan arah turun h_D di dalam satu panggilan, tidak terpisah.
+        obs_us = {"total": 1e6 * ob / n_ob if n_ob else None, "sinar_32": None, "arah_turun_hD": None, "sisa": None,
+                  "catatan": "satu kernel numba (cepat.obs_isi)"}
+        print(f"  observasi per panggilan {obs_us['total']:.1f} us (satu kernel numba, sinar termasuk)")
 
     # ---- (2) isi _hitung_calon: hitung saja, tanpa waktu (mode eager)
     if malas_mode:
@@ -811,6 +819,24 @@ def uji_rincian(args):
     print(f"(3) forward numpy satu keadaan ({len(X)} observasi nyata x 10): median {np.median(ts):.2f} us, "
           f"p10 {np.percentile(ts, 10):.2f}, p90 {np.percentile(ts, 90):.2f}, rata-rata loop {rata:.2f} us")
     print("    per lapis (median us): " + ", ".join(f"{n} {s:.2f}" for n, s in zip(nama_seg, seg_med)))
+    # q_tabrak model jauh + model P (satu panggilan per simpul pencarian robot): gabungan vs terpisah
+    q_tabrak_us = None
+    mp = PD.muat_model_p_robot(rid)
+    if mp is not None:
+        q_tabrak_us = {}
+        for nama_f, gab in (("gabungan", True), ("terpisah", False)):
+            nd = JN.NetDenganP(net, mp, gabung=gab)
+            for o in X[:300]:
+                nd.q_tabrak(o)
+            ulang_us = []
+            for _ in range(5):
+                t0 = pc()
+                for o in X:
+                    nd.q_tabrak(o)
+                ulang_us.append((pc() - t0) / len(X) * 1e6)
+            q_tabrak_us[nama_f] = float(np.median(ulang_us))
+        print(f"    q_tabrak model jauh + model P: gabungan {q_tabrak_us['gabungan']:.2f} us, "
+              f"terpisah {q_tabrak_us['terpisah']:.2f} us (median 5 x {len(X)} panggilan)")
 
     with np.load(jalur_cache(PD.jalur_model(rid))) as f:
         bobot = {k: f[k] for k in f.files if k.endswith((".weight", ".bias"))}
@@ -821,7 +847,8 @@ def uji_rincian(args):
     except ImportError:
         print("    PyTorch tidak terpasang: pembanding PyTorch dilewati")
     else:
-        m = JaringanDQfD(L.N_AKSI, L.N_OBS)
+        # Model dengan kepala kelayakan (t2) sejak lapis c: strukturnya ikut bobot.
+        m = JaringanDQfD(L.N_AKSI, L.N_OBS, kepala_tabrak="t2.weight" in bobot)
         m.load_state_dict({k: torch.from_numpy(np.ascontiguousarray(v)) for k, v in bobot.items()})
         m.eval()
         tt = []
@@ -860,6 +887,7 @@ def uji_rincian(args):
                              "p90": float(np.percentile(ts, 90)), "rata_loop": rata,
                              "per_lapis_median": dict(zip(nama_seg, map(float, seg_med)))},
         "forward_torch_us": hasil_torch,
+        "q_tabrak_us": q_tabrak_us,
         "parameter": {"lapis": [dict(nama=n, ukuran=s, bobot=w, bias=b) for n, s, w, b in lap],
                       "total": n_w + n_b, "bobot": n_w, "bias": n_b, "mac_model": n_w, "mac_numpy": int(mac_np)}}})
 
@@ -1245,8 +1273,13 @@ def main():
                          "(bawaan: tiga itu untuk model dengan kepala kelayakan, selain itu VARIAN)")
     ap.add_argument("--pencarian", choices=PD.PENCARIAN, default=None,
                     help="pencarian terbaik-dulu DQfD untuk uji waktu dan rincian (bawaan: seperti robot)")
+    ap.add_argument("--forward-terpisah", action="store_true",
+                    help="Q dan P dengan dua forward terpisah (bawaan: satu forward gabungan, "
+                         "jaringan_numpy.GABUNG_FORWARD)")
     ap.add_argument("--keluaran", default=None, help="berkas JSON hasil (bawaan model_dqn/ukur_node_id0N_<mesin>.json)")
     args = ap.parse_args()
+    if args.forward_terpisah:
+        JN.GABUNG_FORWARD = False
     args.keluaran = os.path.abspath(args.keluaran or _keluaran_bawaan(args.id))
     if args.uji == "semua":
         # Proses terpisah: uji rincian dan tabrak mengganti fungsi di drl.perencana_dqfd.
@@ -1262,6 +1295,8 @@ def main():
                 perintah += ["--kepala-p", args.kepala_p]
             if args.tanpa_kepala_p:
                 perintah += ["--tanpa-kepala-p"]
+            if args.forward_terpisah:
+                perintah += ["--forward-terpisah"]
             subprocess.run(perintah, cwd=AKAR, check=True)
         print(f"\nSELESAI -> {args.keluaran}")
         return

@@ -17,10 +17,12 @@ tahu bedanya. Lihat drl/perencana_dqfd.py dan catatan Obsidian "Struktur DQfD
 Full".
 
 PERAN HYBRID A* (buat_perencana(..., peran=...)), aturan RS di konfig.ATURAN_RS:
-    "astar"         perencana pembanding: RS setiap ekspansi ke-4
+    "astar"         perencana pembanding: aturan RS SAMA dengan serah DQfD murni
+                    (setiap node < 60 cm + saringan peta Dijkstra), sejak 2026-11-08
+    "astar-standar" Hybrid A* standar: RS setiap ekspansi ke-4 (aturan "astar" lama)
     "demonstrator"  demonstrator & pustaka gerak model jauh DQfD: RS di setiap
                     node < 60 cm dari tujuan (batas serah model jauh)
-Bobot, heuristik, dan biaya sama untuk keduanya (konfig.PARAM_RENCANA).
+Bobot, heuristik, dan biaya sama untuk semuanya (konfig.PARAM_RENCANA).
 
 Titik acuan pose adalah POROS RODA DEPAN, bukan pusat AprilTag. Roda depan
 tidak berbelok, jadi robot selalu bergerak searah heading di titik itu - itulah
@@ -49,7 +51,7 @@ konfig.pasang_path_kamera()
 import area_constraint as AC          # noqa: E402
 
 JENIS_PERENCANA = ("astar", "dqfd", "dqfd-murni")
-PERAN_ASTAR = ("astar", "demonstrator")
+PERAN_ASTAR = ("astar", "astar-standar", "demonstrator")
 
 
 def _buat_jam_cpu_thread():
@@ -130,10 +132,34 @@ class HybridAStarBertanda(HybridAStarPlanner):
     # mengisi penghitung ini.
     _t_rs = 0.0
     _rs_titik = 0
+    # Saringan serah DQfD (peran "astar", konfig.ATURAN_RS): diisi buat_perencana.
+    saring_serah = False
+    radius_paksa = 0.0
+
+    def _boleh_coba_rs(self, x, y, goal):
+        """Saringan serah model jauh DQfD (drl/lingkungan._boleh_coba_serah, tanpa
+        syarat radius - plan() sudah memanggil _analytic hanya < analytic_dist):
+        sudah < radius_paksa, atau peta Dijkstra tidak memaksa memutar (biaya
+        Dijkstra sel = jarak oktil grid ke sel tujuan). Aritmetikanya sama
+        dengan LingkunganRencana.bebas_ke_tujuan."""
+        gx, gy = goal[0], goal[1]
+        if math.hypot(gx - x, gy - y) < self.radius_paksa:
+            return True
+        r = self.h_reso
+        H = self._hcost
+        ny, nx = len(H), len(H[0])
+        ix, iy = min(nx - 1, max(0, int(x // r))), min(ny - 1, max(0, int(y // r)))
+        tx, ty = min(nx - 1, max(0, int(gx // r))), min(ny - 1, max(0, int(gy // r)))
+        dx, dy = abs(ix - tx), abs(iy - ty)
+        oktil = r * (max(dx, dy) + (math.sqrt(2.0) - 1.0) * min(dx, dy))
+        return H[iy][ix] <= oktil + 1e-6
 
     def _analytic(self, omap, node, goal):
         t = time.perf_counter()
-        rs = super()._analytic(omap, node, goal)
+        if self.saring_serah and not self._boleh_coba_rs(node[0], node[1], goal):
+            rs = None
+        else:
+            rs = super()._analytic(omap, node, goal)
         self._t_rs += time.perf_counter() - t
         self._rs_titik = len(rs[0]) if rs is not None else 0
         return rs
@@ -190,6 +216,8 @@ def buat_perencana(arena, kendaraan, peran="astar"):
         max_expansions=p["max_expansions"],
     )
     planner.peran = peran
+    planner.saring_serah = bool(p.get("saring_serah", False))
+    planner.radius_paksa = s(konfig.RADIUS_SERAH_PAKSA_CM)
     planner.h_rs = heuristik_rs.tabel_untuk(planner)
     return planner
 

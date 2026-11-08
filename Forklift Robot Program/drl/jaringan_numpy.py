@@ -155,15 +155,79 @@ class ModelPNumpy:
         return 1.0 / (1.0 + np.exp(-self.logit_batch(X)))
 
 
+# q_tabrak NetDenganP: satu lintasan numpy untuk model jauh dan model P (lihat NetDenganP).
+# False = dua forward terpisah seperti sebelum 2026-11-08 (pembanding, drl.ukur_node --forward-terpisah).
+GABUNG_FORWARD = True
+
+
 class NetDenganP:
     """Jaringan DQfD (JaringanNumpy) dengan P aksi menabrak dari model P terpisah. Antarmuka sama
     dengan JaringanNumpy berkepala_tabrak (q, qv, q_batch, v_batch, q_tabrak, tabrak_batch):
-    Q dan V dari model jauh, P dari model P. Dipasang DQfDPlanner bila id0N_kepala_p.pt ada."""
+    Q dan V dari model jauh, P dari model P. Dipasang DQfDPlanner bila id0N_kepala_p.pt ada.
 
-    def __init__(self, net, model_p):
+    FORWARD GABUNGAN (GABUNG_FORWARD, sejak 2026-11-08). q_tabrak - satu panggilan per simpul
+    pencarian - menghitung kedua jaringan dalam satu lintasan, karena waktunya didominasi
+    overhead per operasi numpy, bukan hitungannya:
+        lapis 1   satu matriks 47 x (256 + 256)
+        lapis 2   satu matmul batch (2, 256, 256)
+        lapis 3   V|A-hidden model jauh dan keluaran model P (dua matmul, tanpa blok nol)
+        keluaran  dueling Q = V + A - rata(A) dilipat ke satu matriks 256 x 14
+    P sama persis dengan ModelPNumpy.p. Q berbeda < 1e-5 dari JaringanNumpy.q (|Q| sampai
+    ~13): urutan penjumlahan float32 berubah karena V dan rata(A) sudah dilipat ke bobot.
+    Mac M1 Pro: 18.8 us per panggilan, terpisah 26.5 us. q, qv, q_batch tetap lewat model jauh.
+    """
+
+    def __init__(self, net, model_p, gabung=None):
         self.net, self.model_p = net, model_p
         self.kepala_tabrak = True
         self.n_aksi, self.n_obs, self.nh = net.n_aksi, net.n_obs, net.nh
+        self.gabung = GABUNG_FORWARD if gabung is None else bool(gabung)
+        if self.gabung:
+            self.gabung = self._siapkan_gabung()
+
+    def _siapkan_gabung(self):
+        """Bobot gabungan; False bila bentuk kedua jaringan tidak cocok (forward terpisah dipakai)."""
+        net, mp = self.net, self.model_p
+        h = net.w1.shape[1]
+        if (len(mp.w) != 3 or mp.w[0].shape != net.w1.shape or net.w2.shape != (h, h)
+                or mp.w[1].shape != (h, h) or net.w_va.shape[0] != h):
+            return False
+        n = self.n_aksi
+        self._h = h
+        self._w1 = np.ascontiguousarray(np.concatenate([net.w1, mp.w[0]], axis=1))
+        self._b1 = np.concatenate([net.b1, mp.b[0]])
+        self._w2 = np.ascontiguousarray(np.stack([net.w2, mp.w[1]]))
+        self._b2 = np.stack([net.b2, mp.b[1]])
+        self._w_va, self._b_va = net.w_va, net.b_va
+        self._w_p, self._b_p = mp.w[2], mp.b[2]
+        # Q_a = V + A_a - rata(A): baris V (nol di kolom A) dan baris A (nol di kolom V) satu matriks.
+        wv = net.w_out[:, :1].astype(np.float64)
+        wa = net.w_out[:, 1:1 + n].astype(np.float64)
+        self._w_q = np.ascontiguousarray((wv + wa - wa.mean(axis=1, keepdims=True)).astype(np.float32))
+        bv = net.b_out[:1].astype(np.float64)
+        ba = net.b_out[1:1 + n].astype(np.float64)
+        self._b_q = (bv + ba - ba.mean()).astype(np.float32)
+        return True
+
+    def _q_tabrak_gabung(self, obs):
+        h = np.asarray(obs, dtype=np.float32) @ self._w1
+        h += self._b1
+        np.maximum(h, 0.0, out=h)
+        h = np.matmul(h.reshape(2, 1, self._h), self._w2).reshape(2, self._h)
+        h += self._b2
+        np.maximum(h, 0.0, out=h)
+        hva = h[0] @ self._w_va
+        hva += self._b_va
+        np.maximum(hva, 0.0, out=hva)
+        q = hva @ self._w_q
+        q += self._b_q
+        p = h[1] @ self._w_p
+        p += self._b_p
+        np.negative(p, out=p)
+        np.exp(p, out=p)
+        p += 1.0
+        np.reciprocal(p, out=p)
+        return q, p
 
     def q(self, obs):
         return self.net.q(obs)
@@ -178,6 +242,8 @@ class NetDenganP:
         return self.net.v_batch(X)
 
     def q_tabrak(self, obs):
+        if self.gabung:
+            return self._q_tabrak_gabung(obs)
         return self.net.q(obs), self.model_p.p(obs)
 
     def tabrak_batch(self, X):
