@@ -172,6 +172,7 @@ class Unit:
 
         # --- multi-robot ---
         self.keputusan = None           # keputusan wasit siklus ini
+        self.henti_zona = 0             # berapa kali wasit menghentikan robot ini karena zona
         # Ditahan jadwal silang (drl/uji_robot_nyata.py --jadwal): jalur dan
         # pelacak tetap berjalan, hanya roda yang diam sampai protokol melepas.
         self.tahan_jadwal = False
@@ -772,6 +773,9 @@ class Unit:
                 self.jalur, self.tracker, self.tujuan = None, None, None
                 self._minggir = None
             self.state, self.alasan = BAHAYA, keputusan.alasan
+        elif keputusan is not None and keputusan.jenis == W.ZONA:
+            if self.state in (MELACAK, MENUNGGU):
+                self._henti_zona(keputusan)
         elif self.state in (MELACAK, MENUNGGU) and self._kirim is not None:
             if keputusan is not None:
                 self._menunggu(now, keputusan)
@@ -810,6 +814,24 @@ class Unit:
                            f"{self.pose.yaw:.2f},{speed},{steer:.2f},"
                            f"{dev:.2f},{jarak if np.isfinite(jarak) else ''},"
                            f"{int(self.pose.terlihat)},{int(self.pose.diramalkan)}\n")
+
+    def _henti_zona(self, keputusan):
+        """Keputusan ZONA wasit: badan akan menyentuh zona sebelum sempat berhenti.
+
+        Roda langsung nol (keadaan MERENCANA tidak mengirim gerak), jalur yang menuju zona
+        dibuang, dan jalur baru ke tujuan yang sama dihitung dari pose SEKARANG - robot masih
+        di luar zona, jadi perencana bisa membuat jalur. Rencana yang sedang berjalan (mis.
+        memutari robot lain) dibiarkan selesai; hasilnya dipakai bila ada.
+        """
+        self.henti_zona += 1
+        self.alasan = keputusan.alasan
+        print(f"[!] {self.id:02d}: {keputusan.alasan}")
+        self.jalur, self.tracker = None, None
+        self._minggir = None
+        self.state = MERENCANA
+        self._tunggu_sejak, self._bebas_sejak = None, None
+        if not self._sedang_merencana:
+            self.minta_rencana()
 
     def _menunggu(self, now, keputusan):
         if self.state != MENUNGGU:
@@ -928,7 +950,8 @@ class Navigasi:
         self.args = args
         self.arena = A.Arena(A.pilih(args.peta), cm_per_cell=args.sel)
         self.ditahan = False
-        self.wasit = W.Wasit()
+        # Wasit: robot-robot (multi) dan robot-zona (selalu, juga satu robot).
+        self.wasit = W.Wasit(jarak_zona=self._jarak_zona_cm if konfig.WASIT_ZONA else None)
         self.kamera = None
         multi = len(ids) > 1
 
@@ -1071,10 +1094,20 @@ class Navigasi:
         return None
 
     # ---------------------------------------------------------------- loop
+    def _jarak_zona_cm(self, fp):
+        """(jarak bebas cm, nama zona) jejak badan fp ke zona terdekat, <= 0 = menyentuh -
+        aturan yang sama dengan pemantau keselamatan (area_constraint.jarak_zona). Untuk wasit."""
+        zs = self.arena.zona
+        if not zs:
+            return float("inf"), None
+        fp = np.asarray(fp, np.float64)
+        return min((AC.jarak_zona(fp, z), z["nama"]) for z in zs)
+
     def satu_langkah(self, now):
         for u in self.units:
             u.persiapan(now)
-        keputusan = self.wasit.putuskan([u.peserta() for u in self.units]) if self.multi else {}
+        # Wasit dipanggil juga untuk SATU robot: aturan zona berlaku untuk semua robot.
+        keputusan = self.wasit.putuskan([u.peserta() for u in self.units])
         for u in self.units:
             u.terapkan(now, keputusan.get(u.id))
 

@@ -1,5 +1,5 @@
 """
-wasit.py - pencegah tabrakan antar-robot.
+wasit.py - pencegah tabrakan antar-robot, dan robot dengan zona.
 
 Rancangannya ada di "Multi Robot Navigation and Control.md" (Obsidian).
 
@@ -66,6 +66,17 @@ Keputusan prioritas DIKUNCI selama konflik pasangan itu berlangsung. Sisa jalur
 berubah terus saat robot bergerak; tanpa kunci, pemenang bisa bertukar di
 tengah konflik dan kedua robot bergantian berhenti-jalan.
 
+ZONA (2026-11-08). Bayangan yang sama juga diuji terhadap ZONA peta (larangan dan
+batas): bila bayangan robot yang berjalan MENDEKAT ke zona sampai jarak bebasnya
+<= ZONA_JARAK_AMAN_CM, robot itu diberi keputusan ZONA - navigasi.py menghentikannya
+saat itu juga dan menghitung jalur baru dari pose sekarang. Jalur perencana sendiri
+bebas zona; yang dicegat di sini adalah badan yang menyimpang dari jalurnya (galat
+pelacakan) dan akan menyentuh zona SEBELUM sempat berhenti. Tanpa aturan ini zona
+baru ketahuan setelah badan menyentuhnya (estop pemantau keselamatan), dan dari dalam
+zona perencana tidak bisa membuat jalur keluar. Aturan ini berlaku juga untuk satu
+robot. Jarak ke zona dihitung fungsi yang diberikan pemanggil (jarak_zona), supaya
+wasit tetap tidak bergantung pada modul kamera.
+
 Wasit TIDAK tahu apa-apa soal MQTT, kamera, atau pelacak. Ia hanya menerima
 Peserta (poligon dalam cm) dan mengembalikan Keputusan. Karena itu ia bisa diuji
 tanpa robot sama sekali - lihat bagian mandiri di bawah.
@@ -78,7 +89,9 @@ import numpy as np
 import arena as A
 import konfig
 
-TUNGGU, KONTAK = "tunggu", "kontak"
+TUNGGU, KONTAK, ZONA = "tunggu", "kontak", "zona"
+# Urutan kepentingan bila satu robot kena beberapa keputusan sekaligus.
+_PENTING = {TUNGGU: 0, ZONA: 1, KONTAK: 2}
 
 
 @dataclass
@@ -96,9 +109,9 @@ class Peserta:
 
 @dataclass
 class Keputusan:
-    jenis: str                     # TUNGGU atau KONTAK
+    jenis: str                     # TUNGGU, ZONA, atau KONTAK
     alasan: str
-    lawan: int
+    lawan: int                     # id robot lawan; -1 untuk ZONA
     # Menunggu lebih lama dari ini -> hitung ulang jalur memutari robot lain.
     # inf = jangan pernah (misalnya posisi lawan tidak diketahui).
     tunggu_maks: float = konfig.MULTI_TUNGGU_MAKS_S
@@ -207,28 +220,56 @@ def jarak_himpunan(Ps, Qs, batas=float("inf")):
 
 # --------------------------------------------------------------------- wasit
 class Wasit:
-    def __init__(self):
+    def __init__(self, jarak_zona=None):
+        """jarak_zona(poligon_4x2_cm) -> (jarak_bebas_cm, nama_zona): jarak badan ke zona
+        terdekat, <= 0 berarti menyentuh/melanggar. None = aturan zona mati."""
         # (id_kecil, id_besar) -> id yang KALAH, selama konflik pasangan itu ada
         self._kalah = {}
         # Konflik siklus terakhir, untuk digambar: [(id_a, id_b, jenis_teks)]
         self.konflik = []
+        self.jarak_zona = jarak_zona
+        # Peringatan zona siklus terakhir, untuk digambar/log: {id: (nama_zona, jarak_cm)}
+        self.zona = {}
 
     def putuskan(self, peserta):
-        """{id: Keputusan} untuk robot yang harus menunggu atau estop."""
+        """{id: Keputusan} untuk robot yang harus menunggu, berhenti karena zona, atau estop."""
         hasil = {}
         self.konflik = []
+        self.zona = {}
         ada = [p for p in peserta if p.badan is not None]
         for i, a in enumerate(ada):
             for b in ada[i + 1:]:
                 self._pasangan(a, b, hasil)
+        if self.jarak_zona is not None:
+            for p in ada:
+                self._cek_zona(p, hasil)
         return hasil
+
+    def _cek_zona(self, p, hasil):
+        """Bayangan robot p (mengikuti badannya) MENDEKAT ke zona sampai <= ZONA_JARAK_AMAN_CM?"""
+        if not (p.berjalan and p.terlihat and p.bayangan):
+            return
+        d_kini, _ = self.jarak_zona(p.badan)
+        if d_kini <= 0.0:
+            return          # sudah menyentuh: urusan pemantau keselamatan (estop), bukan ramalan
+        # "Mendekat" seperti aturan robot: lebih dekat dari sekarang, dengan kelonggaran
+        # derau pose, supaya robot yang berjalan sejajar zona tidak terbaca menuju zona.
+        batas = min(konfig.ZONA_JARAK_AMAN_CM, d_kini - min(0.5, d_kini / 2.0))
+        for P in ikut_badan(p.bayangan, p.badan)[1:]:
+            d, nama = self.jarak_zona(np.asarray(P, float))
+            if d <= batas:
+                self.zona[p.id] = (nama, d)
+                self._setel(hasil, p.id, Keputusan(
+                    ZONA, f"badan akan menyentuh zona {nama} (bayangan {max(d, 0.0):.1f} cm) - "
+                          f"berhenti, jalur dihitung ulang", -1, 0.0))
+                return
 
     # ----------------------------------------------------------- bantuan
     @staticmethod
     def _setel(hasil, rid, kep):
-        """Simpan keputusan; kontak mengalahkan tunggu, tunggu tersingkat menang."""
+        """Simpan keputusan; kontak > zona > tunggu, tunggu tersingkat menang."""
         lama = hasil.get(rid)
-        if lama is None or (kep.jenis == KONTAK and lama.jenis != KONTAK) or \
+        if lama is None or _PENTING[kep.jenis] > _PENTING[lama.jenis] or \
                 (kep.jenis == lama.jenis == TUNGGU and kep.tunggu_maks < lama.tunggu_maks):
             hasil[rid] = kep
 
@@ -333,11 +374,12 @@ def _uji():
         return [(x + arah * i * 2.4 * math.cos(r), y + arah * i * 2.4 * math.sin(r), yaw)
                 for i in range(n)]
 
-    def peserta(rid, x, y, yaw, berjalan=True, arah=1, sisa=100.0, geser=0.0):
-        """geser: badan menyimpang sekian cm ke KIRI jalurnya (galat pelacakan)."""
+    def peserta(rid, x, y, yaw, berjalan=True, arah=1, sisa=100.0, geser=0.0, dyaw=0.0):
+        """geser: badan menyimpang sekian cm ke KIRI jalurnya (galat pelacakan);
+        dyaw: arah hadap badan menyimpang sekian derajat dari arah jalur."""
         bay = sapuan(lurus(x, y, yaw, 100, arah), L) if berjalan else []
         r = math.radians(yaw)
-        badan = A.jejak_badan(x - geser * math.sin(r), y + geser * math.cos(r), yaw)
+        badan = A.jejak_badan(x - geser * math.sin(r), y + geser * math.cos(r), yaw + dyaw)
         return Peserta(rid, badan, True, berjalan, bay, arah, sisa)
 
     # Jarak di kasus-kasus ini diturunkan dari L, supaya ujiannya tetap
@@ -393,10 +435,43 @@ def _uji():
           peserta(2, 0, 3.5 + konfig.BODY_WIDTH_CM + 5, 0, berjalan=False)],
          {}),
     ]
+    # ZONA: zona larangan persegi (x0, y0, x1, y1). Badan robot di (0, 0) menghadap +x,
+    # ujung depannya di x = F, sisi kirinya di y = W/2.
+    W2 = konfig.BODY_WIDTH_CM / 2.0
+
+    def kotak(x0, y0, x1, y1):
+        return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], float)
+
+    kasus += [
+        ("zona di depan, di dalam jarak henti",
+         [peserta(1, 0, 0, 0)], {1: ZONA}, [kotak(F + L / 2, -30, F + L / 2 + 20, 30)]),
+        ("zona di depan, di luar jarak henti",
+         [peserta(1, 0, 0, 0)], {}, [kotak(F + L + 10, -30, F + L + 30, 30)]),
+        ("zona di samping, berjalan sejajar 4 cm",
+         [peserta(1, 0, 0, 0)], {}, [kotak(-50, W2 + 4, 100, W2 + 30)]),
+        # Jalur lurus, tetapi badan menghadap 10 derajat ke arah zona samping: bayangan
+        # yang mengikuti badan mendekat ke zona di dalam jarak henti -> berhenti.
+        ("badan menyimpang 10 derajat ke arah zona samping",
+         [peserta(1, 0, 0, 0, dyaw=10)], {1: ZONA}, [kotak(-50, W2 + 4, 100, W2 + 30)]),
+        ("menyimpang 3,5 cm sejajar, 0,5 cm dari zona samping",
+         [peserta(1, 0, 0, 0, geser=3.5)], {}, [kotak(-50, W2 + 4, 100, W2 + 30)]),
+        ("diam di depan zona",
+         [peserta(1, 0, 0, 0, berjalan=False)], {}, [kotak(F + 2, -30, F + 20, 30)]),
+        # Konflik robot dan zona sekaligus: zona lebih penting dari tunggu.
+        ("zona di depan + robot 02 diam di depan",
+         [peserta(1, 0, 0, 0), peserta(2, F + (L - 2) + B, 0, 0, berjalan=False)], {1: ZONA},
+         [kotak(F + 3, -5, F + 6, 5)]),
+    ]
     print(f"[i] laju {v:.1f} cm/detik, a_rem {a_rem:.1f} cm/detik^2 -> bayangan {L:.1f} cm")
     gagal = 0
-    for nama, ps, harap in kasus:
-        hasil = Wasit().putuskan(ps)
+    for k in kasus:
+        nama, ps, harap = k[:3]
+        zona = k[3] if len(k) > 3 else None
+        fz = None
+        if zona:
+            def fz(fp, _zs=zona):
+                return min((jarak_poligon(fp, Z), f"Z{i}") for i, Z in enumerate(_zs))
+        hasil = Wasit(jarak_zona=fz).putuskan(ps)
         dapat = {k: kep.jenis for k, kep in hasil.items()}
         ok = dapat == harap
         gagal += not ok

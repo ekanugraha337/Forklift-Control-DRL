@@ -878,6 +878,14 @@ MULTI_LIHAT_MIN_CM = 5.0
 # memutar itu langsung dianggap bertabrakan lagi dan robot menunggu selamanya.
 MULTI_JARAK_AMAN_CM = 5.0
 
+# Wasit, aturan ZONA (2026-11-08): robot yang bayangannya (mengikuti badan, panjang L di
+# atas) MENDEKAT ke zona sampai jarak bebas <= ini berhenti dan jalurnya dihitung ulang.
+# Jalur perencana menjaga SAFETY_MARGIN_CM (atau margin cadangan, >= 6 cm) dari zona, jadi
+# bayangan baru mendekati 1 cm bila badan menyimpang jauh dari jalurnya.
+ZONA_JARAK_AMAN_CM = 1.0
+# Aturan zona wasit menyala. False hanya untuk pembanding (drl/uji_navigasi.py --tanpa-wasit-zona).
+WASIT_ZONA = True
+
 # Lanjut dari MENUNGGU hanya setelah bayangan bebas selama ini, BERTURUT-TURUT.
 # Bayangan robot yang menunggu dihitung pada kecepatan TUJUAN-nya, bukan
 # kecepatan sekarang (nol) - kalau tidak, robot diam selalu tampak bebas,

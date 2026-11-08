@@ -60,15 +60,16 @@ def _cm(arena, p):
     return (x, y, None if p[2] is None or np.isnan(p[2]) else math.degrees(p[2]))
 
 
-def pilih_skenario(n_per_peta, seed=0):
-    """Skenario satu robot & pasangan, dari rute uji dataset. Deterministik."""
+def pilih_skenario(n_per_peta, seed=0, ids=(1, 2)):
+    """Skenario satu robot & pasangan, dari rute uji dataset. Deterministik. Pasangan hanya
+    bila ID 01 dan ID 02 sama-sama dipilih (dan datanya ada)."""
     import arena as A
     from drl import rollout as RO
-    data = {rid: RO.muat_npz(os.path.join(AKAR, "drl", "data", f"demo_jauh_id{rid:02d}.npz")) for rid in (1, 2)}
+    data = {rid: RO.muat_npz(os.path.join(AKAR, "drl", "data", f"demo_jauh_id{rid:02d}.npz")) for rid in ids}
     peta_asli = daftar_peta(data)
     satu, kandidat = [], {}
     for rid, d in data.items():
-        pab = RO.PabrikEnv(konfig.profil(rid), "jauh")   # demo_jauh: aksi jenis jauh
+        pab = RO.PabrikEnv(konfig.profil(rid))
         for peta in peta_asli:
             ar = A.Arena(peta)
             idx = [e for e in np.flatnonzero(d["ep_uji"])
@@ -92,7 +93,7 @@ def pilih_skenario(n_per_peta, seed=0):
             kandidat[(rid, peta)] = kand
 
     pasangan = []
-    for peta in peta_asli:
+    for peta in (peta_asli if {1, 2} <= set(data) else []):
         n = 0
         for e1, j1, a1, t1 in kandidat[(1, peta)]:
             for e2, j2, a2, t2 in kandidat[(2, peta)]:
@@ -127,6 +128,8 @@ def jalankan(sk):
                            margin=10.0, url=None, host=None, log=None)
     teks = io.StringIO()
     hasil = {"nama": sk["nama"], "perencana": sk["perencana"], "jenis": sk["jenis"], "robot": []}
+    konfig.WASIT_ZONA = sk.get("wasit_zona", True)
+    hasil["wasit_zona"] = konfig.WASIT_ZONA
     with contextlib.redirect_stdout(teks):
         konfig.pilih_robot(sk["ids"][0])
         nav = N.Navigasi(args, sk["ids"])
@@ -182,7 +185,7 @@ def jalankan(sk):
                 "id": u.id, "tiba": u.state == N.SELESAI, "state": u.state, "alasan": u.alasan,
                 "t_s": t_tiba.get(u.id), "galat_cm": e_pos, "galat_deg": e_yaw,
                 "masuk_zona": langgar[u.id], "jarak_zona_min_cm": jarak_zona[u.id],
-                "rencana": rencana[u.id]})
+                "henti_zona": getattr(u, "henti_zona", 0), "rencana": rencana[u.id]})
             u.tutup()
         hasil["jarak_robot_min_cm"] = jarak_robot if len(nav.units) > 1 else None
         hasil["durasi_s"] = time.time() - t0
@@ -206,6 +209,8 @@ def ringkas(hasil):
             baris.append({
                 "perencana": per, "jenis": jenis, "skenario": len(h), "robot": len(r),
                 "tiba": len(tiba), "masuk_zona": sum(rb["masuk_zona"] for rb in r),
+                "henti_zona": sum(rb.get("henti_zona", 0) for rb in r),
+                "robot_henti_zona": sum(rb.get("henti_zona", 0) > 0 for rb in r),
                 "galat_cm_rata": float(np.mean([rb["galat_cm"] for rb in tiba])) if tiba else None,
                 "galat_cm_maks": float(np.max([rb["galat_cm"] for rb in tiba])) if tiba else None,
                 "t_s_median": float(np.median([rb["t_s"] for rb in tiba])) if tiba else None,
@@ -227,15 +232,19 @@ def main():
     ap.add_argument("--tanpa-pasangan", action="store_true")
     ap.add_argument("--hanya-pasangan", action="store_true")
     ap.add_argument("--ulang", type=int, default=1, help="ulangi tiap skenario (derau acak berbeda)")
+    ap.add_argument("--id", default="1,2", help="robot yang diuji (pasangan hanya bila 1 dan 2)")
+    ap.add_argument("--tanpa-wasit-zona", action="store_true",
+                    help="pembanding: aturan zona wasit dimatikan (hanya estop pemantau keselamatan)")
+    ap.add_argument("--keluaran", default=None, help="berkas JSON hasil (bawaan model_dqn/uji_navigasi.json)")
     args = ap.parse_args()
     import multiprocessing as mp
 
-    satu, pasangan = pilih_skenario(args.n)
+    satu, pasangan = pilih_skenario(args.n, ids=tuple(int(t) for t in args.id.split(",") if t.strip()))
     if args.tanpa_pasangan:
         pasangan = []
     if args.hanya_pasangan:
         satu = []
-    daftar = [dict(s, perencana=p, derau=args.derau)
+    daftar = [dict(s, perencana=p, derau=args.derau, wasit_zona=not args.tanpa_wasit_zona)
               for p in args.perencana.split(",") for s in satu + pasangan for _ in range(args.ulang)]
     print(f"[i] {len(satu)} skenario satu robot + {len(pasangan)} pasangan x "
           f"{args.perencana} = {len(daftar)} jalan, {args.pekerja} pekerja, derau {args.derau} cm")
@@ -249,21 +258,24 @@ def main():
         for h in (f.result() for f in as_completed([pool.submit(jalankan, d) for d in daftar])):
             hasil.append(h)
             r = " ".join(f"ID{rb['id']:02d}:{'tiba' if rb['tiba'] else rb['state']}"
-                         f"{'!ZONA' if rb['masuk_zona'] else ''}" for rb in h["robot"])
+                         f"{'!ZONA' if rb['masuk_zona'] else ''}"
+                         f"{' henti-zona x' + str(rb['henti_zona']) if rb.get('henti_zona') else ''}"
+                         for rb in h["robot"])
             print(f"  [{time.time() - t0:5.0f} s] {h['perencana']:<10} {h['nama']:<28} {r}"
                   + (f"  jarak robot {h['jarak_robot_min_cm']:.1f} cm" if h["jarak_robot_min_cm"] else ""),
                   flush=True)
     ring = ringkas(hasil)
-    print("\n  perencana   jenis     tiba      masuk zona  galat akhir rata/maks  waktu median  "
+    print("\n  perencana   jenis     tiba      masuk zona  henti zona  galat akhir rata/maks  waktu median  "
           "jarak zona min  jarak robot min  jalur oleh")
     for b in ring:
         jr = f"{b['jarak_robot_min_cm']:.1f} cm" if b["jarak_robot_min_cm"] is not None else "-"
         print(f"  {b['perencana']:<10} {b['jenis']:<9} {b['tiba']:>3}/{b['robot']:<4} {b['masuk_zona']:>5}"
-              f"        {b['galat_cm_rata'] or 0:5.1f} / {b['galat_cm_maks'] or 0:4.1f} cm"
+              f"       {b['henti_zona']:>3} ({b['robot_henti_zona']} robot)"
+              f"  {b['galat_cm_rata'] or 0:5.1f} / {b['galat_cm_maks'] or 0:4.1f} cm"
               f"      {b['t_s_median'] or 0:5.1f} s      {b['jarak_zona_min_cm']:6.2f} cm      {jr:>9}"
               f"      {b['rencana_oleh']}")
-    keluar = os.path.join(AKAR, "model_dqn", "uji_navigasi_pasangan.json" if args.hanya_pasangan
-                          else "uji_navigasi.json")
+    keluar = args.keluaran or os.path.join(AKAR, "model_dqn", "uji_navigasi_pasangan.json" if args.hanya_pasangan
+                                           else "uji_navigasi.json")
     with open(keluar, "w", encoding="utf-8") as f:
         json.dump({"ringkasan": ring, "hasil": hasil}, f, indent=1,
                   default=lambda o: o.item() if hasattr(o, "item") else str(o))
