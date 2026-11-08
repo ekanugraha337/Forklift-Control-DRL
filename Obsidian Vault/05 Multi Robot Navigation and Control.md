@@ -162,3 +162,31 @@ Kontak 0, badan sebenarnya masuk zona 0. Dua kegagalan koridor adalah estop zona
 - Uji di robot nyata. Ukur `MULTI_T_REAKSI_S` (0,2 s masih perkiraan) dari log dua robot.
 - Kasus 6 (tag hilang) sudah ditangani di wasit (robot lain menunggu tanpa batas) tapi belum diuji di simulasi.
 - Bertukar tempat di koridor sempit lambat (~2 menit). Kalau sering terjadi, pertimbangkan aturan koridor satu arah di peta.
+## Wasit: aturan zona (2026-11-08)
+
+Commit `80368bf` (branch `ver-1-6`). Robot yang **akan** menyentuh zona sekarang berhenti dan membuat jalur baru, bukan menunggu sampai badannya menyentuh zona lalu di-estop.
+
+**Cara kerja (`wasit.Wasit._cek_zona`):**
+- Bayangan badan sepanjang jarak henti `L` (rumus yang sama dengan aturan antar-robot) digeser dan diputar mengikuti simpangan badan dari jalurnya (`ikut_badan`).
+- Bayangan itu diuji terhadap semua zona peta (larangan dan batas) memakai `area_constraint.jarak_zona`, rumus yang sama dengan pemantau keselamatan. Fungsi jaraknya diberikan oleh `navigasi.py`, jadi wasit tetap tidak bergantung pada modul kamera.
+- Bila bayangan **mendekat** ke zona sampai jarak bebas ≤ `ZONA_JARAK_AMAN_CM` (1 cm), keluarlah keputusan **ZONA**. "Mendekat" berarti lebih dekat dari badan sekarang, dengan kelonggaran derau 0,5 cm, sehingga robot yang berjalan sejajar zona tidak dihentikan.
+- `navigasi._henti_zona`: roda langsung nol, jalur yang menuju zona dibuang, dan jalur baru ke tujuan yang sama dihitung dari pose sekarang. Robot masih di luar zona, jadi perencana bisa.
+- Wasit kini dipanggil juga untuk **satu robot**. Urutan kepentingan: KONTAK > ZONA > TUNGGU.
+- Estop pemantau keselamatan tetap ada sebagai lapis terakhir.
+- `konfig.WASIT_ZONA = False` mematikan aturan ini, hanya untuk pembanding.
+
+**Uji mandiri:** `python wasit.py` lolos 18/18 kasus (7 kasus zona baru), di Mac dan di laptop robot.
+
+**Simulasi navigasi** (`python -m drl.uji_navigasi --id 1 --tanpa-pasangan --perencana astar,dqfd-murni --n 3`, 15 rute ID 01 per perencana):
+
+| Derau pose | Aturan zona | Tiba | Badan sebenarnya masuk zona | Estop zona (pose terukur) | Wasit menghentikan karena zona |
+|---|---|---:|---:|---:|---:|
+| 1,2 cm | ada | 29/30 | 0 | 0 | 0 |
+| 3,0 cm | ada | **28/30** | 0 | **2** | 3 (2 robot lalu tiba) |
+| 3,0 cm | tidak | 25/30 | 0 | 5 | – |
+
+**Catatan hasil:**
+- Pada derau 1,2 cm aturan ini tidak pernah memicu, jadi tidak ada alarm palsu. Satu rute yang gagal adalah jalur backtracking DQfD sepanjang 21 m yang habis waktu, bukan masalah zona.
+- Pada derau 3 cm, rute Rumah #2588 berakhir estop di zona Z9 tanpa aturan zona (dengan astar maupun DQfD). Dengan aturan zona, robot berhenti saat bayangannya 0,7 cm dari Z9, membuat jalur baru, lalu tiba.
+- **Yang tidak bisa dicegah:** lompatan pose terukur karena derau yang lebih besar dari jarak bebas robot ke zona. Contohnya Rumah #1713 (estop setelah berhenti) dan Rumah2 #2595 (estop tanpa peringatan).
+- Sampelnya kecil dan derau setiap jalan acak. Untuk angka yang kokoh, perlu ulangan dengan derau yang sama di kedua kondisi.

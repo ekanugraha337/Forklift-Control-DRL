@@ -551,3 +551,26 @@ Mulai 2026-11-08 perencana robot memakai `belajar-periksa` (`perencana_dqfd.PENC
 | Tiba | 99,6% | 99,8% | |
 
 Sebagai pembanding dari sesi lain (§15), mode A (lazy, kepala bawaan) mencatat 0,141 ms per node dan waktu per rute median 4,6 / p90 18,5 / rata-rata 14,8 ms. Jadi per rute, mode A sedikit lebih cepat daripada `belajar-periksa`.
+
+## 17. ID 02 dilatih ulang dengan kepala kelayakan + model P terpisah
+
+Dikerjakan 2026-11-08 di laptop robot (RTX 5050), dengan prosedur yang sama dengan ID 01 (§12–§13).
+- **Cadangan model lama:** `Documents\GitHub\_arsip_model_id02_tanpa_kepala_20261108`.
+- **Label demo:** dibuat dengan memutar ulang episode, 0 mask beda.
+
+| | Model ID 02 lama | **Model ID 02 baru** |
+|---|---:|---:|
+| Latih | 22,9 menit | 24,6 menit |
+| Checkpoint terbaik (langkah gradien) | 25.000 | 70.000 |
+| Skor validasi | 97,1 | **97,8** |
+| Tiba / rasio biaya median / p90 | 99,2% / 1,00 / 1,21 | 100% / 1,00 / 1,22 |
+| AUC kepala P (demo validasi) | – | 0,981 |
+
+**Model P terpisah ID 02** (`model_dqn/id02_kepala_p.pt`, 81.678 parameter). Dinilai pada 70.834 keadaan pencarian rute uji, dengan data latih 255.624 keadaan pencarian rute latih ditambah demo:
+
+| | AUC | AUC dalam keadaan sama | Terdeteksi / alarm palsu @0,1 | @0,02 |
+|---|---:|---:|---:|---:|
+| Kepala bawaan t2 | 0,980 | 0,923 | 88,6 / 5,7% | 96,8 / 12,6% |
+| **Model P terpisah** | **0,996** | **0,980** | **98,8 / 5,2%** | 99,7 / 9,3% |
+
+Hasil ini sejalan dengan ID 01 (§13). Sekarang **ID 01 dan ID 02 sama-sama memakai `belajar-periksa` dengan model P terpisah**. Di laptop robot, keduanya mencapai 15/15 rute uji, semuanya dengan "jalur belajar lolos periksa".

@@ -396,7 +396,9 @@ def uji_waktu(args):
                     cpu.append(info["cpu_s"])
                 hasil[jenis].append({"peta": peta, "e": r["e"], "sukses": bool(jalur), "node": cat.total,
                                      "ms": 1000 * float(np.median(wall)), "cpu_ms": 1000 * float(np.median(cpu)),
-                                     "rs_ms": 1000 * info.get("rincian_s", {}).get("rs", 0.0)})
+                                     "rs_ms": 1000 * info.get("rincian_s", {}).get("rs", 0.0),
+                                     "panjang_cm": float(info.get("panjang_cm", 0.0)) if jalur else None,
+                                     "perencana": info.get("perencana")})
             print(f"  {peta:<18} {jenis:<11} {len(rute):3d} rute ({time.time() - t_mulai:.0f} s)", flush=True)
 
     ring, regresi = {}, {}
@@ -419,7 +421,10 @@ def uji_waktu(args):
                        "cpu_ms_per_node_total": float(sum(x["cpu_ms"] for x in ok) / node.sum()),
                        "ms_per_node_median": float(np.median(wall)),
                        "node_median": float(np.median(node)), "node_p90": float(np.percentile(node, 90)),
-                       "cpu_ms_median": float(np.median(c_all)), "cpu_ms_p90": float(np.percentile(c_all, 90))}
+                       "cpu_ms_median": float(np.median(c_all)), "cpu_ms_p90": float(np.percentile(c_all, 90)),
+                       "cpu_ms_rata": float(np.mean(c_all)), "cpu_ms_maks": float(np.max(c_all)),
+                       "panjang_cm_median": float(np.median([x["panjang_cm"] for x in xs if x["panjang_cm"]]))
+                       if any(x["panjang_cm"] for x in xs) else None}
         g = ring[jenis]
         print(f"{jenis:<11}: {g['rute']} rute, tiba {g['tiba']:.1f}% | per node: total/total "
               f"{g['cpu_ms_per_node_total']:.3f} ms, regresi {b:.3f} ms (+{a:.2f} ms tetap), median per rute "
@@ -428,6 +433,14 @@ def uji_waktu(args):
     a, d = ring["astar"], ring["dqfd-murni"]
     print(f"rasio per node DQfD / A*: total/total {d['cpu_ms_per_node_total'] / a['cpu_ms_per_node_total']:.2f}x, "
           f"regresi {regresi['dqfd-murni']['ms_per_node'] / regresi['astar']['ms_per_node']:.2f}x")
+    rp = [y["panjang_cm"] / x["panjang_cm"] for x, y in zip(hasil["astar"], hasil["dqfd-murni"])
+          if x["panjang_cm"] and y["panjang_cm"]]
+    if rp:
+        ring["rasio_panjang_dqfd_astar"] = {"rute": len(rp), "median": float(np.median(rp)),
+                                            "rata": float(np.mean(rp)), "p90": float(np.percentile(rp, 90)),
+                                            "maks": float(np.max(rp))}
+        print(f"rasio panjang jalur DQfD / A* ({len(rp)} rute tiba keduanya): median {np.median(rp):.3f}, "
+              f"rata-rata {np.mean(rp):.3f}, p90 {np.percentile(rp, 90):.3f}, maks {np.max(rp):.2f}")
     _simpan(args.keluaran, {"ringkasan": ring, "regresi_cpu_ms_per_rute": regresi, "rute": hasil})
 
 
