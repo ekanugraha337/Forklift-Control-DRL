@@ -528,6 +528,25 @@ class LingkunganRencana:
             cost += pl._clearance_penalty(min_m, panjang)
         return poses, cost, col
 
+    def ulang_dari_awal(self):
+        """Kembali ke pose awal episode yang SAMA tanpa menghitung ulang peta Dijkstra dan
+        arah datang (beda dengan reset): sel yang dikunjungi dikosongkan, calon tidak dihitung.
+        Dipakai pencarian "belajar-periksa" untuk memeriksa jalur akhir dan pencarian cadangannya."""
+        sx, sy, syaw = self.awal
+        self._obs_c = None
+        self.x, self.y, self.yaw = sx, sy, syaw
+        self.d, self.k = 0, 0.0
+        self.in_col = self.omap.pose_margin(self.v, sx, sy, syaw) <= 0
+        self._pose = []
+        self.ekor_rs = None
+        self._rs_calon = None
+        self.biaya = self.biaya_rs = 0.0
+        self.langkah_ke = 0
+        self.selesai = self.sukses = False
+        kunci = self.planner._key(sx, sy, syaw)
+        self.dikunjungi = {(kunci, 1), (kunci, -1)}
+        self._kosongkan_calon()
+
     def _kosongkan_calon(self):
         self._calon = [None] * N_AKSI
         self._mask = np.zeros(N_AKSI, dtype=bool)

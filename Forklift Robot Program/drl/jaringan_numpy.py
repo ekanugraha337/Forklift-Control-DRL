@@ -125,6 +125,84 @@ class JaringanNumpy:
                                        "a_hidden": hva[self.nh:], "v": o[:1], "a": a}
 
 
+class ModelPNumpy:
+    """Forward model P terpisah (drl.kelayakan --latih: 47 -> lebar -> lebar -> 14, ReLU, sigmoid).
+    p(obs) -> P aksi menabrak (14,), p_batch(X) -> (B, 14)."""
+
+    def __init__(self, bobot):
+        self.w = [np.ascontiguousarray(np.asarray(bobot[f"l{i}.weight"], np.float32).T) for i in (1, 2, 3)]
+        self.b = [np.asarray(bobot[f"l{i}.bias"], np.float32) for i in (1, 2, 3)]
+
+    def logit_batch(self, X):
+        h = np.asarray(X, np.float32).reshape(-1, self.w[0].shape[0])
+        for i in range(3):
+            h = h @ self.w[i]
+            h += self.b[i]
+            if i < 2:
+                np.maximum(h, 0.0, out=h)
+        return h
+
+    def p(self, obs):
+        h = np.asarray(obs, np.float32)
+        for i in range(3):
+            h = h @ self.w[i]
+            h += self.b[i]
+            if i < 2:
+                np.maximum(h, 0.0, out=h)
+        return 1.0 / (1.0 + np.exp(-h))
+
+    def p_batch(self, X):
+        return 1.0 / (1.0 + np.exp(-self.logit_batch(X)))
+
+
+class NetDenganP:
+    """Jaringan DQfD (JaringanNumpy) dengan P aksi menabrak dari model P terpisah. Antarmuka sama
+    dengan JaringanNumpy berkepala_tabrak (q, qv, q_batch, v_batch, q_tabrak, tabrak_batch):
+    Q dan V dari model jauh, P dari model P. Dipasang DQfDPlanner bila id0N_kepala_p.pt ada."""
+
+    def __init__(self, net, model_p):
+        self.net, self.model_p = net, model_p
+        self.kepala_tabrak = True
+        self.n_aksi, self.n_obs, self.nh = net.n_aksi, net.n_obs, net.nh
+
+    def q(self, obs):
+        return self.net.q(obs)
+
+    def qv(self, obs):
+        return self.net.qv(obs)
+
+    def q_batch(self, X):
+        return self.net.q_batch(X)
+
+    def v_batch(self, X):
+        return self.net.v_batch(X)
+
+    def q_tabrak(self, obs):
+        return self.net.q(obs), self.model_p.p(obs)
+
+    def tabrak_batch(self, X):
+        return self.model_p.p_batch(X)
+
+
+def muat_model_p(jalur_pt):
+    """(ModelPNumpy, meta) dari model P terpisah .pt, lewat cache .npz di sampingnya (md5 .pt).
+    torch hanya diimpor bila cache belum ada / basi - sama dengan muat_dari_pt."""
+    md5 = _md5(jalur_pt)
+    jc = jalur_cache(jalur_pt)
+    if os.path.exists(jc):
+        with np.load(jc) as f:
+            if str(f["sumber_md5"]) == md5:
+                return (ModelPNumpy({k: f[k] for k in f.files if k.endswith((".weight", ".bias"))}),
+                        json.loads(str(f["meta"])))
+    import torch
+    ck = torch.load(jalur_pt, map_location="cpu", weights_only=False)
+    bobot = {k: v.detach().cpu().numpy() for k, v in ck["sd"].items()}
+    sementara = jc + ".tmp.npz"
+    np.savez(sementara, sumber_md5=np.array(md5), meta=np.array(json.dumps(ck["meta"])), **bobot)
+    os.replace(sementara, jc)
+    return ModelPNumpy(bobot), ck["meta"]
+
+
 def bermask(q, mask, terlarang=-1e9):
     """Q (numpy) dengan aksi terlarang dibuat sangat kecil, supaya tidak pernah jadi argmax/max."""
     return np.where(mask, q, terlarang)

@@ -11,6 +11,9 @@ Catatan ini membandingkan waktu proses **per node** antara Hybrid A\* + RS stand
 > - **Q tidak tahu tabrakan:** AUC 0,45. Penyebabnya, semua loss latih memakai mask. Jadi cek tabrakan tetap wajib.
 > - **Tahap 1 (§10):** pencarian lazy menurunkan DQfD ke **0,156 ms per node**, di bawah A\* 0,192 ms. Waktu p90 per rute jadi 15,3 ms (A\* 68,0 ms). Model sama, tanpa latih ulang. **Lazy sekarang menjadi bawaan perencana robot**, sedangkan Hybrid A\* tetap standar.
 > - **Rincian DQfD lazy (§11):** tidak ada lagi satu bagian yang dominan. Tiga terbesar adalah aritmetika 14 primitif untuk cek sel (18%), peta Dijkstra per rencana (15%), dan tembakan RS (13%). Jaringan saraf (observasi + forward) sekitar 19%.
+> - **Lapis c (§12):** ID 01 dilatih ulang dengan kepala P(menabrak). Kepala itu jelas belajar dari 32 sinar: AUC 0,985, sedangkan Q 0,51.
+>   - Mode A (lazy + verifikasi): **0,143 ms per node**, 0 jalur menabrak.
+>   - Mode B (tanpa cek tabrakan primitif): 0,113–0,115 ms per node, tetapi 3,5–18,6% jalurnya menabrak, tergantung ambang. Verifikasi geometris tetap diperlukan.
 
 ---
 
@@ -322,3 +325,229 @@ Observasi 18,5 µs terdiri dari 32 sinar 10,1 µs, arah turun h_D 2,7 µs, dan s
 - Aritmetika calon bisa dikompilasi numba (14 primitif × 4 sub-langkah), tetapi kesamaan bit dengan Python harus dicek.
 - Backtracking bisa dibuat lazy juga: 307 µs per langkah untuk hanya 5,8% node.
 - Peta Dijkstra bisa disimpan untuk tujuan dan peta yang sama, misalnya antar sapuan arah hadap. Ini berlaku juga untuk A\*.
+
+## 12. Lapis c: kepala kelayakan P(menabrak), ID 01 dilatih ulang
+
+Dikerjakan 2026-11-08, commit `1f6edaf`. Tujuannya menguji hipotesis bahwa 32 sinar sepanjang 1 m ditambah posisi tujuan sudah cukup bagi jaringan untuk mengenali aksi yang menabrak, asalkan diberi sinyal latih.
+
+**Perubahan.** Struktur jaringan dan cara latihnya tetap seperti §5, ditambah:
+- Kepala **T**: A-hidden 128 → 14 logit → sigmoid = P(aksi menabrak). Tambahannya **1.806 parameter**, jadi totalnya 147.613.
+- Loss **J_T**: binary cross-entropy atas ke-14 aksi di setiap keadaan buffer.
+- Label tabrakan berasal dari `_hitung_calon`: badan plus safety margin menabrak zona di salah satu dari 4 sub-langkah primitif. Aksi ke sel yang sudah dikunjungi bukan tabrakan.
+- Label demo dibuat oleh `drl/label_tabrak.py` dengan memutar ulang episode, jadi demo A\* tidak dibangkitkan ulang. Di laptop robot pemutaran ulang cocok persis: 0 mask beda, 0 observasi beda. Hasilnya 8,0% aksi menabrak, dan 31,4% keadaan punya minimal satu aksi yang menabrak.
+- Versi kontrak tetap 9. Model ID 02 tanpa kepala tetap terbaca dan tetap dipakai.
+
+**Pelatihan.** Laptop robot, RTX 5050, 24,2 menit. Model lama dicadangkan di `Documents\GitHub\_arsip_model_id01_tanpa_kepala_20261108` (laptop) dan `model_dqn/arsip_id01_tanpa_kepala_20261108/` (Mac).
+
+| Validasi (checkpoint terbaik) | Model lama | Model baru |
+|---|---:|---:|
+| Langkah gradien | 50.000 | 75.000 |
+| Skor | 97,8 | **98,0** |
+| Tiba | 99,6% | 99,6% |
+| Rasio biaya median / p90 | 0,99 / 1,18 | 1,00 / 1,16 |
+| AUC tabrakan, keadaan demo validasi | – | 0,980 |
+
+**Mutu kepala P pada ekspansi pencarian** (43.405 ekspansi eager, 470 rute uji)
+- AUC global P = **0,985**. AUC dalam ekspansi yang sama = 0,938.
+- AUC Q tetap 0,51, karena Q memang tidak dilatih soal tabrakan.
+
+| Ambang P | Tabrakan terdeteksi | Alarm palsu (aksi sah dianggap menabrak) | Q tertinggi di antara aksi "aman" ternyata menabrak |
+|---:|---:|---:|---:|
+| 0,5 | 70,7% | 1,2% | 3,51% ekspansi |
+| 0,3 | 81,9% | 2,5% | 2,59% |
+| 0,2 | 87,4% | 3,7% | 1,92% |
+| 0,1 | 93,3% | 6,1% | 1,11% |
+| 0,05 | 96,4% | 8,8% | 0,65% |
+
+**Mode A dan mode B** (Mac, waktu CPU, median 3 ulangan, 470 rute uji). Semua jalur dari pencarian lazy diputar ulang dengan cek tabrakan lengkap.
+- **Mode A (`lazy`, bawaan robot):** aksi dengan P ≥ 0,5 ditaruh di urutan belakang heap, dan setiap aksi yang diambil dicek tabrakannya.
+- **Mode B (`belajar`):** aksi dengan P ≥ ambang tidak dimasukkan, dan aksi yang diambil tidak dicek tabrakannya, tanpa backtracking. Tembakan RS tetap dicek.
+
+| | Eager (model baru) | **Mode A** | Mode B, ambang 0,5 | Mode B, 0,3 | Mode B, 0,1 |
+|---|---:|---:|---:|---:|---:|
+| **Waktu proses per node** | 0,347 ms | **0,143 ms** | 0,115 ms | 0,113 ms | 0,113 ms |
+| Simulasi primitif + cek tabrakan per node | 31,6 | 2,3 | 0,1* | 0,1* | 0,1* |
+| Aksi dibuang per node | 0 | 0,78 | 0,79 | 0,80 | 0,84 |
+| Total node | 47.777 | 49.543 | 68.755 | 70.837 | 72.240 |
+| Node p90 per rute | 151 | 157 | 201 | 285 | 301 |
+| Waktu per rute, median / p90 | 6,7 / 48,7 ms | **4,6 / 18,9 ms** | 4,5 / 25,5 ms | 4,5 / 25,6 ms | 4,6 / 28,4 ms |
+| Tiba | 99,8% | 99,8% | 97,7% | 97,4% | 96,4% |
+| **Jalur menabrak** (dari yang diperiksa ulang) | 0 | **0 / 453** | **85 / 458** | 56 / 457 | 16 / 451 |
+| Tiba tanpa tabrakan | 99,8% | **99,8%** | 79,6% | 85,5% | 93,0% |
+| Jalur identik dengan eager | 100% | 85,5% | 70,4% | 69,6% | 61,5% |
+| Rute lebih mahal / lebih murah > 1% | | 5,3% / 7,2% | 4,0% / 6,1% | 7,0% / 9,5% | 14,9% / 16,9% |
+
+\* Sisa simulasi dari `reset` (calon awal).
+
+Sebagai pembanding: model lama dalam mode lazy 0,156 ms per node (§10), dan Hybrid A\* 0,192 ms per ekspansi (§2).
+
+**Kesimpulan:**
+- **Hipotesis sebagian terbukti.** Dengan sinyal latih, jaringan belajar mengenali aksi yang menabrak dari 32 sinar: AUC 0,985, padahal sebelumnya 0,45–0,51. Kualitas pencariannya juga tidak turun (skor 98,0).
+- **Tetapi akurasi per aksi belum cukup untuk jalur yang aman.**
+  - Satu jalur berisi puluhan keputusan, sehingga kesalahan kecil per aksi terakumulasi.
+  - Di ambang 0,1 masih 3,5% jalur menabrak (16 dari 451), sementara alarm palsu sudah 6,1%. Pencarian jadi lebih panjang: node p90 naik dari 157 ke 301, dan biaya jalur lebih menyebar.
+  - Mode B juga hanya sekitar 20% lebih cepat per node daripada mode A (0,113 vs 0,143 ms), karena verifikasi mode A memang tinggal 2,3 simulasi per node.
+- **Mode A tetap bawaan robot.**
+  - Mode A lebih cepat 8% per node daripada model lama (0,143 vs 0,156 ms).
+  - Aksi yang dibuang turun dari 0,88 ke 0,78 per node.
+  - Waktu p90 per rute 18,9 ms, sedangkan A\* 68,0 ms.
+- **Catatan mode A:**
+  - Jalur yang identik dengan eager turun ke 85,5% (model lama 97%), karena urutan di heap dipengaruhi P.
+  - Ada satu rute dengan rasio biaya 7,1× terhadap eager, walau p90 rasionya tetap 1,00. Penyebab yang paling mungkin: aksi sah terbaik kena alarm palsu dan terdorong ke belakang. Ini perlu dicek, misalnya dengan penalti yang lebih lunak atau ambang urutan yang lebih tinggi.
+
+**Data:** `model_dqn/ukur_node_id01_mac_kepala.json`, kunci `uji_varian_kepala` dan `uji_q_tabrak_kepala`. Perintah:
+
+```
+python -m drl.ukur_node --id 1 --uji varian --varian eager,lazy,belajar,belajar@0.3,belajar@0.1
+python -m drl.ukur_node --id 1 --uji tabrak
+```
+
+## 13. Model P terpisah dan verifikasi selektif (Mac)
+
+Dikerjakan 2026-11-08 di Mac, dengan model jauh ID 01 dari §12. Q tetap dari model jauh; yang diganti hanya sumber P.
+
+**1. Keadaan pencarian.** `python -m drl.kelayakan --id 1 --kumpulkan`
+- Pencarian lazy dan `belajar` dijalankan di 1.500 rute latih dan 470 rute uji.
+- Setiap keadaan yang dibuka pencarian direkam, dan labelnya dihitung dengan simulasi lengkap ke-14 aksi.
+- Hasilnya 277.450 keadaan dari rute latih dan 86.002 dari rute uji, dengan 8,4–9,0% aksi menabrak. Waktunya 90 detik.
+
+**2. Model P terpisah.** `python -m drl.kelayakan --id 1 --latih`
+- Struktur 47 → 256 → 256 → 14 (ReLU, sigmoid), 81.678 parameter.
+- Masukannya 47 angka yang sama dengan model jauh.
+- Supervised (bukan DRL): binary cross-entropy dengan bobot 3× untuk aksi menabrak, Adam, batch 2.048.
+- Data latih: keadaan demo episode latih ditambah keadaan pencarian rute latih. Epoch dipilih dengan 10% rute latih yang disisihkan. Rute uji tidak dipakai untuk melatih maupun memilih epoch.
+- Berhenti otomatis di epoch 83 (71 detik, CPU). File: `model_dqn/id01_kepala_p.pt`; versi 40 epoch di `id01_kepala_p_e40.pt`.
+- Latih lebih lama hampir tidak membantu: dari 40 ke 83 epoch, AUC rute uji hanya naik dari 0,9942 ke 0,9951, dan model mulai sedikit overfit (rute latih 0,9968).
+
+| Mutu P | Demo validasi | Pencarian rute latih | **Pencarian rute uji** |
+|---|---:|---:|---:|
+| Kepala bawaan t2: AUC / AUC dalam keadaan sama | 0,980 / 0,947 | 0,978 / 0,926 | 0,980 / 0,930 |
+| Kepala bawaan: terdeteksi / alarm palsu @0,1 | 94,6 / 9,1% | 89,5 / 6,5% | 89,7 / 5,9% |
+| **Model P terpisah: AUC / AUC dalam keadaan sama** | 0,992 / 0,975 | 0,997 / 0,987 | **0,995 / 0,978** |
+| **Model P terpisah: terdeteksi / alarm palsu @0,1** | 98,5 / 8,6% | 99,5 / 5,6% | **98,0 / 5,0%** |
+| Model P terpisah: terdeteksi / alarm palsu @0,02 | 99,7 / 15,9% | 99,9 / 10,6% | 99,4 / 9,3% |
+
+Pergeseran distribusi dari keadaan demo ke keadaan pencarian memang ada, tetapi kecil. Peningkatan terbesar datang dari model terpisah yang dilatih dengan data pencarian.
+
+**3. Mode A, mode B, dan verifikasi selektif dengan P terpisah.** `python -m drl.ukur_node --id 1 --uji varian --kepala-p model_dqn/id01_kepala_p.pt --varian …` (Mac, waktu CPU, median 3 ulangan, 470 rute uji; semua jalur lazy diputar ulang dengan cek tabrakan lengkap).
+- **`selektif@x`**: lazy, tetapi aksi dengan P < x dijalankan tanpa cek tabrakan. Aksi lain tetap dicek, dan backtracking tetap ada.
+- Waktu per node sudah termasuk forward model P (±10 µs per simpul).
+
+| Varian | ms per node | Simulasi + cek per node | Tanpa cek per node | Node p90 | Waktu per rute, median / p90 | Tiba | **Jalur menabrak** | Tiba tanpa tabrakan | Identik dengan eager |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Eager | 0,341 | 31,6 | 0 | 151 | 6,6 / 47,9 ms | 99,8% | 0 | 99,8% | 100% |
+| **Mode A (lazy)** | **0,145** | 2,26 | 0 | 163 | 4,7 / 20,1 ms | **99,8%** | **0 / 450** | **99,8%** | 81,3% |
+| Mode B @0,5 | 0,122 | 0,10 | 1,82 | 200 | 4,6 / 22,2 ms | 97,2% | 19 / 456 | 93,2% | 74,0% |
+| Mode B @0,2 | 0,120 | 0,10 | 1,85 | 250 | 4,6 / 26,0 ms | 96,8% | 2 / 454 | 96,4% | 67,7% |
+| **Mode B @0,1** | **0,122** | 0,10 | 1,87 | 221 | 4,6 / 24,8 ms | 96,8% | **0 / 454** | 96,8% | 62,6% |
+| Mode B @0,05 | 0,121 | 0,11 | 1,86 | 225 | 4,7 / 25,7 ms | 96,2% | 0 / 450 | 96,2% | 58,3% |
+| Mode B @0,02 | 0,119 | 0,11 | 1,85 | 207 | 4,8 / 23,4 ms | 95,3% | 0 / 446 | 95,3% | 55,1% |
+| Selektif @0,05 | 0,138 | 1,40 | 1,56 | 159 | 4,5 / 18,7 ms | 99,8% | 1 / 450 | 99,6% | 81,1% |
+| **Selektif @0,02** | **0,140** | 1,43 | 1,50 | 159 | **4,5 / 18,3 ms** | **99,8%** | **0 / 450** | **99,8%** | 81,1% |
+| Selektif @0,01 | 0,141 | 1,46 | 1,46 | 159 | 4,5 / 18,5 ms | 99,8% | 0 / 451 | 99,8% | 81,1% |
+
+Pembanding dengan kepala bawaan (§12): mode B @0,1 menghasilkan 16 jalur menabrak, dan mode A 0,143 ms per node.
+
+**Kesimpulan:**
+- **Dengan model P terpisah, mode B pada ambang ≤ 0,1 menghasilkan 0 jalur menabrak** di sekitar 450 rute uji yang diperiksa ulang. Dengan kepala bawaan angkanya 16. Hipotesis bahwa 32 sinar ditambah posisi tujuan cukup untuk mendeteksi tabrakan jauh lebih kuat dengan model khusus.
+  - Tetapi 0 dari 454 bukan jaminan. Batas atas 95% (aturan tiga) masih sekitar 0,7% jalur.
+- **Harga mode B:**
+  - Tiba turun dari 99,8% ke 96,8% karena tidak ada backtracking dan sebagian aksi aman ikut dibuang (alarm palsu ±5–7%).
+  - Biaya jalur lebih menyebar: 13% rute lebih mahal dan 18% lebih murah > 1%, dengan rasio maksimum 1,79.
+  - Waktu p90 per rute lebih lambat daripada mode A (24,8 vs 20,1 ms), walau per node 16% lebih cepat (0,122 vs 0,145 ms).
+- **Verifikasi selektif @0,02 adalah yang paling seimbang.** Hasilnya 0 tabrakan, tiba 99,8%, 0,140 ms per node, dan p90 per rute 18,3 ms, yang terbaik dari semua varian. Penghematannya dibanding mode A kecil (±3% per node), karena verifikasi mode A sudah murah.
+  - Di ambang 0,05 sudah muncul 1 jalur menabrak, jadi ambangnya sensitif.
+- **Untuk robot, mode A tetap yang paling aman** (dijamin geometris). Pilihan lainnya dibahas di tesis sebagai temuan.
+- **Rute dengan rasio biaya 7,1× terhadap eager masih muncul** di mode A dan selektif, dengan P mana pun. Jadi penyebabnya cara urutan lazy, bukan mutu P. Ini belum diselidiki.
+
+**Data:** `drl/data/keadaan_cari_id01.npz` (keadaan pencarian), `model_dqn/id01_kepala_p.pt`, dan `model_dqn/ukur_node_id01_mac_kepala.json` (kunci `kelayakan_nilai`, `uji_varian_kepala_p`). Modulnya `drl/kelayakan.py`, dan mode `selektif` ada di `perencana_dqfd.py`.
+
+## 14. Uji jangkauan sinar 3 m untuk model P
+
+`python -m drl.kelayakan --id 1 --uji-jangkau 300 --epoch 80 --sabar 8` (Mac, 2026-11-08).
+- Pencariannya sama dengan §13. Di setiap keadaan dihitung dua versi 32 sinar: jangkauan 100 cm (yang dipakai Q, seperti sekarang) dan 300 cm (sphere tracing 1.024 iterasi).
+- Tiga model P dilatih dengan struktur 47/79 → 256 → 256 → 14, data, dan pengaturan yang sama. Data latih hanya keadaan pencarian: 253.833 dari rute latih; 23.617 keadaan disisihkan untuk memilih epoch.
+- Penilaian di 86.002 keadaan pencarian rute uji.
+- Catatan: 1 sel = 1 cm, dan arena 300 × 270 cm, jadi sinar 3 m praktis menjangkau seluruh arena.
+
+| Masukan sinar | AUC | AUC dalam keadaan sama | Terdeteksi / alarm palsu @0,1 | @0,02 |
+|---|---:|---:|---:|---:|
+| 100 cm (sekarang), 47 masukan | 0,9941 | 0,9740 | 98,1 / 5,6% | 99,5 / 10,0% |
+| 300 cm (pengganti), 47 masukan | 0,9923 | 0,9645 | 97,4 / 6,0% | 99,3 / 11,1% |
+| 100 cm + 300 cm, 79 masukan | 0,9950 | 0,9768 | 97,8 / 4,7% | 99,4 / 8,7% |
+
+Waktu 32 sinar per keadaan: 100 cm **7,7 µs**, 300 cm **9,2 µs**.
+
+**Kesimpulan:**
+- **Mengganti sinar menjadi 3 m memperburuk P.** Semua metriknya turun. Normalisasi 0–1 atas jangkauan 3 m memampatkan resolusi jarak dekat (10 cm menjadi 0,033, bukan 0,1), padahal tabrakan satu primitif hanya ditentukan oleh jarak sekitar 10 cm di sekitar badan.
+- **Menambahkan sinar 3 m di samping sinar 1 m hanya membantu sangat sedikit:** AUC +0,001, dan alarm palsu −0,9 poin di ambang 0,1. Harganya 32 masukan tambahan dan ±9 µs per node. Kalau dipakai untuk Q juga, model jauh harus dilatih ulang. Tidak sepadan.
+- **Kalau akurasi P masih ingin dinaikkan,** yang lebih masuk akal adalah resolusi di dekat badan: sinar lebih rapat, sinar diukur dari badan beserta margin, atau sinar dari beberapa titik pangkal. Bukan jangkauan.
+
+**Data:** `drl/data/keadaan_cari_id01_sinar300.npz`, dan kunci `kelayakan_jangkau_300` di `model_dqn/ukur_node_id01_mac_kepala.json`.
+
+## 15. Mode B + periksa jalur akhir + cadangan mode A (`belajar-periksa`)
+
+Dikerjakan 2026-11-08 di Mac. Mode pencarian `belajar-periksa` (`perencana_dqfd.cari`, `periksa_jalur`, `LingkunganRencana.ulang_dari_awal`) berjalan dalam tiga tahap:
+1. **Mode B:** tanpa cek tabrakan primitif; P memutuskan aksi mana yang dicoba.
+2. **Periksa jalur akhir sekali.** Jalur diputar ulang dari pose awal, dan hanya primitif jalur itu yang dicek. Tembakan RS penutup tetap dicek, dan peta Dijkstra tidak dihitung ulang. Kalau lolos, biaya jalur langsung tepat.
+3. **Cadangan:** kalau jalurnya menabrak atau mode B gagal, rencana ulang dengan lazy (mode A), lalu backtracking.
+
+Jadi jalur yang diberikan ke robot selalu sudah dicek bebas zona. Latar belakangnya: wasit hanya mencegah tabrakan antar-robot, sedangkan pelanggaran zona baru di-estop setelah terjadi, dan robot tidak bisa merencanakan keluar dari zona.
+
+Diukur di 470 rute uji, waktu CPU, median 3 ulangan. Data: `model_dqn/ukur_node_id01_mac_periksa.json` (P terpisah) dan `…_periksa_bawaan.json` (kepala bawaan).
+
+| Varian (sumber P) | ms per node | Total node | Node p90 | Waktu per rute, median / p90 | Tiba | Jalur menabrak | Identik dengan eager |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Eager | 0,342 | 47.777 | 151 | 6,7 / 48,2 ms | 99,8% | 0 | 100% |
+| **Mode A, lazy (P terpisah)** | 0,148 | 52.283 | 163 | 4,8 / 20,6 ms | 99,8% | 0 | 81,3% |
+| **Mode A, lazy (kepala bawaan)** | 0,141 | 49.543 | 157 | **4,6 / 18,5 ms** | 99,8% | 0 | 85,5% |
+| Mode B murni @0,1 (P terpisah) | 0,124 | 69.065 | 221 | 4,7 / 24,7 ms | 96,8% | 0 | 62,6% |
+| belajar-periksa @0,5 (P terpisah) | 0,131 | 87.641 | 231 | 5,3 / 29,3 ms | 99,8% | 0 | 80,4% |
+| belajar-periksa @0,2 (P terpisah) | 0,125 | 88.263 | 282 | 5,2 / 27,5 ms | 99,8% | 0 | 72,3% |
+| **belajar-periksa @0,1 (P terpisah)** | 0,127 | 88.271 | 224 | 5,2 / 26,6 ms | **99,8%** | **0** | 67,0% |
+| belajar-periksa @0,05 (P terpisah) | 0,129 | 92.325 | 303 | 5,2 / 32,5 ms | 99,8% | 0 | 62,8% |
+| belajar-periksa @0,1 (kepala bawaan) | 0,116 | 92.122 | 323 | 5,0 / 32,3 ms | 99,8% | 0 | 66,0% |
+
+Bagaimana rute diselesaikan, dari 470:
+
+| Varian | Jalur mode B lolos periksa | Cadangan: jalur mode B menabrak | Cadangan: mode B gagal | Sampai backtracking |
+|---|---:|---:|---:|---:|
+| @0,5, P terpisah | 418 | 17 | 16 | 17 |
+| @0,2, P terpisah | 427 | 1 | 21 | 19 |
+| @0,1, P terpisah | 425 | 0 | 22 | 21 |
+| @0,05, P terpisah | 414 | 0 | 30 | 24 |
+| @0,1, kepala bawaan | 409 | 13 | 25 | 21 |
+
+**Kesimpulan:**
+- **Tujuannya tercapai.** Tiba kembali 99,8%, jalur yang diberikan ke robot 0 yang menabrak (dijamin oleh periksa jalur), dan waktu per node 14–22% lebih rendah daripada mode A (0,116–0,131 vs 0,141–0,148 ms).
+- **Tetapi per rute justru lebih lambat daripada mode A:** median 5,0–5,3 vs 4,6–4,8 ms, dan p90 26,6–32,5 vs 18,5–20,6 ms.
+  - Total node naik dari sekitar 50 ribu ke sekitar 88 ribu. Penyebabnya: rute yang gagal di mode B harus dicari dua kali (mode B lalu lazy), dan pencarian mode B sendiri butuh lebih banyak node, karena tanpa backtracking dan sebagian aksi aman ikut dibuang oleh alarm palsu.
+  - Waktu per node yang lebih kecil tidak menutup jumlah node yang lebih besar.
+- **Yang dirasakan robot adalah waktu per rute, dan mode A (lazy dengan kepala bawaan) tetap yang terbaik:** p90 18,5 ms, median 4,6 ms. Bandingkan dengan Hybrid A\*: p90 68,0 ms, median 3,4 ms.
+- **Untuk tesis:** ms per node saja menyesatkan bila jumlah node berubah. Perbandingan perencana harus melihat waktu per rute, atau ms per node bersama jumlah node.
+- **Bawaan robot tetap mode A (`lazy`).** `belajar-periksa` tersedia sebagai opsi.
+
+## 16. Bawaan robot: mode B + periksa jalur (`belajar-periksa`)
+
+Mulai 2026-11-08 perencana robot memakai `belajar-periksa` (`perencana_dqfd.PENCARIAN_ROBOT`), atas keputusan pengguna.
+- **Sumber P:** `DQfDPlanner` otomatis memasang model P terpisah `model_dqn/id0N_kepala_p.pt` bila ada (`NetDenganP`): Q dari model jauh, P dari model P. Model dimuat lewat cache `.npz`, jadi torch tidak diimpor saat robot berjalan.
+- **Ambang:** `AMBANG_BELAJAR = 0,1`, dipakai di kedua tahap (mode B dan cadangan lazy).
+- **Robot tanpa P:** pencarian otomatis diganti `lazy` (`PENCARIAN_TANPA_P`), dengan pemberitahuan sekali. Ini berlaku untuk ID 02, yang modelnya tanpa kepala dan tanpa `id02_kepala_p.pt`.
+- **Tidak berubah:** validasi latih dan `evaluasi.py` tetap eager.
+- **Pengukuran:** `ukur_node --tanpa-kepala-p` melepas model P supaya bisa membandingkan dengan kepala bawaan.
+
+**Astar vs dqfd-murni, satu sesi ukur** (Mac, 470 rute uji ID 01, waktu CPU, median 3 ulangan; `python -m drl.ukur_node --id 1 --uji waktu`, data `model_dqn/ukur_node_id01_mac_robot.json`):
+
+| | Hybrid A\* + RS (astar) | DQfD (dqfd-murni, belajar-periksa) | DQfD / A\* |
+|---|---:|---:|---:|
+| **Waktu proses per node** (total / total) | 0,198 ms | **0,131 ms** | 0,66× |
+| Kemiringan regresi waktu rute terhadap node | 0,197 ms (+0,53 ms tetap) | 0,113 ms (+3,44 ms tetap) | 0,57× |
+| Total node | 151.680 | 88.271 | 0,58× |
+| Node per rute, median / p90 | 4 / 388 | 19 / 225 | |
+| **Waktu per rute, median** | **3,5 ms** | 5,2 ms | 1,5× |
+| **Waktu per rute, p90** | 70,8 ms | **27,1 ms** | 0,38× |
+| **Waktu per rute, rata-rata** | 64,1 ms | **24,6 ms** | 0,38× |
+| Waktu per rute, maksimum | 3.972 ms | **689 ms** | 0,17× |
+| Tiba | 99,6% | 99,8% | |
+
+Sebagai pembanding dari sesi lain (§15), mode A (lazy, kepala bawaan) mencatat 0,141 ms per node dan waktu per rute median 4,6 / p90 18,5 / rata-rata 14,8 ms. Jadi per rute, mode A sedikit lebih cepat daripada `belajar-periksa`.

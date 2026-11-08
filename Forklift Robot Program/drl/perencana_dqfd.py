@@ -51,7 +51,7 @@ import numpy as np
 
 import konfig
 from drl import lingkungan as L
-from drl.jaringan_numpy import SKALA_REWARD, muat_dari_pt, periksa_profil
+from drl.jaringan_numpy import NetDenganP, SKALA_REWARD, muat_dari_pt, muat_model_p, periksa_profil
 from drl.lingkungan import MAKS_LANGKAH
 
 DIR_MODEL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "model_dqn")
@@ -71,14 +71,26 @@ ANGGARAN_TERBAIK = 1200
 # "belajar" (mode B, uji): lazy TANPA cek tabrakan primitif - kepala kelayakan model
 # (P aksi menabrak, jaringan.JaringanDQfD kepala_tabrak) satu-satunya yang memutuskan;
 # tanpa backtracking. Tembakan RS tetap dicek. Untuk mengukur, bukan untuk robot.
-PENCARIAN = ("eager", "lazy", "belajar")
+# "selektif" (uji): lazy, tetapi aksi yang diprediksi SANGAT aman (P < AMBANG_YAKIN_AMAN)
+# dijalankan tanpa cek tabrakan; aksi lain tetap dicek seperti lazy.
+# "belajar-periksa": mode B, lalu jalur akhirnya SAJA dicek tabrakannya (periksa_jalur); bila
+# menabrak atau mode B gagal, rencana ulang dengan lazy (mode A), lalu backtracking.
+PENCARIAN = ("eager", "lazy", "belajar", "selektif", "belajar-periksa")
 PENCARIAN_BAWAAN = "eager"
-PENCARIAN_ROBOT = "lazy"
+# Robot (2026-11-08, catatan Obsidian 20 §15-§16): mode B + periksa jalur akhir + cadangan lazy,
+# dengan P dari model P terpisah (model_dqn/id0N_kepala_p.pt) dan ambang AMBANG_BELAJAR. Model
+# tanpa P (mis. ID 02 versi lama) memakai PENCARIAN_TANPA_P.
+PENCARIAN_ROBOT = "belajar-periksa"
+PENCARIAN_TANPA_P = "lazy"
 # Kepala kelayakan: aksi dengan P(menabrak) >= AMBANG_TABRAK diprediksi menabrak.
 # lazy: tetap masuk heap tetapi di belakang semua aksi lain (f + URUTAN_BELAKANG), jadi
 # pencarian tetap lengkap; belajar: tidak dimasukkan sama sekali.
 AMBANG_TABRAK = 0.5
 URUTAN_BELAKANG = 1e6
+AMBANG_YAKIN_AMAN = 0.02
+# Ambang P untuk "belajar-periksa", dipakai di KEDUA tahapnya (mode B dan cadangan lazy) -
+# konfigurasi yang diukur: 0 jalur menabrak, tiba 99,8% (catatan 20 §15).
+AMBANG_BELAJAR = 0.1
 # Metode gabungan: bagian batas waktu untuk terbaik-dulu; sisanya untuk mundur.
 PORSI_WAKTU_TERBAIK = 0.75
 
@@ -252,7 +264,7 @@ def rencanakan_terbaik(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=None, bo
 
 
 def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=None, bobot=BOBOT_TERBAIK,
-                             belajar=False):
+                             belajar=False, selektif=None, ambang=None):
     """Terbaik-dulu LAZY: f dan urutan sama dengan rencanakan_terbaik, tetapi 14 primitif
     TIDAK disimulasi di muka.
 
@@ -267,16 +279,19 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
     Model dengan kepala kelayakan (net.kepala_tabrak): aksi yang diprediksi menabrak
     (P >= AMBANG_TABRAK) dimasukkan di belakang heap. belajar=True (mode B): aksi itu tidak
     dimasukkan, dan aksi yang diambil TIDAK dicek tabrakannya - jaringan saja yang memutuskan.
+    selektif=x (verifikasi selektif): aksi dengan P < x dijalankan tanpa cek tabrakan, lainnya
+    dicek seperti lazy.
 
     Kembalian dict sama dengan rencanakan_terbaik, ditambah dibuang (aksi yang ternyata
     menabrak / selnya sudah dimasuki), masuk_ulang, dan aksi_jalur (urutan aksi jalur
     yang berhasil; untuk memeriksa ulang jalur mode B).
     """
     kepala = bool(getattr(net, "kepala_tabrak", False))
+    ambang = AMBANG_TABRAK if ambang is None else ambang
     if belajar and not kepala:
         raise ValueError("pencarian 'belajar' butuh model dengan kepala kelayakan (kepala_tabrak)")
     t0 = time.perf_counter()
-    snap, induk, potong, aksi_simpul, q_simpul = [env.simpan_keadaan()], [-1], [[]], [None], {}
+    snap, induk, potong, aksi_simpul, q_simpul, p_simpul = [env.simpan_keadaan()], [-1], [[]], [None], {}, {}
     heap, urut = [], itertools.count()
     PERKIRAAN, TERBUKA, TEPAT = 0, 1, 2
 
@@ -288,12 +303,12 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
             q, p = net.q_tabrak(env.observasi())
         else:
             q, p = net.q(env.observasi()), None
-        q_simpul[i] = q
+        q_simpul[i], p_simpul[i] = q, p
         g = env.biaya
         for a, c, terbuka in calon:
             h = max(0.0, -float(q[a]) * SKALA_REWARD - c)
             f = g + c + bobot * h
-            if p is not None and not terbuka and p[a] >= AMBANG_TABRAK:
+            if p is not None and not terbuka and p[a] >= ambang:
                 if belajar:
                     continue                 # jaringan memutuskan: menabrak
                 f += URUTAN_BELAKANG
@@ -310,7 +325,7 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
 
     buka(0)
     di = 0
-    dicoba = pindah = dibuang = masuk_ulang = 0
+    dicoba = pindah = dibuang = masuk_ulang = tanpa_cek_n = 0
     alasan = "buntu"
     jarak_min = _jarak_tujuan(env)
 
@@ -325,7 +340,7 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
             aksi_jalur.reverse()
         return {"sukses": sukses, "alasan": alasan_, "dicoba": dicoba, "mundur": pindah,
                 "waktu_s": time.perf_counter() - t0, "jarak_min": jm, "dibuang": dibuang,
-                "masuk_ulang": masuk_ulang, "aksi_jalur": aksi_jalur}
+                "masuk_ulang": masuk_ulang, "tanpa_cek": tanpa_cek_n, "aksi_jalur": aksi_jalur}
 
     while heap:
         if dicoba >= anggaran:
@@ -339,11 +354,14 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
             pulihkan(i)
             di = i
             pindah += 1
-        calon = env.siapkan_aksi(a, tanpa_cek=belajar or jenis == TERBUKA)
+        tanpa_cek = belajar or jenis == TERBUKA or (
+            selektif is not None and jenis == PERKIRAAN and p_simpul.get(i) is not None and p_simpul[i][a] < selektif)
+        tanpa_cek_n += tanpa_cek and jenis != TERBUKA
+        calon = env.siapkan_aksi(a, tanpa_cek=tanpa_cek)
         if calon is None:
             dibuang += 1
             continue
-        if jenis == PERKIRAAN and not belajar:
+        if jenis == PERKIRAAN and not tanpa_cek:
             c = calon[1]
             fe = env.biaya + c + bobot * max(0.0, -float(q_simpul[i][a]) * SKALA_REWARD - c)
             if heap and fe > f and fe > heap[0][0]:
@@ -369,6 +387,19 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
     return hasil(False, alasan, jarak_min)
 
 
+def periksa_jalur(env, aksi_jalur):
+    """Periksa SATU jalur hasil pencarian tanpa cek tabrakan (mode belajar): putar ulang aksi_jalur
+    dari pose awal dan cek tabrakan HANYA primitif-primitif jalur itu (tembakan RS penutup dicek
+    seperti biasa). True bila semuanya bebas dan berakhir serah - env kemudian berisi jalur itu
+    dengan biaya tepat, termasuk penalti jarak-bebas. False: jalur ditolak."""
+    env.ulang_dari_awal()
+    for a in aksi_jalur or []:
+        if env.selesai or env.siapkan_aksi(a) is None:
+            return False
+        env.step(a, hitung_calon=False)
+    return env.sukses
+
+
 def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, mulai_ulang=None, bobot=BOBOT_TERBAIK,
          pencarian=None):
     """env sudah di-reset. Kembalian dict rencanakan() + 'metode'.
@@ -377,8 +408,9 @@ def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, mulai_ulang=None, bob
     bila gagal. mulai_ulang(): me-reset env ke keadaan awal yang sama - sel
     tertutup milik pencarian pertama tidak boleh menutup pencarian kedua.
     pencarian: "eager" (14 primitif disimulasi di muka), "lazy"
-    (rencanakan_terbaik_malas), atau "belajar" (lazy tanpa cek tabrakan primitif, tanpa
-    backtracking - mode B, uji); hanya untuk tahap terbaik-dulu.
+    (rencanakan_terbaik_malas), "belajar" (lazy tanpa cek tabrakan primitif, tanpa
+    backtracking - mode B, uji), "selektif", atau "belajar-periksa" (mode B + periksa
+    jalur akhir + cadangan lazy); hanya untuk tahap terbaik-dulu.
     """
     t0 = time.perf_counter()
     pencarian = pencarian or PENCARIAN_BAWAAN
@@ -392,10 +424,32 @@ def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, mulai_ulang=None, bob
                                            else batas_waktu)
     if pencarian == "eager":
         h = rencanakan_terbaik(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=bobot)
+    elif pencarian == "belajar-periksa":
+        hb = rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=bobot,
+                                      belajar=True, ambang=AMBANG_BELAJAR)
+        if hb["sukses"] and periksa_jalur(env, hb["aksi_jalur"]):
+            hb["metode"] = "belajar, jalur lolos periksa"
+            hb["waktu_s"] = time.perf_counter() - t0
+            return hb
+        sebab = "jalur belajar menabrak" if hb["sukses"] else f"belajar gagal ({hb['alasan']})"
+        env.ulang_dari_awal()
+        bt2 = None if bt is None else bt - (time.perf_counter() - t0)
+        if bt2 is not None and bt2 <= 0:
+            h = dict(hb, sukses=False, alasan=sebab)
+        else:
+            h = rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt2, bobot=bobot,
+                                         ambang=AMBANG_BELAJAR)
+            h["dicoba"] += hb["dicoba"]
+        h["cadangan"] = sebab
+        if h["sukses"]:
+            h["metode"] = f"belajar -> lazy ({sebab})"
+            h["waktu_s"] = time.perf_counter() - t0
+            return h
     else:
         h = rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=bobot,
-                                     belajar=pencarian == "belajar")
-    h["metode"] = "terbaik"
+                                     belajar=pencarian == "belajar",
+                                     selektif=AMBANG_YAKIN_AMAN if pencarian == "selektif" else None)
+    h["metode"] = "terbaik" if pencarian != "belajar-periksa" else "belajar -> lazy"
     if h["sukses"] or metode == "terbaik" or pencarian == "belajar":
         return h
     sisa = None if batas_waktu is None else batas_waktu - (time.perf_counter() - t0)
@@ -456,6 +510,30 @@ def jalur_model(robot_id, dir_model=None):
     return os.path.join(dir_model or DIR_MODEL, f"id{robot_id:02d}_{L.JENIS}.pt")
 
 
+def jalur_model_p(robot_id, dir_model=None):
+    """Model P terpisah robot ini (drl.kelayakan --latih), boleh tidak ada."""
+    return os.path.join(dir_model or DIR_MODEL, f"id{robot_id:02d}_kepala_p.pt")
+
+
+_MODEL_P = {}
+
+
+def muat_model_p_robot(robot_id, dir_model=None):
+    """ModelPNumpy robot ini (lewat cache .npz, di-cache), atau None bila tidak ada."""
+    jalur = jalur_model_p(robot_id, dir_model)
+    if not os.path.exists(jalur):
+        return None
+    if jalur not in _MODEL_P:
+        mp, meta = muat_model_p(jalur)
+        if meta.get("robot") not in (None, robot_id) or meta.get("n_obs") != L.N_OBS or meta.get("n_aksi") != L.N_AKSI:
+            raise SystemExit(f"[!] {jalur} tidak cocok dengan robot {robot_id:02d} / bentuk masukan-keluaran model jauh")
+        _MODEL_P[jalur] = mp
+    return _MODEL_P[jalur]
+
+
+_SUDAH_DIBERITAHU = set()
+
+
 def _periksa_milik(meta, robot_id, jalur):
     if meta.get("robot") not in (None, robot_id):
         raise SystemExit(f"[!] {jalur} milik robot {meta['robot']:02d}, bukan {robot_id:02d}")
@@ -509,6 +587,15 @@ class DQfDPlanner:
         self.time_limit = astar.time_limit
         self.cadangan = cadangan
         self.net = muat_model_numpy(profil.id, dir_model)
+        mp = muat_model_p_robot(profil.id, dir_model)
+        if mp is not None:
+            self.net = NetDenganP(self.net, mp)          # P dari model P terpisah, Q dari model jauh
+        if self.pencarian in ("belajar", "belajar-periksa", "selektif") and not self.net.kepala_tabrak:
+            if (profil.id, self.pencarian) not in _SUDAH_DIBERITAHU:
+                print(f"[i] DQfD ID {profil.id:02d}: model tanpa P (kepala kelayakan / id{profil.id:02d}_kepala_p.pt) - "
+                      f"pencarian '{self.pencarian}' diganti '{PENCARIAN_TANPA_P}'")
+                _SUDAH_DIBERITAHU.add((profil.id, self.pencarian))
+            self.pencarian = PENCARIAN_TANPA_P
         self.env = L.LingkunganRencana(arena, profil, margin_cm=margin_cm, planner=pustaka)
         if pintas is not None:
             self.env.pintas_terbuka = bool(pintas)      # jalan pintas ruang terbuka, lihat lingkungan._terbuka

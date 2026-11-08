@@ -77,7 +77,7 @@ VARIAN = (("eager", "eager", False), ("eager+pintas", "eager", True),
           ("lazy", "lazy", False), ("lazy+pintas", "lazy", True))
 # md5 sumber fungsi asli saat salinan bertanda di sini dibuat (_periksa_salinan).
 _MD5_TERBAIK = "5db045286f75970e78dfeb42030b32e8"      # rencanakan_terbaik -> _terbaik_bertanda
-_MD5_MALAS = "a52bf8146ea40a527a102161be7c8428"        # rencanakan_terbaik_malas -> _malas_bertanda
+_MD5_MALAS = "b627aada09a4903ebc63d1a96f2dfd1a"        # rencanakan_terbaik_malas -> _malas_bertanda
 pc = time.perf_counter
 
 
@@ -153,12 +153,16 @@ def _periksa_salinan():
                   f"di drl/ukur_node.py dengan fungsi aslinya, lalu perbarui {kunci}.", flush=True)
 
 
-def _malas_bertanda(net, env, anggaran, batas_waktu, bobot, catat=None):
+def _malas_bertanda(net, env, anggaran, batas_waktu, bobot, catat=None, belajar=False, selektif=None, ambang=None):
     """SALINAN perencana_dqfd.rencanakan_terbaik_malas, logika sama persis, dengan kait
     catat(bagian, detik) untuk waktu per bagian."""
     tandai = catat or (lambda k, dt: None)
+    kepala = bool(getattr(net, "kepala_tabrak", False))
+    ambang = PD.AMBANG_TABRAK if ambang is None else ambang
+    if belajar and not kepala:
+        raise ValueError("pencarian 'belajar' butuh model dengan kepala kelayakan (kepala_tabrak)")
     t0 = pc()
-    snap, induk, potong, q_simpul = [env.simpan_keadaan()], [-1], [[]], {}
+    snap, induk, potong, aksi_simpul, q_simpul, p_simpul = [env.simpan_keadaan()], [-1], [[]], [None], {}, {}
     heap, urut = [], itertools.count()
     PERKIRAAN, TERBUKA, TEPAT = 0, 1, 2
 
@@ -166,12 +170,20 @@ def _malas_bertanda(net, env, anggaran, batas_waktu, bobot, catat=None):
         a0 = pc()
         calon = env.calon_malas()
         if calon:
-            q = net.q(env.observasi())
-            q_simpul[i] = q
+            if kepala:
+                q, p = net.q_tabrak(env.observasi())
+            else:
+                q, p = net.q(env.observasi()), None
+            q_simpul[i], p_simpul[i] = q, p
             g = env.biaya
             for a, c, terbuka in calon:
                 h = max(0.0, -float(q[a]) * PD.SKALA_REWARD - c)
-                heapq.heappush(heap, (g + c + bobot * h, next(urut), i, a, TERBUKA if terbuka else PERKIRAAN))
+                f = g + c + bobot * h
+                if p is not None and not terbuka and p[a] >= ambang:
+                    if belajar:
+                        continue
+                    f += PD.URUTAN_BELAKANG
+                heapq.heappush(heap, (f, next(urut), i, a, TERBUKA if terbuka else PERKIRAAN))
         tandai("buka", pc() - a0)
 
     def pulihkan(i):
@@ -189,13 +201,22 @@ def _malas_bertanda(net, env, anggaran, batas_waktu, bobot, catat=None):
 
     buka(0)
     di = 0
-    dicoba = pindah = dibuang = masuk_ulang = 0
+    dicoba = pindah = dibuang = masuk_ulang = tanpa_cek_n = 0
     alasan = "buntu"
     jarak_min = PD._jarak_tujuan(env)
 
-    def hasil(sukses, alasan_, jm):
+    def hasil(sukses, alasan_, jm, i_akhir=None, a_akhir=None):
+        aksi_jalur = None
+        if sukses:
+            aksi_jalur = [a_akhir]
+            j = i_akhir
+            while j > 0:
+                aksi_jalur.append(aksi_simpul[j])
+                j = induk[j]
+            aksi_jalur.reverse()
         return {"sukses": sukses, "alasan": alasan_, "dicoba": dicoba, "mundur": pindah,
-                "waktu_s": pc() - t0, "jarak_min": jm, "dibuang": dibuang, "masuk_ulang": masuk_ulang}
+                "waktu_s": pc() - t0, "jarak_min": jm, "dibuang": dibuang, "masuk_ulang": masuk_ulang,
+                "tanpa_cek": tanpa_cek_n, "aksi_jalur": aksi_jalur}
 
     while heap:
         if dicoba >= anggaran:
@@ -212,12 +233,15 @@ def _malas_bertanda(net, env, anggaran, batas_waktu, bobot, catat=None):
             di = i
             pindah += 1
         a1 = pc()
-        calon = env.siapkan_aksi(a, tanpa_cek=jenis == TERBUKA)
+        tanpa_cek = belajar or jenis == TERBUKA or (
+            selektif is not None and jenis == PERKIRAAN and p_simpul.get(i) is not None and p_simpul[i][a] < selektif)
+        tanpa_cek_n += tanpa_cek and jenis != TERBUKA
+        calon = env.siapkan_aksi(a, tanpa_cek=tanpa_cek)
         tandai("siapkan", pc() - a1)
         if calon is None:
             dibuang += 1
             continue
-        if jenis == PERKIRAAN:
+        if jenis == PERKIRAAN and not tanpa_cek:
             a2 = pc()
             c = calon[1]
             fe = env.biaya + c + bobot * max(0.0, -float(q_simpul[i][a]) * PD.SKALA_REWARD - c)
@@ -236,10 +260,11 @@ def _malas_bertanda(net, env, anggaran, batas_waktu, bobot, catat=None):
         jarak_min = min(jarak_min, PD._jarak_tujuan(env))
         if info["sukses"]:
             tandai("simpan", pc() - a4)
-            return hasil(True, info["alasan"], 0.0)
+            return hasil(True, info["alasan"], 0.0, i, a)
         j = len(snap)
         snap.append(env.simpan_keadaan())
         induk.append(i)
+        aksi_simpul.append(a)
         potong.append(env._pose[n0:])
         tandai("simpan", pc() - a4)
         if akhir or env.langkah_ke >= PD.MAKS_LANGKAH:
@@ -346,13 +371,19 @@ def uji_waktu(args):
     konfig.pilih_robot(rid)
     prof = konfig.profil(rid)
     hasil = {j: [] for j in JENIS}
+    pencarian_dipakai = {}
     t_mulai = time.time()
     for peta, ar, rute in _peta_rute(rid, args.maks):
         for jenis in JENIS:
             per = _perencana(ar, prof, jenis)
             if jenis != "astar":
-                _atur_varian(per, args.pencarian or PD.PENCARIAN_ROBOT, False)
+                _pasang_kepala_p(per, args)
+                if args.pencarian:
+                    _atur_varian(per, args.pencarian, False)
             cat = BB.PencatatNode(per)
+            if jenis != "astar":
+                pl0 = per.planner
+                pencarian_dipakai[jenis] = f"{pl0.pencarian}, P {type(pl0.net).__name__}"
             r0 = rute[0]
             per.rencanakan(r0["awal"], r0["tujuan"], r0["rintangan"])            # pemanasan
             for r in rute:
@@ -379,7 +410,7 @@ def uji_waktu(args):
         c_all = np.array([x["cpu_ms"] for x in xs])
         b, a = np.polyfit(n_all, c_all, 1)
         regresi[jenis] = {"ms_per_node": float(b), "tetap_ms": float(a)}
-        ring[jenis] = {"pencarian": None if jenis == "astar" else (args.pencarian or PD.PENCARIAN_ROBOT),
+        ring[jenis] = {"pencarian": None if jenis == "astar" else pencarian_dipakai.get(jenis),
                        "rute": len(xs), "rute_node_positif": len(ok), "node_total": int(n_all.sum()),
                        "tiba": 100.0 * float(np.mean([x["sukses"] for x in xs])),
                        "cpu_ms_per_node_median": float(np.median(cpu)),
@@ -470,11 +501,13 @@ def uji_rincian(args):
             N["mundur|langkah"] += h["dicoba"]
         return h
 
-    def malas(net, env, anggaran=PD.ANGGARAN_TERBAIK, batas_waktu=None, bobot=PD.BOBOT_TERBAIK):
+    def malas(net, env, anggaran=PD.ANGGARAN_TERBAIK, batas_waktu=None, bobot=PD.BOBOT_TERBAIK, belajar=False,
+              selektif=None, ambang=None):
         lama, fase[0] = fase[0], "terbaik"
         t0 = pc()
         try:
-            h = _malas_bertanda(net, env, anggaran, batas_waktu, bobot, catat=catat_terbaik)
+            h = _malas_bertanda(net, env, anggaran, batas_waktu, bobot, catat=catat_terbaik, belajar=belajar,
+                                selektif=selektif, ambang=ambang)
         finally:
             fase[0] = lama
             if rekam[0]:
@@ -503,7 +536,7 @@ def uji_rincian(args):
         e._ekspansi = _pembungkus
 
     pencarian = args.pencarian or PD.PENCARIAN_ROBOT
-    malas_mode = pencarian == "lazy"
+    malas_mode = pencarian in ("lazy", "belajar", "selektif", "belajar-periksa")
     PD.rencanakan_terbaik, PD.rencanakan_terbaik_malas, PD.rencanakan = terbaik, malas, mundur
 
     # ---- (1) lintasan waktu
@@ -531,6 +564,8 @@ def uji_rincian(args):
             bungkus(pu, "_feasible_approach_dirs", "arah_datang", pemanggil=False)
         if id(per.planner.net) not in net_ok:
             bungkus(per.planner.net, "qv", "forward", simpan_obs=True)
+            if getattr(per.planner.net, "kepala_tabrak", False):
+                bungkus(per.planner.net, "q_tabrak", "forward", simpan_obs=True)
             net_ok.add(id(per.planner.net))
         bungkus(per, "peta_dengan", "peta_dengan", pemanggil=False)
         daftar.append((per, BB.PencatatNode(per), rute))
@@ -709,7 +744,8 @@ def uji_rincian(args):
 
     # ---- (3) forward pass satu keadaan dan jumlah parameter
     net = PD.muat_model_numpy(rid)
-    del net.qv                                   # lepas pembungkus waktu, kembali ke metode kelas
+    for nama in ("qv", "q_tabrak"):              # lepas pembungkus waktu, kembali ke metode kelas
+        net.__dict__.pop(nama, None)
     X = np.array(sampel, dtype=np.float32)
     for o in X[:300]:
         net.q(o)
@@ -837,10 +873,13 @@ def uji_tabrak(args):
         return st
 
     def saat_buka(env, q):
+        net = env._net_uji
+        p = net.q_tabrak(env.observasi())[1] if getattr(net, "kepala_tabrak", False) else None
         catatan.append((np.array(q, np.float32), status_aksi(env),
-                        env.omap.pose_margin(env.v, env.x, env.y, env.yaw)))
+                        env.omap.pose_margin(env.v, env.x, env.y, env.yaw), p))
 
     def terbaik(net, env, anggaran=PD.ANGGARAN_TERBAIK, batas_waktu=None, bobot=PD.BOBOT_TERBAIK):
+        env._net_uji = net
         return _terbaik_bertanda(net, env, anggaran, batas_waktu, bobot, saat_buka=saat_buka)
 
     PD.rencanakan_terbaik = terbaik
@@ -849,6 +888,7 @@ def uji_tabrak(args):
     n_rute = 0
     for peta, ar, rute in _peta_rute(rid, args.maks):
         per = _perencana(ar, prof, "dqfd-murni")
+        _pasang_kepala_p(per, args)
         _atur_varian(per, "eager", False)          # uji ini membedah mask pencarian eager
         for r in rute:
             per.rencanakan(r["awal"], r["tujuan"], r["rintangan"])
@@ -904,7 +944,46 @@ def uji_tabrak(args):
     for b in per_margin:
         print(f"  margin {b['margin_sel']:>5} sel: {b['porsi']:5.1f}% ekspansi, ada aksi menabrak "
               f"{b['ada_menabrak']:5.1f}%, Q tertinggi menabrak {b['q_tertinggi_menabrak']:5.1f}%")
-    _simpan(args.keluaran, {"uji_q_tabrak": h})
+    if catatan and catatan[0][3] is not None:
+        P = np.stack([c[3] for c in catatan])
+        num = den = 0.0
+        for pp, t, sh in zip(P[ada], tabrak[ada], sah[ada]):
+            if sh.any():
+                pv, pc_ = pp[sh], pp[t]
+                num += (pc_[:, None] > pv[None, :]).sum() + 0.5 * (pc_[:, None] == pv[None, :]).sum()
+                den += len(pv) * len(pc_)
+        kep = {"auc_ekspansi_sama": float(num / den) if den else float("nan"),
+               "auc_global": _auc(P[tabrak | sah], tabrak[tabrak | sah]), "per_ambang": {}}
+        for thr in (0.5, 0.3, 0.2, 0.1, 0.05):
+            aman = P < thr
+            top = np.where(aman, Q, -np.inf).argmax(1)
+            ada_aman = aman.any(1)
+            kep["per_ambang"][str(thr)] = {
+                "terdeteksi_persen": 100 * float((P[tabrak] >= thr).mean()),
+                "alarm_palsu_persen": 100 * float((P[sah] >= thr).mean()),
+                "q_tertinggi_aman_menabrak_persen": 100 * float(tabrak[idx, top][ada_aman].mean())}
+        h["kepala_tabrak"] = kep
+        print(f"kepala P(menabrak): AUC (ekspansi sama) {kep['auc_ekspansi_sama']:.3f}, global {kep['auc_global']:.3f}")
+        for thr, v in kep["per_ambang"].items():
+            print(f"  ambang {thr:>4}: terdeteksi {v['terdeteksi_persen']:5.1f}%, alarm palsu {v['alarm_palsu_persen']:5.1f}%, "
+                  f"Q tertinggi di antara 'aman' ternyata menabrak {v['q_tertinggi_aman_menabrak_persen']:.2f}% ekspansi")
+    _simpan(args.keluaran, {(("uji_q_tabrak_kepala_p" if args.kepala_p else "uji_q_tabrak_kepala")
+                             if "kepala_tabrak" in h else "uji_q_tabrak"): h})
+
+
+def _auc(skor, label):
+    skor, label = np.asarray(skor, float).ravel(), np.asarray(label, bool).ravel()
+    n_pos, n_neg = int(label.sum()), int((~label).sum())
+    if not n_pos or not n_neg:
+        return float("nan")
+    urut = np.argsort(skor, kind="mergesort")
+    pk = np.empty(len(skor))
+    s_urut = skor[urut]
+    awal = np.r_[0, np.flatnonzero(np.diff(s_urut)) + 1]
+    akhir = np.r_[awal[1:], len(skor)]
+    for a, b in zip(awal, akhir):
+        pk[urut[a:b]] = (a + b + 1) / 2.0
+    return float((pk[label].sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
 
 
 # ------------------------------------------------------------------ uji varian
@@ -914,15 +993,75 @@ def _atur_varian(per, pencarian, pintas):
         pl.env.pintas_terbuka = pintas
 
 
+_MODEL_P = {}
+
+
+def _pasang_kepala_p(per, args):
+    """--kepala-p: P dari model terpisah ini (Q tetap dari model jauh). --tanpa-kepala-p: lepas model P
+    yang dipasang DQfDPlanner otomatis (id0N_kepala_p.pt), jadi P dari kepala bawaan."""
+    from drl.jaringan_numpy import NetDenganP, muat_model_p
+    if getattr(args, "tanpa_kepala_p", False):
+        for _, pl in per._cache.values():
+            if isinstance(pl.net, NetDenganP):
+                pl.net = pl.net.net
+        return
+    if not getattr(args, "kepala_p", None):
+        return
+    if args.kepala_p not in _MODEL_P:
+        _MODEL_P[args.kepala_p] = muat_model_p(args.kepala_p)[0]
+    for _, pl in per._cache.values():
+        if not isinstance(pl.net, NetDenganP):
+            pl.net = NetDenganP(pl.net, _MODEL_P[args.kepala_p])
+
+
+def _uraikan_varian(nama):
+    """"lazy+pintas" -> (nama, "lazy", True, None); "belajar@0.3" -> (nama, "belajar", False, 0.3).
+    "@x" = AMBANG_TABRAK, kecuali "selektif@x" = AMBANG_YAKIN_AMAN."""
+    dasar, _, ambang = nama.partition("@")
+    pencarian, _, pintas = dasar.partition("+")
+    if pencarian not in PD.PENCARIAN or pintas not in ("", "pintas"):
+        raise SystemExit(f"[!] varian '{nama}' tidak dikenal (contoh: eager, lazy+pintas, belajar@0.3)")
+    return nama, pencarian, pintas == "pintas", float(ambang) if ambang else None
+
+
+def _periksa_ulang(pl):
+    """Putar ulang aksi_jalur rencana terakhir DQfDPlanner pl dengan cek tabrakan lengkap (eager).
+    None bila tidak ada aksi_jalur (jalur eager / backtracking - sudah dicek saat mencari)."""
+    st = pl.last_stats or {}
+    aksi = st.get("aksi_jalur")
+    if not aksi or getattr(pl, "_rencana_terakhir", None) is None:
+        return None
+    omap, awal, tujuan = pl._rencana_terakhir
+    e0 = pl.env
+    env = L.LingkunganRencana(e0.arena, e0.p, margin_cm=e0.margin_cm, planner=pl.pustaka)
+    obs, _ = env.reset(awal, tujuan, omap)
+    if obs is None:
+        return {"tabrak": False, "biaya": env.biaya if env.sukses else None}
+    for a in aksi:
+        if env.selesai or not env._mask[a]:
+            return {"tabrak": bool(env._tabrak[a]) or env.selesai, "biaya": None}
+        env.step(a)
+    return {"tabrak": not env.sukses, "biaya": env.biaya if env.sukses else None}
+
+
 def uji_varian(args):
     rid = args.id
     konfig.pilih_robot(rid)
     prof = konfig.profil(rid)
-    nama_v = [v[0] for v in VARIAN]
+    kepala = bool(getattr(PD.muat_model_numpy(rid), "kepala_tabrak", False)) or bool(args.kepala_p)
+    if args.varian:
+        daftar_v = [_uraikan_varian(v.strip()) for v in args.varian.split(",") if v.strip()]
+    elif kepala:
+        daftar_v = [_uraikan_varian(v) for v in ("eager", "lazy", "belajar")]
+    else:
+        daftar_v = [(n, p, k, None) for n, p, k in VARIAN]
+    nama_v = [v[0] for v in daftar_v]
+    print(f"[i] model ID {rid:02d} {'dengan' if kepala else 'tanpa'} kepala kelayakan; varian: {', '.join(nama_v)}")
     waktu = {v: [] for v in nama_v}
     hitung = {v: [] for v in nama_v}
     H = {v: collections.Counter() for v in nama_v}
     aktif, diam = [None], [False]
+    ambang_asli, yakin_asli, belajar_asli = PD.AMBANG_TABRAK, PD.AMBANG_YAKIN_AMAN, PD.AMBANG_BELAJAR
 
     malas_asli = PD.rencanakan_terbaik_malas
 
@@ -931,6 +1070,7 @@ def uji_varian(args):
         if aktif[0]:
             H[aktif[0]]["dibuang"] += h["dibuang"]
             H[aktif[0]]["masuk_ulang"] += h["masuk_ulang"]
+            H[aktif[0]]["tanpa_cek"] += h.get("tanpa_cek", 0)
         return h
     PD.rencanakan_terbaik_malas = malas
 
@@ -971,8 +1111,15 @@ def uji_varian(args):
 
     t_mulai = time.time()
     for peta, ar, rute in _peta_rute(rid, args.maks):
-        for nama, pencarian, pintas in VARIAN:
+        for nama, pencarian, pintas, ambang in daftar_v:
+            if pencarian == "selektif":
+                PD.AMBANG_YAKIN_AMAN = yakin_asli if ambang is None else ambang
+            elif pencarian == "belajar-periksa":
+                PD.AMBANG_BELAJAR = belajar_asli if ambang is None else ambang
+            else:
+                PD.AMBANG_TABRAK = ambang_asli if ambang is None else ambang
             per = _perencana(ar, prof, "dqfd-murni")
+            _pasang_kepala_p(per, args)
             _atur_varian(per, pencarian, pintas)
             cat = BB.PencatatNode(per)
             r0 = rute[0]
@@ -991,17 +1138,30 @@ def uji_varian(args):
                 for r in rute:
                     cat.total = 0
                     jalur, info = per.rencanakan(r["awal"], r["tujuan"], r["rintangan"])
+                    diam[0] = True
+                    cek = _periksa_ulang(per.planner) if jalur else None
+                    diam[0] = False
+                    biaya = per.planner.env.biaya if jalur else None
+                    pr = (per.planner.last_stats or {}).get("perencana", "?")
+                    kat = ("jalur belajar lolos periksa" if "lolos periksa" in pr else
+                           "cadangan lazy: jalur belajar menabrak" if "menabrak" in pr else
+                           "cadangan lazy: belajar gagal" if "belajar gagal" in pr else
+                           "backtracking" if "mundur" in pr else pr.replace("dqfd (", "").rstrip(")"))
+                    H[nama]["metode:" + kat] += 1
                     hitung[nama].append({"node": cat.total, "jalur": jalur, "sukses": bool(jalur),
-                                         "biaya": per.planner.env.biaya if jalur else None})
+                                         "biaya": biaya, "diperiksa": cek is not None,
+                                         "tabrak": bool(cek and cek["tabrak"]),
+                                         "biaya_tepat": cek["biaya"] if cek else biaya})
             finally:
                 aktif[0] = None
                 FP.ObstacleMap.pose_margin = pm_asli
+                PD.AMBANG_TABRAK, PD.AMBANG_YAKIN_AMAN, PD.AMBANG_BELAJAR = ambang_asli, yakin_asli, belajar_asli
         print(f"  {peta:<18} {len(rute):3d} rute ({time.time() - t_mulai:.0f} s)", flush=True)
 
     ring = {}
-    dasar = hitung["eager"]
+    dasar = hitung["eager"] if "eager" in hitung else hitung[nama_v[0]]
     print(f"\n=== DQfD ID {rid:02d}: varian pencarian ({len(dasar)} rute)")
-    for nama, pencarian, pintas in VARIAN:
+    for nama, pencarian, pintas, ambang in daftar_v:
         xs, ys, h = waktu[nama], hitung[nama], H[nama]
         n_node = sum(x["node"] for x in xs)
         node = np.array([x["node"] for x in xs], float)
@@ -1009,21 +1169,30 @@ def uji_varian(args):
         rasio, identik = [], 0
         for y, y0 in zip(ys, dasar):
             identik += y["jalur"] == y0["jalur"]
-            if y["biaya"] is not None and y0["biaya"] is not None:
-                rasio.append(y["biaya"] / y0["biaya"])
+            if y["biaya_tepat"] is not None and y0["biaya_tepat"] is not None and not y["tabrak"]:
+                rasio.append(y["biaya_tepat"] / y0["biaya_tepat"])
         rasio = np.array(rasio)
         n_ter = h["terbuka"] + h["tidak_terbuka"]
-        g = {"pencarian": pencarian, "pintas": pintas, "rute": len(xs),
+        n_cek = sum(y["diperiksa"] for y in ys)
+        n_tabrak = sum(y["tabrak"] for y in ys)
+        g = {"pencarian": pencarian, "pintas": pintas,
+             "ambang": ({"selektif": yakin_asli, "belajar-periksa": belajar_asli}.get(pencarian, ambang_asli)
+                        if ambang is None else ambang),
+             "kepala_tabrak": kepala, "kepala_p": args.kepala_p, "rute": len(xs),
              "tiba": 100.0 * float(np.mean([y["sukses"] for y in ys])),
+             "tiba_tanpa_tabrakan": 100.0 * float(np.mean([y["sukses"] and not y["tabrak"] for y in ys])),
+             "jalur_diperiksa_ulang": n_cek, "jalur_menabrak": n_tabrak,
              "node_total": n_node, "node_median": float(np.median(node)), "node_p90": float(np.percentile(node, 90)),
              "node_sama_lintasan_hitung": n_node == sum(y["node"] for y in ys),
              "cpu_ms_per_node_total": float(c_all.sum() / max(1, n_node)),
              "cpu_ms_median": float(np.median(c_all)), "cpu_ms_p90": float(np.percentile(c_all, 90)),
              "per_node": {k: h[k] / max(1, n_node) for k in ("simulasi_cek", "aritmetika", "pose_margin",
-                                                               "dibuang", "masuk_ulang")},
+                                                               "dibuang", "masuk_ulang", "tanpa_cek")},
              "terbuka_persen": 100.0 * h["terbuka"] / n_ter if n_ter else 0.0,
              "pintas_dicek": h["pintas_dicek"], "pintas_selisih": h["pintas_selisih"],
-             "vs_eager": {"jalur_identik_persen": 100.0 * identik / len(ys),
+             "metode": {k[7:]: v for k, v in h.items() if k.startswith("metode:")},
+             "vs_dasar": {"dasar": "eager" if "eager" in hitung else nama_v[0],
+                          "jalur_identik_persen": 100.0 * identik / len(ys),
                           "rasio_biaya_median": float(np.median(rasio)) if len(rasio) else None,
                           "rasio_biaya_p90": float(np.percentile(rasio, 90)) if len(rasio) else None,
                           "rasio_biaya_maks": float(rasio.max()) if len(rasio) else None,
@@ -1031,16 +1200,20 @@ def uji_varian(args):
                           "lebih_mahal_1persen": 100.0 * float(np.mean(rasio > 1.01)) if len(rasio) else None,
                           "lebih_murah_1persen": 100.0 * float(np.mean(rasio < 0.99)) if len(rasio) else None}}
         ring[nama] = g
-        pn, ve = g["per_node"], g["vs_eager"]
-        print(f"{nama:<13}: tiba {g['tiba']:.1f}% | {g['cpu_ms_per_node_total']:.3f} ms/node, node {n_node} "
+        pn, ve = g["per_node"], g["vs_dasar"]
+        print(f"{nama:<13}: tiba {g['tiba']:.1f}% (tanpa tabrakan {g['tiba_tanpa_tabrakan']:.1f}%, jalur menabrak "
+              f"{n_tabrak} dari {n_cek} diperiksa ulang) | {g['cpu_ms_per_node_total']:.3f} ms/node, node {n_node} "
               f"(median {g['node_median']:.0f}, p90 {g['node_p90']:.0f}), per rute median {g['cpu_ms_median']:.1f} ms "
-              f"p90 {g['cpu_ms_p90']:.1f} | per node: simulasi+cek {pn['simulasi_cek']:.1f}, aritmetika "
+              f"p90 {g['cpu_ms_p90']:.1f} | per node: simulasi+cek {pn['simulasi_cek']:.2f}, aritmetika "
               f"{pn['aritmetika']:.1f}, cek pose {pn['pose_margin']:.1f}, dibuang {pn['dibuang']:.2f}, "
+              f"tanpa cek {pn['tanpa_cek']:.2f}, "
               f"masuk ulang {pn['masuk_ulang']:.3f} | terbuka {g['terbuka_persen']:.1f}% (pintas dicek "
-              f"{g['pintas_dicek']}, selisih {g['pintas_selisih']}) | vs eager: jalur identik "
-              f"{ve['jalur_identik_persen']:.1f}%, rasio biaya median {ve['rasio_biaya_median']:.4f} "
-              f"p90 {ve['rasio_biaya_p90']:.4f} min {ve['rasio_biaya_min']:.3f} maks {ve['rasio_biaya_maks']:.3f}")
-    _simpan(args.keluaran, {"uji_varian": ring})
+              f"{g['pintas_dicek']}, selisih {g['pintas_selisih']}) | vs {ve['dasar']}: jalur identik "
+              f"{ve['jalur_identik_persen']:.1f}%, rasio biaya median {ve['rasio_biaya_median'] or 0:.4f} "
+              f"p90 {ve['rasio_biaya_p90'] or 0:.4f} min {ve['rasio_biaya_min'] or 0:.3f} "
+              f"maks {ve['rasio_biaya_maks'] or 0:.3f}")
+    _simpan(args.keluaran, {("uji_varian_kepala_p" if args.kepala_p else "uji_varian_kepala") if kepala
+                            else "uji_varian": ring})
 
 
 # ------------------------------------------------------------------ utama
@@ -1050,6 +1223,13 @@ def main():
     ap.add_argument("--uji", default="semua", choices=("semua",) + UJI)
     ap.add_argument("--maks", type=int, default=0, help="batasi rute per peta (0 = semua)")
     ap.add_argument("--ulang", type=int, default=3, help="ulangan per rute untuk uji waktu")
+    ap.add_argument("--kepala-p", default=None,
+                    help="P dari model terpisah (drl.kelayakan), mis. model_dqn/id01_kepala_p.pt")
+    ap.add_argument("--tanpa-kepala-p", action="store_true",
+                    help="jangan pakai model P terpisah id0N_kepala_p.pt yang dipasang perencana otomatis")
+    ap.add_argument("--varian", default=None,
+                    help="uji varian: daftar, mis. eager,lazy,belajar,belajar@0.3,lazy+pintas "
+                         "(bawaan: tiga itu untuk model dengan kepala kelayakan, selain itu VARIAN)")
     ap.add_argument("--pencarian", choices=PD.PENCARIAN, default=None,
                     help="pencarian terbaik-dulu DQfD untuk uji waktu dan rincian (bawaan: seperti robot)")
     ap.add_argument("--keluaran", default=None, help="berkas JSON hasil (bawaan model_dqn/ukur_node_id0N_<mesin>.json)")
@@ -1063,6 +1243,12 @@ def main():
                         "--maks", str(args.maks), "--ulang", str(args.ulang), "--keluaran", args.keluaran]
             if args.pencarian:
                 perintah += ["--pencarian", args.pencarian]
+            if args.varian:
+                perintah += ["--varian", args.varian]
+            if args.kepala_p:
+                perintah += ["--kepala-p", args.kepala_p]
+            if args.tanpa_kepala_p:
+                perintah += ["--tanpa-kepala-p"]
             subprocess.run(perintah, cwd=AKAR, check=True)
         print(f"\nSELESAI -> {args.keluaran}")
         return
