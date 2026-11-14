@@ -1,0 +1,38 @@
+{
+  // Folder firmware sengaja ditaruh pertama: PlatformIO hanya mengenali proyek
+  // yang platformio.ini-nya ada di root sebuah folder workspace.
+  "folders": [
+    {
+      "path": "Forklif Control ver2",
+      "name": "Firmware (PlatformIO)"
+    },
+    {
+      "path": ".",
+      "name": "Repo"
+    },
+    {
+      "path": "Obsidian Vault"
+    },
+    {
+      "path": "Camera"
+    },
+    {
+      "path": "Forklift Robot Program"
+    },
+    {
+      "path": "../DQN-Learning"
+    },
+    {
+      "path": "../../Latihan DQfD"
+    },
+    {
+      "path": "../../Master ITB/paper-ieee-dqfd-ver-1-4"
+    },
+    {
+      "path": "../../Master ITB/Reference"
+    },
+    {
+      "path": "../Forklift-Control-CL-PA-MAPF"
+    }
+  ]
+}
