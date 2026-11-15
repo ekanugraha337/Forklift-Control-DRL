@@ -107,6 +107,7 @@ PELUANG_HEADING_BEBAS = 0.3
 PELUANG_PENDEK = 0.15
 JARAK_PENDEK_CM = (15.0, 60.0)
 JARAK_PANJANG_CM = (40.0, 300.0)
+SISI_ACUAN_CM = 300.0
 # Batas percobaan per jenis peta, kelipatan kuota.
 MAKS_PERCOBAAN_X = 20
 
@@ -210,7 +211,14 @@ def _pose_bebas(omap, v, rng, percobaan=2000):
 def acak_pasangan(env, omap, rng):
     """(awal, tujuan) dalam sel, badan bebas dengan margin env. None bila tak ketemu."""
     s = env.arena.panjang_ke_sel
-    lo, hi = JARAK_PENDEK_CM if rng.random() < PELUANG_PENDEK else JARAK_PANJANG_CM
+    pendek = rng.random() < PELUANG_PENDEK
+    lo, hi = JARAK_PENDEK_CM if pendek else JARAK_PANJANG_CM
+    if not pendek:
+        # Arena lebih besar dari arena acuan (300 cm): batas atas jarak ikut sisi
+        # terpanjang arena, supaya peta besar (Gudang3) punya rute panjang. Arena
+        # acuan atau lebih kecil: tidak berubah.
+        sisi = max(omap.w, omap.h) * env.arena.cm_per_cell
+        hi = hi * max(1.0, sisi / SISI_ACUAN_CM)
     lo, hi = s(lo), s(hi)
     for _ in range(200):
         awal = _pose_bebas(omap, env.v, rng)

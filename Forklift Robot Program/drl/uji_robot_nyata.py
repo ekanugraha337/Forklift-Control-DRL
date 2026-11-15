@@ -16,7 +16,11 @@ pursuit, keselamatan zona), hanya klik mouse diganti protokol:
                 bersamaan, dan berjalan sampai keduanya selesai, gagal, atau
                 --batas-uji habis. Pose akhir diukur (rata-rata 1 s).
 
-Urutan perencana diselang-seling per ulangan (A B, B A, A B, ...), supaya baterai
+SIMULASI (--simulasi): bawaan --urutan perencana - perencana pertama menjalankan semua
+skenario dari awal sampai akhir, baru perencana berikutnya mulai lagi dari skenario
+pertama. Dengan --pindah-awal robot langsung diletakkan di pose awal tiap skenario.
+
+Robot nyata: urutan perencana diselang-seling per ulangan (A B, B A, A B, ...), supaya baterai
 yang melemah, panas motor, atau kamera yang bergeser tidak hanya menimpa satu
 perencana.
 
@@ -146,9 +150,20 @@ def muat_skenario(path):
     return d
 
 
-def daftar_percobaan(skenario, perencana, ulang):
-    """Urutan percobaan: per skenario, per ulangan, perencana diselang-seling."""
+def daftar_percobaan(skenario, perencana, ulang, urutan="selang"):
+    """Urutan percobaan.
+
+    "selang"    per skenario, per ulangan, perencana diselang-seling (A B, B A, ...)
+    "perencana" perencana pertama menjalankan SEMUA skenario dari awal sampai akhir,
+                baru perencana berikutnya mengulang dari skenario pertama - tidak dicampur
+    """
     out = []
+    if urutan == "perencana":
+        for i, per in enumerate(perencana):
+            for k in range(ulang):
+                for sk in skenario:
+                    out.append({"skenario": sk["nama"], "ulang": k, "urutan": i, "perencana": per})
+        return out
     for sk in skenario:
         for k in range(ulang):
             urut = list(perencana) if k % 2 == 0 else list(reversed(perencana))
@@ -176,6 +191,9 @@ class Sesi:
                                    simulasi=args.simulasi, derau=args.derau, derau_deg=0.0, margin=10.0,
                                    url=args.url, host=args.host, log=None)
         self.nav = N.Navigasi(nav_args, ids)
+        # Jendela uji: nama zona tidak digambar di atas peta (peta besar punya puluhan zona).
+        self.nav.nama_zona = False
+        self.nav.bangun_latar()
         self.arena = self.nav.arena
         self.nav.tunjuk = A.PenunjukPose(self.arena.ctx)
         # Satu objek perencana per (robot, jenis): rencanakan() dikerjakan proses
@@ -251,36 +269,77 @@ class Sesi:
             return None
         return (p.x, p.y, p.yaw)
 
-    def gambar(self, sk, baris, aktif=None, spanduk=None):
-        """spanduk: label fase (LABEL_FASE: "GO HOME" saat PULANG, "CRUISE" saat UJI) - putih
-        di kotak merah, pojok kanan atas; baris status robot ada di pojok kiri atas."""
+    LEBAR_PANEL = 470
+
+    def gambar(self, sk, baris, aktif=None, spanduk=None, metrik=None):
+        """Peta di kiri TANPA tulisan di atasnya, semua keterangan di panel kanan.
+
+        spanduk: label fase (LABEL_FASE: "GO HOME" saat PULANG, "CRUISE" saat UJI).
+        baris: pesan protokol. metrik: daftar blok (judul, [baris, ...]) dari
+        Protokol.metrik_layar() - waktu tempuh, jarak tempuh, waktu rencana per robot
+        dan makespan, untuk percobaan yang berjalan dan percobaan sebelumnya.
+        """
         import cv2
-        img = self.nav.gambar()
+        peta = self.nav.gambar(teks=False)
         A, ctx = self.A, self.arena.ctx
         if sk is not None:
             for rid, r in sk["robot"].items():
                 w = self.N.WARNA_ID.get(rid, (255, 255, 255))
                 if r.get("awal"):
-                    A.gambar_robot(img, ctx, *r["awal"], (160, 160, 160), tebal=1)
+                    A.gambar_robot(peta, ctx, *r["awal"], (160, 160, 160), tebal=1)
                     u, v = ctx.px([r["awal"][:2]])[0]
-                    cv2.putText(img, f"A{rid}", (int(u) - 8, int(v) + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                    cv2.putText(peta, f"A{rid}", (int(u) + 12, int(v) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                                 (160, 160, 160), 1, cv2.LINE_AA)
                 if r.get("tujuan"):
-                    A.gambar_robot(img, ctx, *r["tujuan"], w, tebal=1)
+                    A.gambar_robot(peta, ctx, *r["tujuan"], w, tebal=1)
                     u, v = ctx.px([r["tujuan"][:2]])[0]
-                    cv2.putText(img, f"T{rid}", (int(u) - 8, int(v) + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                    cv2.putText(peta, f"T{rid}", (int(u) + 12, int(v) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                                 w, 1, cv2.LINE_AA)
-        y = img.shape[0] - 52 - 20 * (len(baris) - 1)
-        for teks in baris:
-            self.N.AC.label(img, teks, (10, y), (0, 255, 255), 0.5)
-            y += 20
+        H, W, LP = peta.shape[0], peta.shape[1], self.LEBAR_PANEL
+        img = np.full((H, W + LP, 3), 28, np.uint8)
+        img[:, :W] = peta
+        cv2.line(img, (W, 0), (W, H - 1), (90, 90, 90), 1)
+        huruf, x0, lebar = cv2.FONT_HERSHEY_SIMPLEX, W + 14, LP - 28
+
+        def tulis(teks, y, warna=(225, 225, 225), skala=0.45, tebal=1):
+            """Tulis teks dengan lipat baris selebar panel; kembalikan y berikutnya."""
+            kata, garis = str(teks).split(" "), ""
+            for k in kata + [None]:
+                coba = (garis + " " + k).strip() if k is not None else None
+                if k is not None and cv2.getTextSize(coba, huruf, skala, tebal)[0][0] <= lebar:
+                    garis = coba
+                    continue
+                if garis:
+                    cv2.putText(img, garis, (x0, y), huruf, skala, warna, tebal, cv2.LINE_AA)
+                    y += int(34 * skala) + 4
+                garis = k or ""
+            return y
+
+        y = 14
         if spanduk:
-            huruf, skala, tebal, pad, tepi = cv2.FONT_HERSHEY_SIMPLEX, 1.1, 2, 12, 14
-            (tw, th), base = cv2.getTextSize(spanduk, huruf, skala, tebal)
-            x1, y0 = img.shape[1] - tepi, tepi
-            x0, y1 = x1 - tw - 2 * pad, y0 + th + base + 2 * pad
-            cv2.rectangle(img, (x0, y0), (x1, y1), (0, 0, 210), -1)
-            cv2.putText(img, spanduk, (x0 + pad, y1 - pad - base), huruf, skala, (255, 255, 255), tebal, cv2.LINE_AA)
+            (tw, th), base = cv2.getTextSize(spanduk, huruf, 0.9, 2)
+            cv2.rectangle(img, (x0, y), (x0 + tw + 20, y + th + base + 14), (0, 0, 210), -1)
+            cv2.putText(img, spanduk, (x0 + 10, y + th + 7), huruf, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+            y += th + base + 14
+        y += 22
+        y = tulis(f"peta {self.arena.nama}", y, (170, 170, 170))
+        for teks in baris:
+            y = tulis(teks, y, (0, 255, 255))
+        y += 8
+        for judul, isi in (metrik or []):
+            cv2.line(img, (x0, y - 8), (x0 + lebar, y - 8), (70, 70, 70), 1)
+            y = tulis(judul, y + 8, (255, 255, 255), 0.5)
+            for teks, rid in isi:
+                y = tulis(teks, y, self.N.WARNA_ID.get(rid, (225, 225, 225)) if rid else (225, 225, 225))
+            y += 8
+        cv2.line(img, (x0, y - 8), (x0 + lebar, y - 8), (70, 70, 70), 1)
+        y = tulis("status robot", y + 8, (255, 255, 255), 0.5)
+        for u in self.nav.units:
+            teks, w = u.baris_status(True)
+            y = tulis(teks, y, w, 0.42) + 2
+        y += 6
+        cv2.line(img, (x0, y - 8), (x0 + lebar, y - 8), (70, 70, 70), 1)
+        tulis("jalur: " + self.N.R.LEGENDA_JALUR, y + 8, (150, 150, 150), 0.38)
         return img
 
 
@@ -416,6 +475,7 @@ class Protokol:
 
     def __init__(self, sesi, args, data, dir_hasil):
         self.sesi, self.args = sesi, args
+        self.riwayat_layar = []          # percobaan yang sudah selesai, untuk panel layar
         self.sk_map = {sk["nama"]: sk for sk in data["skenario"]}
         self.ids = [u.id for u in sesi.nav.units]
         self.dir = dir_hasil
@@ -427,7 +487,7 @@ class Protokol:
                     h = json.loads(baris)
                     if h.get("status") != "dilewati":
                         sudah.add((h["skenario"], h["ulang"], h["perencana"]))
-        semua = daftar_percobaan(data["skenario"], args.perencana, args.ulang)
+        semua = daftar_percobaan(data["skenario"], args.perencana, args.ulang, args.urutan)
         self.antrian = [p for p in semua if (p["skenario"], p["ulang"], p["perencana"]) not in sudah]
         if len(self.antrian) < len(semua):
             print(f"[i] {len(semua) - len(self.antrian)} percobaan sudah tercatat di {p_hasil} - dilewati.")
@@ -487,6 +547,15 @@ class Protokol:
         self.sesi.pakai(self.args.perencana_pulang)
         self.selesai_sejak = None
         self.pulang_ids = []
+        if self.args.simulasi and self.args.pindah_awal:
+            # Simulasi: robot langsung diletakkan di pose awal skenario, jadi setiap
+            # perencana berangkat dari pose yang PERSIS sama (tanpa perjalanan pulang).
+            for rid in self.ids:
+                self.sesi.unit(rid).batalkan()
+                self.sesi.pindah_sim(rid, tuple(self.sk["robot"][rid]["awal"]))
+            self.pesan = "simulasi: robot diletakkan di titik awal"
+            self.sampel = {rid: [] for rid in self.ids}
+            return
         for rid in self.ids:
             u = self.sesi.unit(rid)
             p = self.sesi.pose_bersih(u)
@@ -810,6 +879,38 @@ class Protokol:
         if now - self.selesai_sejak >= TENANG_S:
             self._selesai_uji(status="selesai")
 
+    def metrik_layar(self):
+        """Blok keterangan untuk panel layar: [(judul, [(teks, rid atau None), ...]), ...].
+
+        Percobaan yang SEDANG berjalan (waktu tempuh, jarak tempuh, waktu rencana per
+        robot, makespan sejauh ini) dan ringkasan percobaan-percobaan sebelumnya.
+        """
+        blok = []
+        if self.fase == UJI and self.kini is not None and getattr(self, "ukur", None):
+            now, isi, tt = time.time(), [], []
+            for rid in self.ids:
+                m, calls = self.ukur[rid], self.rencana.get(rid, [])
+                t = m["t_tiba"] if m["t_tiba"] is not None else now - self.t_fase
+                tt.append(t)
+                isi.append((f"robot {rid:02d}: tempuh {t:5.1f} s{' (tiba)' if m['t_tiba'] is not None else ''} | "
+                            f"jarak {m['jarak_cm']:4.0f} cm | rencana {sum(c['ms'] for c in calls):.0f} ms "
+                            f"({len(calls)}x)", rid))
+            semua = all(self.ukur[r]["t_tiba"] is not None for r in self.ids)
+            isi.append((f"makespan {max(tt):.1f} s" + ("" if semua else " (berjalan)"), None))
+            blok.append((f"{self.kini['skenario']} - {NAMA.get(self.kini['perencana'], self.kini['perencana'])}", isi))
+        for rec in self.riwayat_layar[-6:][::-1]:
+            isi = []
+            for rid in self.ids:
+                r = rec["robot"][str(rid)]
+                t = r.get("t_tempuh_s")
+                isi.append((f"robot {rid:02d}: {'tempuh %.1f s' % t if t is not None else 'TIDAK TIBA'} | "
+                            f"jarak {r.get('jarak_tempuh_cm') or 0:.0f} cm | rencana {r.get('ms_rencana_total', 0):.0f} ms",
+                            rid))
+            ms = rec.get("makespan_s")
+            isi.append((f"makespan {ms:.1f} s" if ms is not None else "makespan - (ada yang tidak tiba)", None))
+            blok.append((f"selesai: {rec['skenario']} - {NAMA.get(rec['perencana'], rec['perencana'])}", isi))
+        return blok
+
     def _selesai_uji(self, status, catatan="", lanjut=True):
         self.sesi.catat_ke = None
         p, sk = self.kini, self.sk
@@ -856,6 +957,7 @@ class Protokol:
         self.f_hasil.write(json.dumps(rec, default=float) + "\n")
         self.f_hasil.flush()
         self.f_lin.flush()
+        self.riwayat_layar.append(rec)
         ringkas = "  ".join(
             f"{rid:02d}: {'tiba' if rec['robot'][str(rid)]['tiba'] else 'GAGAL'}"
             + (f" {rec['robot'][str(rid)]['galat_cm']:.1f} cm/{rec['robot'][str(rid)]['galat_deg']:.1f} deg"
@@ -967,6 +1069,7 @@ def mode_uji(args, ids):
     else:
         print("[!] pose sebagian robot belum terukur setelah 15 s - robot itu akan dikirim pulang begitu terlihat.")
     proto = Protokol(sesi, args, data, dir_hasil)
+    t_simpan = 0.0
     try:
         while True:
             now = time.time()
@@ -974,7 +1077,11 @@ def mode_uji(args, ids):
             baris = [f"[{LABEL_FASE.get(proto.fase, proto.fase)}] {proto.pesan}",
                      f"percobaan {min(proto.i + 1, len(proto.antrian))}/{len(proto.antrian)} | "
                      "n: lanjut  spasi: tahan  e: estop  x: lewati  q: keluar"]
-            cv2.imshow(judul, sesi.gambar(proto.sk, baris, spanduk=LABEL_FASE.get(proto.fase)))
+            layar = sesi.gambar(proto.sk, baris, spanduk=LABEL_FASE.get(proto.fase), metrik=proto.metrik_layar())
+            cv2.imshow(judul, layar)
+            if args.simpan_layar and now - t_simpan >= 5.0:      # salinan jendela, untuk dokumentasi
+                t_simpan = now
+                cv2.imwrite(os.path.join(dir_hasil, "layar.png"), layar)
             k = cv2.waitKey(max(1, int(1000 * (konfig.RC_PERIODE_S - (time.time() - now))))) & 0xFF
             if k != 255 and proto.tombol(k):
                 break
@@ -1317,6 +1424,14 @@ def main():
                     help="jadwal silang dari drl/jadwal_silang.py: robot yang mengalah ditahan di titik "
                          "tunggu sampai robot lain lewat (tanpa opsi ini hanya wasit yang mengatur)")
     ap.add_argument("--ulang", type=int, default=3, help="ulangan per perencana per skenario")
+    ap.add_argument("--urutan", choices=("selang", "perencana"), default=None,
+                    help="selang: perencana diselang-seling per ulangan (bawaan robot nyata); perencana: "
+                         "satu perencana menjalankan semua skenario dulu, baru perencana berikutnya "
+                         "(bawaan --simulasi)")
+    ap.add_argument("--simpan-layar", action="store_true",
+                    help="simpan salinan jendela ke <folder hasil>/layar.png setiap 5 s")
+    ap.add_argument("--pindah-awal", action="store_true",
+                    help="simulasi: robot diletakkan langsung di pose awal skenario, tanpa perjalanan pulang")
     ap.add_argument("--toleransi-cm", type=float, default=5.0, help="robot dianggap di titik awal dalam jarak ini")
     ap.add_argument("--toleransi-deg", type=float, default=10.0, help="... dan selisih arah hadap ini")
     ap.add_argument("--coba-pulang", type=int, default=3, help="percobaan pulang sebelum operator diminta")
@@ -1329,6 +1444,8 @@ def main():
     ap.add_argument("--url", default=None, help="override URL RTSP")
     ap.add_argument("--host", default=None, help="override alamat broker MQTT")
     args = ap.parse_args()
+    if args.urutan is None:
+        args.urutan = "perencana" if args.simulasi else "selang"
 
     if args.ringkas:
         ringkas(args.ringkas)

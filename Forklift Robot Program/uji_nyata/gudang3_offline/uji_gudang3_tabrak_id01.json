@@ -1,0 +1,45 @@
+{
+ "robot": 1,
+ "rute": 632,
+ "keadaan": 375781,
+ "node": 376096,
+ "aksi_menabrak_persen": 2.7108304342917053,
+ "keadaan_dengan_tabrakan_persen": 13.330902839685882,
+ "auc_q": 0.6010530930981578,
+ "p_col": {
+  "keadaan": 375781,
+  "auc": 0.9960969787136025,
+  "auc_keadaan_sama": 0.9840460529825538,
+  "per_ambang": {
+   "0.5": {
+    "terdeteksi": 89.7479227290257,
+    "alarm_palsu": 1.0415724381383809
+   },
+   "0.3": {
+    "terdeteksi": 93.13185850015778,
+    "alarm_palsu": 1.4821663128069977
+   },
+   "0.2": {
+    "terdeteksi": 94.71093503488413,
+    "alarm_palsu": 1.8102037016450128
+   },
+   "0.1": {
+    "terdeteksi": 96.46460750972899,
+    "alarm_palsu": 2.386838335008037
+   },
+   "0.05": {
+    "terdeteksi": 97.58160081337867,
+    "alarm_palsu": 3.0260716457883925
+   },
+   "0.02": {
+    "terdeteksi": 98.57238018441258,
+    "alarm_palsu": 4.002544585439086
+   },
+   "0.01": {
+    "terdeteksi": 99.06812046418679,
+    "alarm_palsu": 4.882540537234979
+   }
+  }
+ },
+ "primitif_disimulasi_lazy": 519967
+}

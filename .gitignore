@@ -10,3 +10,8 @@ Obsidian Vault/.obsidian/workspace.json
 Forklift Robot Program/drl/data/
 # Model DQfD & checkpoint: dihasilkan ulang dengan python -m drl.latih
 Forklift Robot Program/model_dqn/
+# Gudang3 (peta simulasi besar): dataset dan model, dihasilkan ulang dengan
+#   python -m drl.skenario --peta Gudang3 --porsi-sintetis 0 --keluar drl/data_gudang3
+#   python -m drl.latih --data drl/data_gudang3 --keluar model_dqn_gudang3 --awal model_dqn
+Forklift Robot Program/drl/data_gudang3/
+Forklift Robot Program/model_dqn_gudang3/

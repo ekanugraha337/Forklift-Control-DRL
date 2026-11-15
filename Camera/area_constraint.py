@@ -300,13 +300,16 @@ def zona_layer(ctx, zones, shape):
     return color, mask > 0
 
 
-def tempel_zona(img, ctx, zones, layer):
+def tempel_zona(img, ctx, zones, layer, nama=True):
+    """nama=False: garis dan warna zona saja, tanpa label nama (peta dengan banyak zona)."""
     color, mask = layer
     if mask.any():
         img[mask] = cv2.addWeighted(img[mask], 0.7, color[mask], 0.3, 0)
     for z in zones:
         pts = ctx.px(z["titik"])
         cv2.polylines(img, [pts], True, WARNA_ZONA[z["tipe"]], 2, cv2.LINE_AA)
+        if not nama:
+            continue
         # label di sudut pertama zona (bergeser ke dalam), agar tidak menutupi robot di tengah area
         c = pts.mean(axis=0)
         org = pts[0] + np.sign(c - pts[0]) * (8, 20)

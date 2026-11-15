@@ -54,7 +54,10 @@ from drl import lingkungan as L
 from drl.jaringan_numpy import NetDenganP, SKALA_REWARD, muat_dari_pt, muat_model_p, periksa_profil
 from drl.lingkungan import MAKS_LANGKAH
 
-DIR_MODEL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "model_dqn")
+# FORKLIFT_DIR_MODEL: folder model lain (mis. model_dqn_gudang3 = model yang dilatih di Gudang3).
+# Lewat variabel lingkungan supaya proses perencana anak (perencana_proses.py) ikut memakainya.
+DIR_MODEL = os.path.abspath(os.environ["FORKLIFT_DIR_MODEL"]) if os.environ.get("FORKLIFT_DIR_MODEL") else \
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "model_dqn")
 
 ANGGARAN_BAWAAN = 600
 METODE_BAWAAN = "gabungan"
@@ -94,6 +97,21 @@ AMBANG_YAKIN_AMAN = 0.02
 # Ambang P untuk "belajar-periksa", dipakai di KEDUA tahapnya (mode B dan cadangan lazy) -
 # konfigurasi yang diukur: 0 jalur menabrak, tiba 99,8% (catatan 20 §15).
 AMBANG_BELAJAR = 0.1
+# Anggaran node disetel untuk arena 300 x 270 cm (Gudang, Gudang2, peta latih). Di peta yang
+# lebih luas (Gudang3, 820 x 720 cm) anggaran dikali rasio luasnya, dibulatkan, paling banyak
+# SKALA_ANGGARAN_MAKS kali; batas waktu tetap sama. Arena acuan atau lebih kecil: skala 1,
+# jadi hasil di peta lama tidak berubah.
+LUAS_ACUAN_CM2 = 300.0 * 270.0
+SKALA_ANGGARAN_MAKS = 8.0
+
+
+def skala_anggaran(env):
+    """Pengali anggaran node menurut luas arena env (>= 1)."""
+    om = env.omap
+    luas = om.w * om.h * env.arena.cm_per_cell ** 2
+    return min(SKALA_ANGGARAN_MAKS, max(1.0, luas / LUAS_ACUAN_CM2))
+
+
 # Metode gabungan: bagian batas waktu untuk terbaik-dulu; sisanya untuk mundur.
 PORSI_WAKTU_TERBAIK = 0.75
 
@@ -417,18 +435,20 @@ def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, mulai_ulang=None, bob
     """
     t0 = time.perf_counter()
     pencarian = pencarian or PENCARIAN_BAWAAN
+    sk = skala_anggaran(env)
+    a_terbaik, a_mundur = int(round(ANGGARAN_TERBAIK * sk)), int(round(ANGGARAN_BAWAAN * sk))
     if pencarian not in PENCARIAN:
         raise ValueError(f"pencarian DQfD '{pencarian}' tidak dikenal (pilihan: {', '.join(PENCARIAN)})")
     if metode == "mundur":
-        h = rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=batas_waktu)
+        h = rencanakan(net, env, mundur=True, anggaran=a_mundur, batas_waktu=batas_waktu)
         h["metode"] = "mundur"
         return h
     bt = None if batas_waktu is None else (PORSI_WAKTU_TERBAIK * batas_waktu if metode == "gabungan"
                                            else batas_waktu)
     if pencarian == "eager":
-        h = rencanakan_terbaik(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=bobot)
+        h = rencanakan_terbaik(net, env, anggaran=a_terbaik, batas_waktu=bt, bobot=bobot)
     elif pencarian == "belajar-periksa":
-        hb = rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=bobot,
+        hb = rencanakan_terbaik_malas(net, env, anggaran=a_terbaik, batas_waktu=bt, bobot=bobot,
                                       belajar=True, ambang=AMBANG_BELAJAR)
         if hb["sukses"] and periksa_jalur(env, hb["aksi_jalur"]):
             hb["metode"] = "belajar, jalur lolos periksa"
@@ -440,7 +460,7 @@ def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, mulai_ulang=None, bob
         if bt2 is not None and bt2 <= 0:
             h = dict(hb, sukses=False, alasan=sebab)
         else:
-            h = rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt2, bobot=bobot,
+            h = rencanakan_terbaik_malas(net, env, anggaran=a_terbaik, batas_waktu=bt2, bobot=bobot,
                                          ambang=AMBANG_BELAJAR)
             h["dicoba"] += hb["dicoba"]
         h["cadangan"] = sebab
@@ -449,7 +469,7 @@ def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, mulai_ulang=None, bob
             h["waktu_s"] = time.perf_counter() - t0
             return h
     else:
-        h = rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=bt, bobot=bobot,
+        h = rencanakan_terbaik_malas(net, env, anggaran=a_terbaik, batas_waktu=bt, bobot=bobot,
                                      belajar=pencarian == "belajar",
                                      selektif=AMBANG_YAKIN_AMAN if pencarian == "selektif" else None)
     h["metode"] = "terbaik" if pencarian != "belajar-periksa" else "belajar -> lazy"
@@ -460,7 +480,7 @@ def cari(net, env, metode=METODE_BAWAAN, batas_waktu=None, mulai_ulang=None, bob
         return h
     if mulai_ulang is None or mulai_ulang() is None:
         return h
-    hm = rencanakan(net, env, mundur=True, anggaran=ANGGARAN_BAWAAN, batas_waktu=sisa)
+    hm = rencanakan(net, env, mundur=True, anggaran=a_mundur, batas_waktu=sisa)
     hm["metode"] = "terbaik -> mundur"
     hm["dicoba"] += h["dicoba"]
     hm["waktu_s"] = time.perf_counter() - t0

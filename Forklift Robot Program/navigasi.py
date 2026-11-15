@@ -985,9 +985,8 @@ class Navigasi:
 
         # --- tampilan ---
         self.show_grid, self.show_zona, self.show_bayangan = True, True, True
-        self.latar_statis = self.arena.kanvas()
-        self.arena.gambar_grid(self.latar_statis)
-        self.arena.gambar_zona(self.latar_statis)
+        self.nama_zona = True            # False: label nama zona tidak digambar (drl/uji_robot_nyata.py)
+        self.bangun_latar()
 
     @property
     def multi(self):
@@ -1112,7 +1111,15 @@ class Navigasi:
             u.terapkan(now, keputusan.get(u.id))
 
     # --------------------------------------------------------------- gambar
-    def gambar(self):
+    def bangun_latar(self):
+        """Latar statis (grid + zona) untuk simulasi / sebelum frame kamera ada."""
+        self.latar_statis = self.arena.kanvas()
+        self.arena.gambar_grid(self.latar_statis)
+        self.arena.gambar_zona(self.latar_statis, nama=self.nama_zona)
+
+    def gambar(self, teks=True):
+        """teks=False: hanya peta, robot, dan jalur - tanpa baris status/bantuan di atas peta
+        (drl/uji_robot_nyata.py menulis semuanya di panel samping)."""
         if self.args.simulasi or self.kamera is None or self.kamera.frame is None:
             img = self.latar_statis.copy()
         else:
@@ -1120,7 +1127,7 @@ class Navigasi:
             if self.show_grid:
                 self.arena.gambar_grid(img)
             if self.show_zona:
-                self.arena.gambar_zona(img)
+                self.arena.gambar_zona(img, nama=self.nama_zona)
 
         for u in self.units:
             u.gambar(img, self.multi, u is self.aktif)
@@ -1128,6 +1135,10 @@ class Navigasi:
         self.tunjuk.gambar(img, WARNA_ID.get(self.aktif.id, (0, 255, 255))
                            if self.multi else (0, 255, 255))
 
+        if not teks:
+            if any(u.state == BAHAYA or u.langgar_diam for u in self.units):
+                cv2.rectangle(img, (0, 0), (img.shape[1] - 1, img.shape[0] - 1), (0, 0, 255), 8)
+            return img
         # --- baris status: satu per robot ---
         y = 22
         for u in self.units:

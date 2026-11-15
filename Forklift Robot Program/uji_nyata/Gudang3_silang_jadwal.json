@@ -1,0 +1,279 @@
+{
+ "dibuat": "2026-11-15 12:22:50",
+ "skenario": "uji_nyata/Gudang3_silang.json",
+ "peta": "Gudang3",
+ "jarak_cm": 15.0,
+ "penyangga_cm": 10.0,
+ "jadwal": {
+  "X1": {
+   "astar": {
+    "mengalah": 2,
+    "lewat": 1,
+    "tahan": [
+     68.63,
+     166.76,
+     -201.4
+    ],
+    "konflik_di": [
+     59.1,
+     172.1
+    ],
+    "lepas_di": [
+     106.9,
+     458.9
+    ],
+    "tunggu_sampai_tiba": false,
+    "tempuh_cm": {
+     "lewat": 803.1,
+     "mengalah": 795.2,
+     "mengalah_sampai_tunggu": 239.0,
+     "lewat_sampai_lepas": 489.1
+    },
+    "makespan_cm": 1045.2,
+    "tanpa_jadwal": null,
+    "pilihan": {
+     "1": {
+      "makespan_cm": 1303.1,
+      "tahan": [
+       27.5,
+       120.77,
+       -90.0
+      ]
+     },
+     "2": {
+      "makespan_cm": 1045.2,
+      "tahan": [
+       68.63,
+       166.76,
+       -201.4
+      ]
+     }
+    }
+   },
+   "dqfd-murni": {
+    "mengalah": 2,
+    "lewat": 1,
+    "tahan": [
+     85.13,
+     161.35,
+     -187.81
+    ],
+    "konflik_di": [
+     74.4,
+     163.4
+    ],
+    "lepas_di": [
+     104.5,
+     448.7
+    ],
+    "tunggu_sampai_tiba": false,
+    "tempuh_cm": {
+     "lewat": 821.3,
+     "mengalah": 779.1,
+     "mengalah_sampai_tunggu": 224.5,
+     "lewat_sampai_lepas": 496.4
+    },
+    "makespan_cm": 1051.0,
+    "tanpa_jadwal": null,
+    "pilihan": {
+     "1": {
+      "makespan_cm": 1270.3,
+      "tahan": [
+       45.8,
+       125.3,
+       -263.89
+      ]
+     },
+     "2": {
+      "makespan_cm": 1051.0,
+      "tahan": [
+       85.13,
+       161.35,
+       -187.81
+      ]
+     }
+    }
+   }
+  },
+  "X2": {
+   "astar": {
+    "mengalah": 2,
+    "lewat": 1,
+    "tahan": [
+     352.74,
+     213.01,
+     263.89
+    ],
+    "konflik_di": [
+     351.6,
+     202.1
+    ],
+    "lepas_di": [
+     398.8,
+     168.2
+    ],
+    "tunggu_sampai_tiba": false,
+    "tempuh_cm": {
+     "lewat": 777.0,
+     "mengalah": 929.4,
+     "mengalah_sampai_tunggu": 500.0,
+     "lewat_sampai_lepas": 412.4
+    },
+    "makespan_cm": 929.4,
+    "tanpa_jadwal": null,
+    "pilihan": {
+     "1": {
+      "makespan_cm": 1667.7,
+      "tahan": [
+       87.5,
+       35.0,
+       -90.0
+      ]
+     },
+     "2": {
+      "makespan_cm": 929.4,
+      "tahan": [
+       352.74,
+       213.01,
+       263.89
+      ]
+     }
+    }
+   },
+   "dqfd-murni": {
+    "mengalah": 2,
+    "lewat": 1,
+    "tahan": [
+     270.28,
+     155.63,
+     198.68
+    ],
+    "konflik_di": [
+     259.9,
+     152.1
+    ],
+    "lepas_di": [
+     288.0,
+     120.5
+    ],
+    "tunggu_sampai_tiba": false,
+    "tempuh_cm": {
+     "lewat": 768.5,
+     "mengalah": 945.5,
+     "mengalah_sampai_tunggu": 642.4,
+     "lewat_sampai_lepas": 270.1
+    },
+    "makespan_cm": 945.5,
+    "tanpa_jadwal": null,
+    "pilihan": {
+     "1": {
+      "makespan_cm": 1676.0,
+      "tahan": [
+       87.5,
+       35.0,
+       -90.0
+      ]
+     },
+     "2": {
+      "makespan_cm": 945.5,
+      "tahan": [
+       270.28,
+       155.63,
+       198.68
+      ]
+     }
+    }
+   }
+  },
+  "X3": {
+   "astar": {
+    "mengalah": 2,
+    "lewat": 1,
+    "tahan": [
+     113.53,
+     441.83,
+     176.95
+    ],
+    "konflik_di": [
+     102.6,
+     442.4
+    ],
+    "lepas_di": [
+     71.3,
+     164.6
+    ],
+    "tunggu_sampai_tiba": false,
+    "tempuh_cm": {
+     "lewat": 789.7,
+     "mengalah": 803.3,
+     "mengalah_sampai_tunggu": 334.0,
+     "lewat_sampai_lepas": 558.4
+    },
+    "makespan_cm": 1027.7,
+    "tanpa_jadwal": null,
+    "pilihan": {
+     "1": {
+      "makespan_cm": 1251.4,
+      "tahan": [
+       60.81,
+       481.41,
+       296.5
+      ]
+     },
+     "2": {
+      "makespan_cm": 1027.7,
+      "tahan": [
+       113.53,
+       441.83,
+       176.95
+      ]
+     }
+    }
+   },
+   "dqfd-murni": {
+    "mengalah": 2,
+    "lewat": 1,
+    "tahan": [
+     85.34,
+     450.03,
+     187.81
+    ],
+    "konflik_di": [
+     74.6,
+     447.9
+    ],
+    "lepas_di": [
+     76.0,
+     163.6
+    ],
+    "tunggu_sampai_tiba": false,
+    "tempuh_cm": {
+     "lewat": 790.2,
+     "mengalah": 800.3,
+     "mengalah_sampai_tunggu": 361.3,
+     "lewat_sampai_lepas": 573.0
+    },
+    "makespan_cm": 1012.0,
+    "tanpa_jadwal": null,
+    "pilihan": {
+     "1": {
+      "makespan_cm": 1240.9,
+      "tahan": [
+       27.64,
+       470.66,
+       280.19
+      ]
+     },
+     "2": {
+      "makespan_cm": 1012.0,
+      "tahan": [
+       85.34,
+       450.03,
+       187.81
+      ]
+     }
+    }
+   }
+  }
+ }
+}

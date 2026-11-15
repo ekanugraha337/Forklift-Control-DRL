@@ -38,7 +38,18 @@ class Arena:
         self.cm_per_cell = float(cm_per_cell or konfig.GRID_CM)
         self.ctx = AC.Konteks(konfig.VIEW_OFFSET_CM if offset_cm is None else offset_cm)
         self.nama = nama_peta
-        self.zona = AC.load_peta(nama_peta)["zona"]
+        peta = AC.load_peta(nama_peta)
+        self.zona = peta["zona"]
+        # Peta simulasi (mis. Gudang3) membawa ukurannya sendiri: "ukuran_cm" =
+        # [lebar, tinggi] area dalam. Tanpa kunci itu ukuran arena tetap dari
+        # homografi kamera, seperti semua peta nyata.
+        if peta.get("ukuran_cm"):
+            lebar, tinggi = (float(v) for v in peta["ukuran_cm"])
+            off = max(float(konfig.VIEW_OFFSET_CM if offset_cm is None else offset_cm), 0.0)
+            self.ctx.hom_box = (0.0, 0.0, lebar, tinggi)
+            self.ctx.ext = (-off, -off, lebar + off, tinggi + off)
+            self.ctx.s = min(1000 / (lebar + 2 * off), 800 / (tinggi + 2 * off))
+            self.ctx.maps = self.ctx.size = None
 
         x0, y0, x1, y1 = self.ctx.ext
         self.asal = (x0, y0)
@@ -120,9 +131,9 @@ class Arena:
         h, w = self.ukuran_tampilan()
         return np.zeros((h, w, 3), np.uint8)
 
-    def gambar_zona(self, img):
+    def gambar_zona(self, img, nama=True):
         AC.tempel_zona(img, self.ctx, self.zona,
-                       AC.zona_layer(self.ctx, self.zona, img.shape))
+                       AC.zona_layer(self.ctx, self.zona, img.shape), nama=nama)
 
     def gambar_grid(self, img):
         lapis = self.ctx.grid_layer(img.shape)
