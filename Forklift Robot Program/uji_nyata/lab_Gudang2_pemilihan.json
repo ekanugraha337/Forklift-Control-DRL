@@ -1,0 +1,67 @@
+{
+ "peta": "Gudang2",
+ "model": "model_dqn_gudang3",
+ "kriteria": " (ditulis di paper): dari rute uji dataset di peta lab (tidak dipakai melatih), per robot\ndiambil K rute yang paling lama direncanakan Hybrid A* standar dan diselesaikan semua perencana uji. Pasangan\nID 01 + ID 02 diperiksa seperti mode --buat drl/uji_robot_nyata.py (periksa_skenario): setiap robot\ndirencanakan dari awalnya ke tujuannya dengan setiap perencana, robot lain di pose AWAL-nya; tujuan tidak\nbertumpuk. Dipilih 2 pasangan terberat yang jalurnya tidak bersilangan dan 1 yang bersilangan, tanpa memakai\nrute yang sama dua kali. Skor = jumlah waktu Hybrid A* standar kedua robot.",
+ "skenario": [
+  {
+   "nama": "L1",
+   "bersilang": false,
+   "episode_uji": [
+    815,
+    1672
+   ],
+   "ms_mac": {
+    "01 astar-standar": 229.7,
+    "01 dqfd-murni": 3.9,
+    "02 astar-standar": 419.8,
+    "02 dqfd-murni": 99.7
+   },
+   "panjang_cm": {
+    "01 astar-standar": 206,
+    "01 dqfd-murni": 201,
+    "02 astar-standar": 178,
+    "02 dqfd-murni": 587
+   }
+  },
+  {
+   "nama": "L2",
+   "bersilang": false,
+   "episode_uji": [
+    2547,
+    1673
+   ],
+   "ms_mac": {
+    "01 astar-standar": 136.0,
+    "01 dqfd-murni": 69.1,
+    "02 astar-standar": 238.8,
+    "02 dqfd-murni": 32.2
+   },
+   "panjang_cm": {
+    "01 astar-standar": 223,
+    "01 dqfd-murni": 211,
+    "02 astar-standar": 281,
+    "02 dqfd-murni": 311
+   }
+  },
+  {
+   "nama": "LX3",
+   "bersilang": true,
+   "episode_uji": [
+    810,
+    1670
+   ],
+   "ms_mac": {
+    "01 astar-standar": 1108.1,
+    "01 dqfd-murni": 43.0,
+    "02 astar-standar": 78.3,
+    "02 dqfd-murni": 4.1
+   },
+   "panjang_cm": {
+    "01 astar-standar": 274,
+    "01 dqfd-murni": 277,
+    "02 astar-standar": 247,
+    "02 dqfd-murni": 220
+   }
+  }
+ ]
+}

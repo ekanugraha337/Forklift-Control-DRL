@@ -21,7 +21,10 @@ import arena as A                  # noqa: E402
 import rencana as R                # noqa: E402
 
 konfig.pilih_robot(1)
-ar = A.Arena("Gudang3")
+# Peta dari skenario.json folder pertama (Gudang3 untuk simulasi paper, Gudang2 untuk uji nyata lab).
+_peta = {json.load(open(os.path.join(d, "skenario.json")))["peta"] for d in sys.argv[1:]}
+assert len(_peta) == 1, f"folder dari peta berbeda: {_peta}"
+ar = A.Arena(_peta.pop())
 kend = {rid: R.Perencana(ar, konfig.profil(rid), jenis="astar").kendaraan for rid in (1, 2)}
 
 JEDA_MAKS = 10.0
@@ -34,7 +37,7 @@ for d in sys.argv[1:]:
     jeda = collections.defaultdict(float)
     t_akhir = {}
     for r in csv.DictReader(open(os.path.join(d, "lintasan.csv"))):
-        if r["fase"] == "PULANG":
+        if r["fase"] != "UJI":          # hanya fase yang diukur (bukan PULANG/KONFIRMASI/OPERATOR)
             continue
         kunci = (r["skenario"], r["ulang"], r["perencana"])
         t = float(r["t"])
