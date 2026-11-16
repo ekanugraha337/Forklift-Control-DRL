@@ -1,0 +1,104 @@
+{
+ "dir": "/Users/ekanugraha/Documents/GitHub.nosync/Forklift-Control-DRL/Forklift Robot Program/uji_nyata/20261116_185807_Gudang3_sim",
+ "per_perencana": {
+  "astar-standar": {
+   "n": 1,
+   "pasangan_tiba": 1,
+   "makespan_s": [
+    95.19871091842651
+   ],
+   "robot": {
+    "1": {
+     "n": 1,
+     "tiba": 1,
+     "rencana_ms_median": 1831.1972618103027,
+     "rencana_ms_p90": 1831.1972618103027,
+     "panjang_cm": [
+      737.5731226523101
+     ],
+     "ganti_arah": [
+      3
+     ],
+     "t_tempuh_s": [
+      52.75702524185181
+     ],
+     "galat_cm": [
+      1.8065174233432009
+     ],
+     "galat_deg": [
+      9.545097878051308
+     ],
+     "estop": 0,
+     "t_menunggu_s": [
+      0.0
+     ],
+     "galat_awal_cm": [
+      0.45638712021249783
+     ],
+     "galat_awal_deg": [
+      0.0
+     ]
+    },
+    "2": {
+     "n": 1,
+     "tiba": 1,
+     "rencana_ms_median": 533.0190658569336,
+     "rencana_ms_p90": 533.0190658569336,
+     "panjang_cm": [
+      898.2048740122412
+     ],
+     "ganti_arah": [
+      1
+     ],
+     "t_tempuh_s": [
+      95.19871091842651
+     ],
+     "galat_cm": [
+      4.303608256600443
+     ],
+     "galat_deg": [
+      1.8668536776065139
+     ],
+     "estop": 0,
+     "t_menunggu_s": [
+      0.0
+     ],
+     "galat_awal_cm": [
+      0.2311525101897946
+     ],
+     "galat_awal_deg": [
+      0.0
+     ]
+    }
+   }
+  }
+ },
+ "rincian_rencana": {
+  "astar-standar": {
+   "1": {
+    "n_panggilan": 1,
+    "n_pertama": 1,
+    "pertama_median_ms": {
+     "astar": 1462.9684465180617,
+     "rs": 368.1931374594569,
+     "lain": 0.03567783278413117
+    },
+    "semua_per_percobaan_ms": [
+     1831.1972618103027
+    ]
+   },
+   "2": {
+    "n_panggilan": 1,
+    "n_pertama": 1,
+    "pertama_median_ms": {
+     "astar": 439.36594619299285,
+     "rs": 93.62180379685014,
+     "lain": 0.03131586709059775
+    },
+    "semua_per_percobaan_ms": [
+     533.0190658569336
+    ]
+   }
+  }
+ }
+}

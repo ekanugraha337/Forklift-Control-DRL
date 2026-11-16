@@ -1,0 +1,28 @@
+{
+ "id": "1,2",
+ "peta": null,
+ "buat": null,
+ "skenario": "uji_nyata/Gudang3.json",
+ "ringkas": null,
+ "rinci": null,
+ "lanjut": null,
+ "perencana": [
+  "dqfd-murni"
+ ],
+ "perencana_pulang": "astar",
+ "jadwal": null,
+ "ulang": 5,
+ "urutan": "perencana",
+ "simpan_layar": false,
+ "pindah_awal": true,
+ "toleransi_cm": 5.0,
+ "toleransi_deg": 10.0,
+ "coba_pulang": 3,
+ "batas_uji": 180.0,
+ "batas_pulang": 180.0,
+ "tanpa_konfirmasi": true,
+ "simulasi": true,
+ "derau": 1.2,
+ "url": null,
+ "host": null
+}
