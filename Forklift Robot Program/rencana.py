@@ -50,7 +50,7 @@ from forklift_planner import HybridAStarPlanner, ObstacleMap, VehicleModel
 konfig.pasang_path_kamera()
 import area_constraint as AC          # noqa: E402
 
-JENIS_PERENCANA = ("astar", "dqfd", "dqfd-murni")
+JENIS_PERENCANA = ("astar", "astar-standar", "dqfd", "dqfd-murni")
 PERAN_ASTAR = ("astar", "astar-standar", "demonstrator")
 
 
@@ -251,7 +251,8 @@ class Perencana:
         if kunci not in self._cache:
             k = buat_kendaraan(self.arena, kunci, self.p.max_steer_rad)
             if not self.jenis.startswith("dqfd"):
-                planner = buat_perencana(self.arena, k, "astar")
+                # "astar-standar" = Hybrid A* standar (RS tiap ekspansi ke-4), pembanding kedua.
+                planner = buat_perencana(self.arena, k, self.jenis)
             else:
                 # Diimpor di sini, bukan di atas: tanpa DQfD, rencana.py (dan
                 # navigasi.py) tidak perlu memuat modul DQfD sama sekali.

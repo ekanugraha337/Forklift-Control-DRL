@@ -19,6 +19,8 @@ import os
 import random
 import sys
 
+import numpy as np
+
 AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if AKAR not in sys.path:
     sys.path.insert(0, AKAR)
@@ -57,6 +59,25 @@ def stasiun(per):
     return {n: p for n, p in s.items() if per.pose_bebas(*p)}
 
 
+def stasiun_gudang4(per):
+    """Stasiun Gudang4 (peta uji kedua, tidak dipakai melatih): dok di dinding kiri,
+    teluk di dinding kanan, pengisian daya di dinding atas, slot menghadap rak tegak."""
+    s = {}
+    for i, y in enumerate([177.5, 237.5, 297.5, 357.5, 417.5]):
+        s[f"D{i + 1}"] = (35.0, y, 180.0)                     # dok, menghadap dinding kiri
+        s[f"K{i + 1}"] = (725.0, y, 0.0)                      # teluk, menghadap dinding kanan
+    s["C1"], s["C2"] = (572.5, 35.0, -90.0), (632.5, 35.0, -90.0)
+    for b, x in enumerate([150, 254, 358, 462, 566]):
+        for sisi, (xs, yaw) in (("a", (x - JARAK_RAK_CM, 0.0)), ("b", (x + 24 + JARAK_RAK_CM, 180.0))):
+            for blok, (y0, y1) in (("U", (150, 290)), ("L", (370, 510))):
+                for k, y in enumerate(range(y0 + 20, y1, 40)):
+                    s[f"R{b + 1}{sisi}{blok}{k + 1}"] = (xs, float(y), yaw)
+    return {n: p for n, p in s.items() if per.pose_bebas(*p)}
+
+
+STASIUN = {"Gudang3": stasiun, "Gudang4": stasiun_gudang4}
+
+
 def susun_rute(st, per_alur, benih):
     rng = random.Random(benih)
     dok = [n for n in st if n[0] == "D"]
@@ -85,6 +106,10 @@ def main():
     ap.add_argument("--per-alur", type=int, default=150)
     ap.add_argument("--benih", type=int, default=3)
     ap.add_argument("--keluar", default=None)
+    ap.add_argument("--peta", default=PETA, choices=sorted(STASIUN))
+    ap.add_argument("--rintangan", action="store_true",
+                    help="letakkan badan robot lain di tengah jalur A* tanpa rintangan (bila titik itu > 60 cm "
+                         "dari awal dan tujuan), lalu rencanakan ulang dengan rintangan itu - uji perubahan rintangan")
     ap.add_argument("--skala-maks", type=float, default=None,
                     help="batas pengali anggaran node DQfD (1 = anggaran lama 1200/600)")
     ap.add_argument("--dir-model", default=None,
@@ -97,22 +122,33 @@ def main():
         from drl import perencana_dqfd as PD
         PD.SKALA_ANGGARAN_MAKS = a.skala_maks
     konfig.pilih_robot(a.id)
-    ar = A.Arena(PETA)
+    ar = A.Arena(a.peta)
     per = {j: R.Perencana(ar, konfig.profil(a.id), jenis=j) for j in JENIS}
     from drl.banding_baseline import PencatatNode
     catat = {j: PencatatNode(per[j]) for j in JENIS}     # node SEMUA panggilan perencana per rute
-    st = stasiun(per["astar"])
+    st = STASIUN[a.peta](per["astar"])
     rute = susun_rute(st, a.per_alur, a.benih)
-    print(f"{PETA}: {len(st)} stasiun, {len(rute)} rute, robot ID {a.id:02d}", flush=True)
+    print(f"{a.peta}: {len(st)} stasiun, {len(rute)} rute, robot ID {a.id:02d}", flush=True)
     for j in JENIS:                                            # pemanasan numba dan cache
         per[j].rencanakan(st["D2"], st["K3"], None, None)
     hasil = []
     for i, (alur, na, nb) in enumerate(rute):
         r = dict(alur=alur, dari=na, ke=nb, awal=st[na], tujuan=st[nb],
                  lurus_cm=math.hypot(st[na][0] - st[nb][0], st[na][1] - st[nb][1]))
+        rint = None
+        if a.rintangan:
+            # Badan robot lain diparkir di tengah jalur A* yang direncanakan TANPA rintangan.
+            dasar, _ = per["astar"].rencanakan(st[na], st[nb], None, None)
+            if dasar:
+                q = dasar[len(dasar) // 2]
+                xc, yc, yd = ar.pose_ke_cm(q[0], q[1], q[2])
+                if min(math.hypot(xc - st[na][0], yc - st[na][1]), math.hypot(xc - st[nb][0], yc - st[nb][1])) > 60.0:
+                    rint = [np.asarray(A.jejak_badan(xc, yc, yd), np.float64)]
+                    r["rintangan_di"] = (xc, yc, yd)
+        r["ada_rintangan"] = rint is not None
         for j in JENIS:
             catat[j].total = 0
-            jalur, info = per[j].rencanakan(st[na], st[nb], None, None)
+            jalur, info = per[j].rencanakan(st[na], st[nb], rint, None)
             st_ = per[j].planner.last_stats or {}
             # Jarak bebas terkecil badan (sudah digembungkan margin yang dipakai) terhadap zona,
             # sepanjang jalur, dalam sel: >= 0 berarti seluruh jalur bebas tabrakan.
@@ -129,9 +165,9 @@ def main():
         hasil.append(r)
         if i % 50 == 0:
             print(f"  {i}/{len(rute)}", flush=True)
-    keluar = a.keluar or os.path.join(AKAR, "model_dqn", f"uji_gudang3_id{a.id:02d}.json")
+    keluar = a.keluar or os.path.join(AKAR, "model_dqn", f"uji_{a.peta.lower()}_id{a.id:02d}.json")
     with open(keluar, "w") as f:
-        json.dump(dict(peta=PETA, robot=a.id, stasiun=st, rute=hasil), f)
+        json.dump(dict(peta=a.peta, robot=a.id, stasiun=st, rute=hasil), f)
     print("tersimpan:", keluar)
 
 

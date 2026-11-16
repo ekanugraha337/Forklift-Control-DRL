@@ -92,6 +92,9 @@ PENCARIAN_TANPA_P = "lazy"
 # lazy: tetap masuk heap tetapi di belakang semua aksi lain (f + URUTAN_BELAKANG), jadi
 # pencarian tetap lengkap; belajar: tidak dimasukkan sama sekali.
 AMBANG_TABRAK = 0.5
+# FORKLIFT_TANPA_P=1: pencarian lazy TIDAK memakai P sama sekali (urutan heap dari Q saja, forward
+# hanya model jauh). Untuk ablasi dan paper ver9: P terukur tidak mempercepat pencarian.
+TANPA_P = os.environ.get("FORKLIFT_TANPA_P") == "1"
 URUTAN_BELAKANG = 1e6
 AMBANG_YAKIN_AMAN = 0.02
 # Ambang P untuk "belajar-periksa", dipakai di KEDUA tahapnya (mode B dan cadangan lazy) -
@@ -307,7 +310,7 @@ def rencanakan_terbaik_malas(net, env, anggaran=ANGGARAN_TERBAIK, batas_waktu=No
     menabrak / selnya sudah dimasuki), masuk_ulang, dan aksi_jalur (urutan aksi jalur
     yang berhasil; untuk memeriksa ulang jalur mode B).
     """
-    kepala = bool(getattr(net, "kepala_tabrak", False))
+    kepala = bool(getattr(net, "kepala_tabrak", False)) and not (TANPA_P and not belajar and selektif is None)
     ambang = AMBANG_TABRAK if ambang is None else ambang
     if belajar and not kepala:
         raise ValueError("pencarian 'belajar' butuh model dengan kepala kelayakan (kepala_tabrak)")
